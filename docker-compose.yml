@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: geartrace_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-geartrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-geartrace_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-geartrace_db}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-geartrace} -d ${POSTGRES_DB:-geartrace_db}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geartrace_network
+
+  # Servicio opcional: pgAdmin para gestión visual de la BD
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: geartrace_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@geartrace.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - '${PGADMIN_PORT:-5050}:80'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - geartrace_network
+    profiles:
+      - tools # Solo se levanta con: docker compose --profile tools up
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  geartrace_network:
+    driver: bridge

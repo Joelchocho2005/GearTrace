@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-900 text-slate-100 antialiased;
+  }
+}
+
+/* Custom styles for the glow effect if needed beyond tailwind classes */
+.led-glow {
+  box-shadow: 0 0 15px currentColor;
+}

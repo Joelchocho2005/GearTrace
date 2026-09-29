@@ -1,0 +1,158 @@
+// ============================================================
+// GearTrace - Prisma Schema
+// Base de datos: PostgreSQL 15
+// ORM: Prisma
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────
+// Role: Roles del sistema
+//
+//  GERENTE  → Acceso total: inventario, LEDs, usuarios, reportes
+//  MECANICO → Acceso operativo: inventario + control de LEDs
+//  CLIENTE  → Acceso de solo lectura: consulta de piezas
+// ────────────────────────────────────────────────────────────
+enum Role {
+  GERENTE
+  MECANICO
+  CLIENTE
+}
+
+// ────────────────────────────────────────────────────────────
+// User: Usuarios del sistema GearTrace
+// ────────────────────────────────────────────────────────────
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(150)
+  email        String   @unique @db.VarChar(255)
+
+  /// Contraseña hasheada con bcrypt (nunca texto plano)
+  password     String   @db.VarChar(255)
+
+  role         Role     @default(CLIENTE)
+  isActive     Boolean  @default(true) @map("is_active")
+
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  /// Historial de búsquedas realizadas por este usuario
+  searchLogs   SearchLog[]
+
+  @@map("users")
+}
+
+// ────────────────────────────────────────────────────────────
+// Box: Caja física en el almacén
+//
+//  - ledIndex: Índice del LED en la tira WS2812B (0-4).
+//              Cuando Alexa localiza una pieza, este índice
+//              determina qué LED se enciende físicamente.
+//  - location: Referencia textual adicional (ej: "Estante A, Nivel 2")
+// ────────────────────────────────────────────────────────────
+model Box {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  description String?  @db.VarChar(255)
+
+  /// Índice del LED en la tira WS2812B (0 a 4, inclusive)
+  /// Debe ser único: cada caja tiene su propio LED
+  ledIndex    Int      @unique @map("led_index")
+
+  location    String?  @db.VarChar(150)
+  colorHex    String   @default("#FF6600") @map("color_hex") @db.VarChar(7)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relación: Una caja contiene muchas piezas
+  parts       Part[]
+
+  @@map("boxes")
+}
+
+// ────────────────────────────────────────────────────────────
+// Part: Pieza mecánica almacenada en una caja
+//
+//  - code:     Código único de referencia de la pieza
+//  - quantity: Stock actual de unidades en la caja
+//  - photoUrl: URL de imagen de la pieza (local o CDN)
+//  - keywords: Array de alias/sinónimos para búsqueda por voz
+//              (Alexa puede decir "filtro de aceite" o "filtro")
+// ────────────────────────────────────────────────────────────
+model Part {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(150)
+
+  /// Código de catálogo único (ej: "FLT-OIL-001")
+  code        String   @unique @db.VarChar(50)
+
+  /// Stock actual de unidades
+  quantity    Int      @default(0)
+
+  /// Foto de la pieza (puede ser null si no tiene imagen aún)
+  photoUrl    String?  @map("photo_url") @db.VarChar(500)
+
+  /// Descripción técnica de la pieza
+  description String?  @db.Text
+
+  /// Palabras clave para búsqueda por voz con Alexa
+  /// Se almacena como array de strings en PostgreSQL
+  keywords    String[] @default([])
+
+  /// Stock mínimo antes de alertar reabastecimiento
+  minStock    Int      @default(1) @map("min_stock")
+
+  /// Precio unitario de referencia (en la moneda local)
+  unitPrice   Decimal? @map("unit_price") @db.Decimal(10, 2)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relación: Una pieza pertenece a una sola caja
+  boxId       Int      @map("box_id")
+  box         Box      @relation(fields: [boxId], references: [id], onDelete: Restrict)
+
+  @@index([name])
+  @@index([boxId])
+  @@map("parts")
+}
+
+// ────────────────────────────────────────────────────────────
+// SearchLog: Historial de búsquedas por voz (Alexa)
+//
+//  Registra cada vez que Alexa busca una pieza.
+//  Útil para analítica y depuración del Webhook.
+// ────────────────────────────────────────────────────────────
+model SearchLog {
+  id          Int      @id @default(autoincrement())
+
+  /// El texto que Alexa recibió del usuario
+  query       String   @db.VarChar(255)
+
+  /// La pieza encontrada (null si no se encontró)
+  partId      Int?     @map("part_id")
+
+  /// ¿Se encontró la pieza?
+  found       Boolean  @default(false)
+
+  /// Respuesta que se devolvió a Alexa (para auditoría)
+  alexaResponse String? @map("alexa_response") @db.Text
+
+  /// Usuario que realizó la búsqueda (null si fue Alexa directo)
+  userId      Int?     @map("user_id")
+  user        User?    @relation(fields: [userId], references: [id])
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([query])
+  @@index([userId])
+  @@map("search_logs")
+}
