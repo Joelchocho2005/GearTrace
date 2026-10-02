@@ -1,6 +1,6 @@
 import { Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, LayoutDashboard, Package, Users, Settings, Wrench } from 'lucide-react';
+import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
 
 export default function Layout() {
   const { user, logout } = useAuth();
