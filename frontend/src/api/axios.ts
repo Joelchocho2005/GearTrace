@@ -1,8 +1,16 @@
 import axios from 'axios';
 
+// Obtener la URL base desde la variable de entorno o usar fallback por defecto
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
+const baseURL = rawApiUrl.endsWith('/api')
+  ? rawApiUrl
+  : `${rawApiUrl.replace(/\/$/, '')}/api`;
+
 // Instancia de axios preconfigurada
 const api = axios.create({
-  baseURL: '/api', // Vite proxy redirige a http://localhost:3000/api
+  baseURL,
 });
 
 // Interceptor para inyectar el token JWT en cada request

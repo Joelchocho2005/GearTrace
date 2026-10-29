@@ -91,20 +91,38 @@ export class LedControllerService implements OnModuleInit, OnModuleDestroy {
   // ──────────────────────────────────────────────────────────
 
   private initHardware(): void {
-    // Verificar si el .env fuerza modo simulación explícitamente
-    const forceSimulate = this.config.get('SIMULATE_HARDWARE', 'true') === 'true';
+    // 1. Verificar si el .env activa explícitamente el modo simulación
+    const simulateEnv = this.config.get<string>('SIMULATE_HARDWARE');
+    const isSimulateExplicit = simulateEnv !== undefined
+      ? String(simulateEnv).trim().toLowerCase() === 'true' || simulateEnv === '1'
+      : true; // Default seguro a simulación si no se especifica
 
-    if (forceSimulate) {
-      this.activateSimulationMode('Variable SIMULATE_HARDWARE=true en .env');
+    if (isSimulateExplicit) {
+      this.activateSimulationMode(
+        'SIMULATE_HARDWARE=true en .env (entorno de desarrollo local / CachyOS)',
+      );
+      return;
+    }
+
+    // 2. Verificar compatibilidad de arquitectura (Raspberry Pi suele ser arm/arm64)
+    const isArm = process.arch === 'arm' || process.arch === 'arm64';
+    const isLinux = process.platform === 'linux';
+
+    if (!isLinux || !isArm) {
+      this.activateSimulationMode(
+        `Arquitectura no compatible con GPIO nativo detectada (${process.platform}-${process.arch}, ej. CachyOS/x86_64).`,
+      );
       return;
     }
 
     try {
-      // ── CÓDIGO REAL: carga la librería nativa de hardware ──────────
-      // En una Raspberry Pi esto funciona. En una PC lanza un error
-      // porque no existen los módulos de GPIO.
+      // ── CÓDIGO REAL: carga la librería nativa de hardware en Raspberry Pi ──
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       this.ws281x = require('rpi-ws281x-native') as Ws281xLib;
+
+      if (!this.ws281x || typeof this.ws281x.init !== 'function') {
+        throw new Error('La librería rpi-ws281x-native no exporta el método init.');
+      }
 
       // Inicializar la tira con el número de LEDs y el pin GPIO
       this.channel = this.ws281x.init(this.ledCount, {
@@ -115,16 +133,16 @@ export class LedControllerService implements OnModuleInit, OnModuleDestroy {
       // Asegurar que todos los LEDs inician apagados
       this.channel.array.fill(COLOR_OFF);
       this.ws281x.render(this.channel);
+      this.simulationMode = false;
 
       this.logger.log(
-        `✅ Tira WS2812B inicializada: ${this.ledCount} LEDs en GPIO ${this.gpioPin}`,
+        `✅ Tira WS2812B inicializada: ${this.ledCount} LEDs en GPIO ${this.gpioPin} (Hardware real activo)`,
       );
     } catch (error: unknown) {
-      // ── FALLBACK SILENCIOSO ────────────────────────────────────────
-      // La librería nativa no cargó (PC sin GPIO, Windows, etc.)
-      // Activamos el modo simulación sin crashear la app.
+      // ── FALLBACK TRANSPARENTE ──────────────────────────────────────
+      // Captura: falta del módulo nativo, fallos de compilación o falta de permisos /dev/mem
       const message = error instanceof Error ? error.message : String(error);
-      this.activateSimulationMode(`Error al cargar rpi-ws281x-native: ${message}`);
+      this.activateSimulationMode(`Fallo al cargar o inicializar rpi-ws281x-native: ${message}`);
     }
   }
 

@@ -45,8 +45,9 @@ export default function Dashboard() {
     };
     loadStats();
 
-    // 2. Conectar a Socket.io
-    const newSocket = io('http://localhost:3000');
+    // 2. Conectar a Socket.io usando VITE_SOCKET_URL con fallback a http://localhost:3000
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
+    const newSocket = io(socketUrl);
     setSocket(newSocket);
 
     newSocket.on('connect', () => {

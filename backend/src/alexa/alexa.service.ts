@@ -53,13 +53,19 @@ export class AlexaService {
   async handleRequest(envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
     this.logger.debug(`Request recibido: ${envelope.request.type}`);
 
-    // Validación del Skill ID en producción
-    if (process.env.NODE_ENV === 'production' && this.skillId) {
-      const incomingSkillId = envelope.session?.application?.applicationId
-        ?? envelope.context?.System?.application?.applicationId;
+    // Validación del Skill ID si está configurado con un ID real (amzn1.ask.skill...)
+    const isConfiguredSkillId =
+      Boolean(this.skillId) &&
+      !this.skillId.includes('XXXX') &&
+      this.skillId.startsWith('amzn1.ask.skill.');
 
-      if (incomingSkillId !== this.skillId) {
-        this.logger.warn(`Skill ID inválido: ${incomingSkillId}`);
+    if (isConfiguredSkillId) {
+      const incomingSkillId =
+        envelope.session?.application?.applicationId ??
+        envelope.context?.System?.application?.applicationId;
+
+      if (incomingSkillId && incomingSkillId !== this.skillId) {
+        this.logger.warn(`Skill ID inválido: ${incomingSkillId} (esperado: ${this.skillId})`);
         throw new BadRequestException('Skill ID no autorizado');
       }
     }
