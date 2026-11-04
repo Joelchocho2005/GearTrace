@@ -1,0 +1,14 @@
+{
+  "output": {
+    "filePath": "repomix-output.xml"
+  },
+  "ignore": {
+    "customPatterns": [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/*.svg",
+      "**/*.png",
+      "repomix-output.xml"
+    ]
+  }
+}

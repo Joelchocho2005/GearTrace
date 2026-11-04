@@ -1,0 +1,14 @@
+{
+  "name": "GearTrace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monorepo de GearTrace con automatizaciones de contexto de IA",
+  "scripts": {
+    "repomix:backend": "cd backend && npx repomix",
+    "repomix:frontend": "cd frontend && npx repomix",
+    "repomix:all": "npm run repomix:backend && npm run repomix:frontend"
+  },
+  "devDependencies": {
+    "repomix": "^0.2.0"
+  }
+}

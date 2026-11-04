@@ -1,0 +1,15 @@
+{
+  "output": {
+    "filePath": "repomix-output.xml"
+  },
+  "ignore": {
+    "customPatterns": [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/coverage/**",
+      "**/*.log",
+      "**/migration_lock.toml",
+      "repomix-output.xml"
+    ]
+  }
+}
