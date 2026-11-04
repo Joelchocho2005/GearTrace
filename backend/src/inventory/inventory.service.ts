@@ -6,6 +6,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePartDto } from './dto/create-part.dto';
 import { CreateBoxDto } from './dto/create-box.dto';
+import { UpdatePartDto } from './dto/update-part.dto';
+import { UpdateBoxDto } from './dto/update-box.dto';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
@@ -60,6 +62,38 @@ export class InventoryService {
     }
   }
 
+  async updateBox(id: number, dto: UpdateBoxDto) {
+    await this.findOneBox(id);
+
+    try {
+      return await this.prisma.box.update({
+        where: { id },
+        data: dto,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async removeBox(id: number) {
+    const box = await this.findOneBox(id);
+    if (box.parts.length > 0) {
+      throw new ConflictException(
+        'No se puede eliminar una caja que contiene piezas.',
+      );
+    }
+
+    await this.prisma.box.delete({ where: { id } });
+  }
+
   // ──────────────────────────────────────────────────────────
   // PARTS
   // ──────────────────────────────────────────────────────────
@@ -100,6 +134,36 @@ export class InventoryService {
       }
       throw error;
     }
+  }
+
+  async updatePart(id: number, dto: UpdatePartDto) {
+    await this.findOnePart(id);
+    if (dto.boxId !== undefined) {
+      await this.findOneBox(dto.boxId);
+    }
+
+    try {
+      return await this.prisma.part.update({
+        where: { id },
+        data: dto,
+        include: { box: true },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Ya existe una pieza con el código "${dto.code}"`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async removePart(id: number) {
+    await this.findOnePart(id);
+    await this.prisma.part.delete({ where: { id } });
   }
 
   /**

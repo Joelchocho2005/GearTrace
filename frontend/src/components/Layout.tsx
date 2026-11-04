@@ -1,9 +1,15 @@
-import { Outlet } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
 
 export default function Layout() {
   const { user, logout } = useAuth();
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
+      isActive
+        ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
+        : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+    }`;
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden">
@@ -24,20 +30,20 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <a href="#" className="flex items-center gap-3 px-3 py-2.5 bg-brand-500/10 text-brand-400 rounded-xl font-medium transition-colors border border-brand-500/20">
+          <NavLink to="/dashboard" className={navLinkClass} end>
             <LayoutDashboard size={20} /> Dashboard
-          </a>
+          </NavLink>
           
           {(user?.role === 'GERENTE' || user?.role === 'MECANICO') && (
-            <a href="#" className="flex items-center gap-3 px-3 py-2.5 text-slate-400 hover:bg-slate-700/50 hover:text-white rounded-xl font-medium transition-colors">
+            <NavLink to="/inventory" className={navLinkClass}>
               <Package size={20} /> Inventario
-            </a>
+            </NavLink>
           )}
           
           {user?.role === 'GERENTE' && (
-            <a href="#" className="flex items-center gap-3 px-3 py-2.5 text-slate-400 hover:bg-slate-700/50 hover:text-white rounded-xl font-medium transition-colors">
+            <NavLink to="/users" className={navLinkClass}>
               <Users size={20} /> Usuarios
-            </a>
+            </NavLink>
           )}
         </nav>
 
