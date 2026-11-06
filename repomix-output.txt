@@ -1,0 +1,5245 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+================================================================
+File Summary
+================================================================
+
+Purpose:
+--------
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+
+File Format:
+------------
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Multiple file entries, each consisting of:
+  a. A separator line (================)
+  b. The file path (File: path/to/file)
+  c. Another separator line
+  d. The full contents of the file
+  e. A blank line
+
+Usage Guidelines:
+-----------------
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+
+Notes:
+------
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+
+Additional Info:
+----------------
+
+================================================================
+Directory Structure
+================================================================
+backend/
+  prisma/
+    migrations/
+      20260930141834_init/
+        migration.sql
+      migration_lock.toml
+    schema.prisma
+    seed.sql
+    seed.ts
+  src/
+    alexa/
+      alexa.controller.ts
+      alexa.module.ts
+      alexa.service.ts
+      alexa.types.ts
+    auth/
+      decorators/
+        auth.decorators.ts
+      dto/
+        auth.dto.ts
+      guards/
+        jwt-auth.guard.ts
+        roles.guard.ts
+      strategies/
+        jwt.strategy.ts
+      auth.controller.ts
+      auth.module.ts
+      auth.service.ts
+      auth.types.ts
+    inventory/
+      dto/
+        create-box.dto.ts
+        create-part.dto.ts
+        update-box.dto.ts
+        update-part.dto.ts
+      inventory.controller.ts
+      inventory.module.ts
+      inventory.service.ts
+    led/
+      led-controller.service.ts
+      led.gateway.ts
+      led.module.ts
+    logs/
+      search-log.controller.ts
+      search-log.module.ts
+      search-log.service.ts
+    prisma/
+      prisma.module.ts
+      prisma.service.ts
+    app.module.ts
+    main.ts
+  .env.example
+  clinerules.md
+  package.json
+  repomix.config.json
+  tsconfig.json
+frontend/
+  src/
+    api/
+      axios.ts
+    components/
+      Inventory/
+        InventoryList.tsx
+        PartFormModal.tsx
+      Users/
+        UsersManagement.tsx
+      AuditLogs.tsx
+      Dashboard.tsx
+      Layout.tsx
+      Login.tsx
+    contexts/
+      AuthContext.tsx
+    App.tsx
+    index.css
+    main.tsx
+    vite-env.d.ts
+  .env.example
+  clinerules.md
+  index.html
+  package.json
+  postcss.config.js
+  repomix.config.json
+  tailwind.config.js
+  tsconfig.json
+  tsconfig.node.json
+  vercel.json
+  vite.config.ts
+github/
+  copilot-instructions.md
+.gitignore
+docker-compose.yml
+package.json
+README.md
+
+================================================================
+Files
+================================================================
+
+================
+File: backend/src/logs/search-log.controller.ts
+================
+import { Controller, Get } from '@nestjs/common';
+import { SearchLogService } from './search-log.service';
+
+@Controller('logs')
+export class SearchLogController {
+  constructor(private readonly searchLogService: SearchLogService) {}
+
+  @Get()
+  findRecent() {
+    return this.searchLogService.findRecent();
+  }
+}
+
+================
+File: backend/src/logs/search-log.module.ts
+================
+import { Module } from '@nestjs/common';
+import { SearchLogController } from './search-log.controller';
+import { SearchLogService } from './search-log.service';
+
+@Module({
+  controllers: [SearchLogController],
+  providers: [SearchLogService],
+})
+export class SearchLogModule {}
+
+================
+File: backend/src/logs/search-log.service.ts
+================
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class SearchLogService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findRecent() {
+    return this.prisma.searchLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        query: true,
+        found: true,
+        alexaResponse: true,
+        createdAt: true,
+      },
+    });
+  }
+}
+
+================
+File: frontend/src/components/Users/UsersManagement.tsx
+================
+import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { ShieldCheck, Users, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../../api/axios';
+import { Role, useAuth } from '../../contexts/AuthContext';
+
+interface ManagedUser {
+  id: number;
+  name: string;
+  email: string;
+  role: Role;
+  isActive: boolean;
+}
+
+const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+
+export default function UsersManagement() {
+  const { user } = useAuth();
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [updatingUserId, setUpdatingUserId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (user?.role !== 'GERENTE') {
+      return;
+    }
+
+    const loadUsers = async () => {
+      try {
+        const response = await api.get<ManagedUser[]>('/auth/users');
+        setUsers(response.data);
+      } catch (error) {
+        console.error('Error al cargar los usuarios', error);
+        toast.error('No se pudieron cargar los usuarios.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadUsers();
+  }, [user?.role]);
+
+  if (user?.role !== 'GERENTE') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  const updateRole = async (id: number, role: Role) => {
+    const previousUser = users.find((managedUser) => managedUser.id === id);
+    if (!previousUser) {
+      return;
+    }
+
+    setUpdatingUserId(id);
+    setUsers((currentUsers) =>
+      currentUsers.map((managedUser) =>
+        managedUser.id === id ? { ...managedUser, role } : managedUser,
+      ),
+    );
+
+    try {
+      await api.patch(`/auth/users/${id}/role`, { role });
+      toast.success('Rol actualizado correctamente.');
+    } catch (error) {
+      console.error('Error al actualizar el rol', error);
+      setUsers((currentUsers) =>
+        currentUsers.map((managedUser) =>
+          managedUser.id === id ? previousUser : managedUser,
+        ),
+      );
+      toast.error('No se pudo actualizar el rol.');
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
+  const toggleActive = async (managedUser: ManagedUser) => {
+    setUpdatingUserId(managedUser.id);
+    setUsers((currentUsers) =>
+      currentUsers.map((currentUser) =>
+        currentUser.id === managedUser.id
+          ? { ...currentUser, isActive: !managedUser.isActive }
+          : currentUser,
+      ),
+    );
+
+    try {
+      await api.patch(`/auth/users/${managedUser.id}/toggle`, {
+        isActive: !managedUser.isActive,
+      });
+      toast.success(
+        managedUser.isActive
+          ? 'Usuario desactivado correctamente.'
+          : 'Usuario activado correctamente.',
+      );
+    } catch (error) {
+      console.error('Error al actualizar el estado del usuario', error);
+      setUsers((currentUsers) =>
+        currentUsers.map((currentUser) =>
+          currentUser.id === managedUser.id ? managedUser : currentUser,
+        ),
+      );
+      toast.error('No se pudo actualizar el estado del usuario.');
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <header className="flex items-center gap-3">
+        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <Users size={24} />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-white">Gestión de usuarios</h2>
+          <p className="text-sm text-slate-400">
+            Administra el acceso y los roles de los usuarios registrados.
+          </p>
+        </div>
+      </header>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+        {isLoading ? (
+          <div className="flex justify-center py-16">
+            <Loader2 className="animate-spin text-brand-400" size={28} />
+          </div>
+        ) : users.length === 0 ? (
+          <p className="px-6 py-12 text-center text-slate-400">
+            No hay usuarios registrados.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-700">
+              <thead className="bg-slate-800">
+                <tr>
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Usuario
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Rol
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Estado
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/80">
+                {users.map((managedUser) => {
+                  const isUpdating = updatingUserId === managedUser.id;
+
+                  return (
+                    <tr key={managedUser.id} className="hover:bg-slate-700/20">
+                      <td className="whitespace-nowrap px-6 py-4">
+                        <div className="font-medium text-white">{managedUser.name}</div>
+                        <div className="text-sm text-slate-400">{managedUser.email}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <label className="sr-only" htmlFor={`role-${managedUser.id}`}>
+                          Rol de {managedUser.name}
+                        </label>
+                        <select
+                          id={`role-${managedUser.id}`}
+                          value={managedUser.role}
+                          disabled={isUpdating}
+                          onChange={(event) =>
+                            void updateRole(managedUser.id, event.target.value as Role)
+                          }
+                          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {roles.map((role) => (
+                            <option key={role} value={role}>
+                              {role}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-6 py-4">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={managedUser.isActive}
+                          aria-label={`${managedUser.isActive ? 'Desactivar' : 'Activar'} a ${managedUser.name}`}
+                          disabled={isUpdating}
+                          onClick={() => void toggleActive(managedUser)}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                            managedUser.isActive ? 'bg-brand-500' : 'bg-slate-600'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                              managedUser.isActive ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                        <span
+                          className={`ml-3 inline-flex items-center gap-1 text-sm ${
+                            managedUser.isActive ? 'text-emerald-400' : 'text-slate-400'
+                          }`}
+                        >
+                          <ShieldCheck size={15} />
+                          {managedUser.isActive ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/AuditLogs.tsx
+================
+import { useEffect, useState } from 'react';
+import { ClipboardList, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../api/axios';
+
+interface AuditLog {
+  id: number;
+  query: string;
+  found: boolean;
+  alexaResponse: string | null;
+  createdAt: string;
+}
+
+export default function AuditLogs() {
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadLogs = async () => {
+      try {
+        const response = await api.get<AuditLog[]>('/logs');
+        setLogs(response.data);
+      } catch (error) {
+        console.error('Error al cargar los logs de auditoría', error);
+        toast.error('No se pudieron cargar los registros de auditoría.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadLogs();
+  }, []);
+
+  return (
+    <section className="space-y-6">
+      <header className="flex items-center gap-3">
+        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <ClipboardList size={24} />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-white">Auditoría de búsquedas</h2>
+          <p className="text-sm text-slate-400">
+            Últimas búsquedas realizadas mediante Alexa.
+          </p>
+        </div>
+      </header>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+        {isLoading ? (
+          <div className="flex justify-center p-8">
+            <Loader2 className="animate-spin text-brand-400" size={28} />
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="p-8 text-center text-slate-400">
+            No hay registros de búsquedas.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="border-b border-slate-700 bg-slate-800">
+                <tr>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Fecha</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">
+                    Query pronunciado
+                  </th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Estado</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">
+                    Respuesta de Alexa
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/70">
+                {logs.map((log) => (
+                  <tr key={log.id} className="transition-colors hover:bg-slate-700/30">
+                    <td className="whitespace-nowrap px-6 py-4 text-slate-400">
+                      {new Date(log.createdAt).toLocaleString('es-ES')}
+                    </td>
+                    <td className="px-6 py-4 font-medium text-white">{log.query}</td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          log.found
+                            ? 'bg-emerald-500/10 text-emerald-400'
+                            : 'bg-red-500/10 text-red-400'
+                        }`}
+                      >
+                        {log.found ? 'Encontrado' : 'No Encontrado'}
+                      </span>
+                    </td>
+                    <td className="max-w-md px-6 py-4 text-slate-400">
+                      {log.alexaResponse ?? 'Sin respuesta registrada'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+================
+File: backend/prisma/migrations/20260930141834_init/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "Role" AS ENUM ('GERENTE', 'MECANICO', 'CLIENTE');
+
+-- CreateTable
+CREATE TABLE "users" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "email" VARCHAR(255) NOT NULL,
+    "password" VARCHAR(255) NOT NULL,
+    "role" "Role" NOT NULL DEFAULT 'CLIENTE',
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "boxes" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(100) NOT NULL,
+    "description" VARCHAR(255),
+    "led_index" INTEGER NOT NULL,
+    "location" VARCHAR(150),
+    "color_hex" VARCHAR(7) NOT NULL DEFAULT '#FF6600',
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "boxes_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "parts" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "code" VARCHAR(50) NOT NULL,
+    "quantity" INTEGER NOT NULL DEFAULT 0,
+    "photo_url" VARCHAR(500),
+    "description" TEXT,
+    "keywords" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "min_stock" INTEGER NOT NULL DEFAULT 1,
+    "unit_price" DECIMAL(10,2),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "box_id" INTEGER NOT NULL,
+
+    CONSTRAINT "parts_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "search_logs" (
+    "id" SERIAL NOT NULL,
+    "query" VARCHAR(255) NOT NULL,
+    "part_id" INTEGER,
+    "found" BOOLEAN NOT NULL DEFAULT false,
+    "alexa_response" TEXT,
+    "user_id" INTEGER,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "search_logs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "boxes_led_index_key" ON "boxes"("led_index");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "parts_code_key" ON "parts"("code");
+
+-- CreateIndex
+CREATE INDEX "parts_name_idx" ON "parts"("name");
+
+-- CreateIndex
+CREATE INDEX "parts_box_id_idx" ON "parts"("box_id");
+
+-- CreateIndex
+CREATE INDEX "search_logs_query_idx" ON "search_logs"("query");
+
+-- CreateIndex
+CREATE INDEX "search_logs_user_id_idx" ON "search_logs"("user_id");
+
+-- AddForeignKey
+ALTER TABLE "parts" ADD CONSTRAINT "parts_box_id_fkey" FOREIGN KEY ("box_id") REFERENCES "boxes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "search_logs" ADD CONSTRAINT "search_logs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/migration_lock.toml
+================
+# Please do not edit this file manually
+# It should be added in your version-control system (i.e. Git)
+provider = "postgresql"
+
+================
+File: backend/prisma/schema.prisma
+================
+// ============================================================
+// GearTrace - Prisma Schema
+// Base de datos: PostgreSQL 15
+// ORM: Prisma
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────
+// Role: Roles del sistema
+//
+//  GERENTE  → Acceso total: inventario, LEDs, usuarios, reportes
+//  MECANICO → Acceso operativo: inventario + control de LEDs
+//  CLIENTE  → Acceso de solo lectura: consulta de piezas
+// ────────────────────────────────────────────────────────────
+enum Role {
+  GERENTE
+  MECANICO
+  CLIENTE
+}
+
+// ────────────────────────────────────────────────────────────
+// User: Usuarios del sistema GearTrace
+// ────────────────────────────────────────────────────────────
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(150)
+  email        String   @unique @db.VarChar(255)
+
+  /// Contraseña hasheada con bcrypt (nunca texto plano)
+  password     String   @db.VarChar(255)
+
+  role         Role     @default(CLIENTE)
+  isActive     Boolean  @default(true) @map("is_active")
+
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  /// Historial de búsquedas realizadas por este usuario
+  searchLogs   SearchLog[]
+
+  @@map("users")
+}
+
+// ────────────────────────────────────────────────────────────
+// Box: Caja física en el almacén
+//
+//  - ledIndex: Índice del LED en la tira WS2812B (0-4).
+//              Cuando Alexa localiza una pieza, este índice
+//              determina qué LED se enciende físicamente.
+//  - location: Referencia textual adicional (ej: "Estante A, Nivel 2")
+// ────────────────────────────────────────────────────────────
+model Box {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)
+  description String?  @db.VarChar(255)
+
+  /// Índice del LED en la tira WS2812B (0 a 4, inclusive)
+  /// Debe ser único: cada caja tiene su propio LED
+  ledIndex    Int      @unique @map("led_index")
+
+  location    String?  @db.VarChar(150)
+  colorHex    String   @default("#FF6600") @map("color_hex") @db.VarChar(7)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relación: Una caja contiene muchas piezas
+  parts       Part[]
+
+  @@map("boxes")
+}
+
+// ────────────────────────────────────────────────────────────
+// Part: Pieza mecánica almacenada en una caja
+//
+//  - code:     Código único de referencia de la pieza
+//  - quantity: Stock actual de unidades en la caja
+//  - photoUrl: URL de imagen de la pieza (local o CDN)
+//  - keywords: Array de alias/sinónimos para búsqueda por voz
+//              (Alexa puede decir "filtro de aceite" o "filtro")
+// ────────────────────────────────────────────────────────────
+model Part {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(150)
+
+  /// Código de catálogo único (ej: "FLT-OIL-001")
+  code        String   @unique @db.VarChar(50)
+
+  /// Stock actual de unidades
+  quantity    Int      @default(0)
+
+  /// Foto de la pieza (puede ser null si no tiene imagen aún)
+  photoUrl    String?  @map("photo_url") @db.VarChar(500)
+
+  /// Descripción técnica de la pieza
+  description String?  @db.Text
+
+  /// Palabras clave para búsqueda por voz con Alexa
+  /// Se almacena como array de strings en PostgreSQL
+  keywords    String[] @default([])
+
+  /// Stock mínimo antes de alertar reabastecimiento
+  minStock    Int      @default(1) @map("min_stock")
+
+  /// Precio unitario de referencia (en la moneda local)
+  unitPrice   Decimal? @map("unit_price") @db.Decimal(10, 2)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relación: Una pieza pertenece a una sola caja
+  boxId       Int      @map("box_id")
+  box         Box      @relation(fields: [boxId], references: [id], onDelete: Restrict)
+
+  @@index([name])
+  @@index([boxId])
+  @@map("parts")
+}
+
+// ────────────────────────────────────────────────────────────
+// SearchLog: Historial de búsquedas por voz (Alexa)
+//
+//  Registra cada vez que Alexa busca una pieza.
+//  Útil para analítica y depuración del Webhook.
+// ────────────────────────────────────────────────────────────
+model SearchLog {
+  id          Int      @id @default(autoincrement())
+
+  /// El texto que Alexa recibió del usuario
+  query       String   @db.VarChar(255)
+
+  /// La pieza encontrada (null si no se encontró)
+  partId      Int?     @map("part_id")
+
+  /// ¿Se encontró la pieza?
+  found       Boolean  @default(false)
+
+  /// Respuesta que se devolvió a Alexa (para auditoría)
+  alexaResponse String? @map("alexa_response") @db.Text
+
+  /// Usuario que realizó la búsqueda (null si fue Alexa directo)
+  userId      Int?     @map("user_id")
+  user        User?    @relation(fields: [userId], references: [id])
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([query])
+  @@index([userId])
+  @@map("search_logs")
+}
+
+================
+File: backend/prisma/seed.sql
+================
+-- GearTrace: Seed de datos iniciales para desarrollo y pruebas
+-- Ejecutar con: npx prisma db seed
+-- (o después de: npx prisma migrate dev)
+
+-- 5 Cajas físicas, cada una con su ledIndex (0-4)
+INSERT INTO boxes (name, description, led_index, location, color_hex, created_at, updated_at)
+VALUES
+  ('Caja A - Filtros',       'Filtros de aceite, aire y combustible',   0, 'Estante 1, Nivel A', '#FF4500', NOW(), NOW()),
+  ('Caja B - Frenos',        'Pastillas, discos y lainas de freno',     1, 'Estante 1, Nivel B', '#1E90FF', NOW(), NOW()),
+  ('Caja C - Correas',       'Correas de distribución y alternador',    2, 'Estante 2, Nivel A', '#32CD32', NOW(), NOW()),
+  ('Caja D - Eléctrico',     'Fusibles, relés y bombillas',             3, 'Estante 2, Nivel B', '#FFD700', NOW(), NOW()),
+  ('Caja E - Lubricantes',   'Aceites, grasas y líquidos de freno',     4, 'Estante 3, Nivel A', '#9400D3', NOW(), NOW())
+ON CONFLICT DO NOTHING;
+
+-- Piezas de ejemplo por caja
+INSERT INTO parts (name, code, quantity, description, keywords, min_stock, box_id, created_at, updated_at)
+VALUES
+  -- Caja 1 (Filtros)
+  ('Filtro de aceite Toyota',  'FLT-OIL-001', 15, 'Filtro de aceite para motores Toyota 1.6-2.0', ARRAY['filtro aceite', 'filtro toyota', 'filtro'], 3, 1, NOW(), NOW()),
+  ('Filtro de aire universal', 'FLT-AIR-001', 8,  'Filtro de aire rectangular universal',           ARRAY['filtro aire', 'filtro', 'aire'],          2, 1, NOW(), NOW()),
+  -- Caja 2 (Frenos)
+  ('Pastillas de freno Brembo','BRK-PAD-001', 6,  'Juego de pastillas delanteras Brembo',           ARRAY['pastillas', 'frenos', 'pastillas freno'], 2, 2, NOW(), NOW()),
+  ('Disco de freno ventilado', 'BRK-DSC-001', 4,  'Disco ventilado 280mm diámetro',                 ARRAY['disco', 'disco freno', 'rotor'],          1, 2, NOW(), NOW()),
+  -- Caja 3 (Correas)
+  ('Correa de distribución',   'BLT-TIM-001', 5,  'Correa dentada de distribución 120 dientes',     ARRAY['correa', 'distribución', 'timing'],       2, 3, NOW(), NOW()),
+  -- Caja 4 (Eléctrico)
+  ('Fusible 20A',              'ELC-FUS-020', 50, 'Fusible de cuchilla 20 amperios',                ARRAY['fusible', 'fusible 20', 'plano'],         10, 4, NOW(), NOW()),
+  -- Caja 5 (Lubricantes)
+  ('Aceite 5W-30 Sintético',   'LUB-OIL-530', 20, 'Aceite de motor sintético 5W-30 1 litro',       ARRAY['aceite', 'aceite motor', '5w30'],         5, 5, NOW(), NOW())
+ON CONFLICT DO NOTHING;
+
+================
+File: backend/src/alexa/alexa.module.ts
+================
+import { Module, forwardRef } from '@nestjs/common';
+import { AlexaController } from './alexa.controller';
+import { AlexaService } from './alexa.service';
+import { InventoryModule } from '../inventory/inventory.module';
+import { LedModule } from '../led/led.module';
+
+@Module({
+  imports: [
+    InventoryModule,                  // Provee InventoryService
+    forwardRef(() => LedModule),      // Provee LedGateway (forwardRef evita circular)
+  ],
+  controllers: [AlexaController],
+  providers: [AlexaService],
+  exports: [AlexaService],
+})
+export class AlexaModule {}
+
+================
+File: backend/src/alexa/alexa.types.ts
+================
+// ══════════════════════════════════════════════════════════════════════════
+// Tipos TypeScript que mapean el JSON real que Amazon envía al webhook.
+// Basado en la especificación oficial del Alexa Skills Kit (ASK).
+// Referencia: https://developer.amazon.com/docs/custom-skills/request-and-response-json-reference.html
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Estructura raíz de cualquier request que llega desde Alexa */
+export interface AlexaRequestEnvelope {
+  version: string;
+  session?: AlexaSession;
+  context: AlexaContext;
+  request: AlexaRequest;
+}
+
+export interface AlexaSession {
+  new: boolean;
+  sessionId: string;
+  application: { applicationId: string };
+  user: { userId: string };
+}
+
+export interface AlexaContext {
+  System: {
+    application: { applicationId: string };
+    user: { userId: string };
+    device: { deviceId: string };
+  };
+}
+
+/** Un request puede ser de tipo LaunchRequest, IntentRequest o SessionEndedRequest */
+export type AlexaRequest =
+  | AlexaLaunchRequest
+  | AlexaIntentRequest
+  | AlexaSessionEndedRequest;
+
+export interface AlexaLaunchRequest {
+  type: 'LaunchRequest';
+  requestId: string;
+  timestamp: string;
+  locale: string;
+}
+
+export interface AlexaIntentRequest {
+  type: 'IntentRequest';
+  requestId: string;
+  timestamp: string;
+  locale: string;
+  intent: AlexaIntent;
+}
+
+export interface AlexaSessionEndedRequest {
+  type: 'SessionEndedRequest';
+  requestId: string;
+  timestamp: string;
+  reason: 'USER_INITIATED' | 'ERROR' | 'EXCEEDED_MAX_REPROMPTS';
+}
+
+export interface AlexaIntent {
+  name: string;
+  confirmationStatus: 'NONE' | 'CONFIRMED' | 'DENIED';
+  slots?: Record<string, AlexaSlot>;
+}
+
+export interface AlexaSlot {
+  name: string;
+  value?: string;        // El valor que el usuario pronunció
+  confirmationStatus: 'NONE' | 'CONFIRMED' | 'DENIED';
+  resolutions?: {
+    resolutionsPerAuthority: Array<{
+      authority: string;
+      status: { code: 'ER_SUCCESS_MATCH' | 'ER_SUCCESS_NO_MATCH' | string };
+      values?: Array<{ value: { name: string; id: string } }>;
+    }>;
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tipos de RESPUESTA que GearTrace devuelve a Alexa
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface AlexaResponseEnvelope {
+  version: '1.0';
+  response: AlexaResponse;
+}
+
+export interface AlexaResponse {
+  outputSpeech: AlexaOutputSpeech;
+  card?: AlexaCard;
+  shouldEndSession: boolean;
+  reprompt?: { outputSpeech: AlexaOutputSpeech };
+}
+
+export interface AlexaOutputSpeech {
+  type: 'PlainText' | 'SSML';
+  text?: string;   // Para tipo PlainText
+  ssml?: string;   // Para tipo SSML (permite control de pronunciación)
+}
+
+export interface AlexaCard {
+  type: 'Simple' | 'Standard';
+  title: string;
+  text?: string;
+  content?: string;
+}
+
+================
+File: backend/src/auth/decorators/auth.decorators.ts
+================
+import { SetMetadata } from '@nestjs/common';
+import { Role } from '@prisma/client';
+
+export const ROLES_KEY = 'roles';
+
+/**
+ * Decorador @Roles() para declarar qué roles pueden acceder a un endpoint.
+ *
+ * Uso:
+ *   @Roles(Role.GERENTE, Role.MECANICO)
+ *   @UseGuards(JwtAuthGuard, RolesGuard)
+ *   @Get('endpoint-protegido')
+ *   getEndpoint() { ... }
+ */
+export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
+
+/**
+ * Decorador @CurrentUser() para extraer el usuario autenticado del request.
+ *
+ * Uso:
+ *   getProfile(@CurrentUser() user: AuthenticatedUser) { ... }
+ */
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.user;
+  },
+);
+
+================
+File: backend/src/auth/dto/auth.dto.ts
+================
+import { IsEmail, IsString, MinLength, MaxLength, IsEnum, IsOptional } from 'class-validator';
+import { Role } from '@prisma/client';
+
+export class LoginDto {
+  @IsEmail({}, { message: 'El correo electrónico no es válido' })
+  email: string;
+
+  @IsString()
+  @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })
+  password: string;
+}
+
+export class RegisterDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  @IsEmail({}, { message: 'El correo electrónico no es válido' })
+  email: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72) // bcrypt tiene límite de 72 bytes
+  password: string;
+
+  @IsOptional()
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  role?: Role;
+}
+
+================
+File: backend/src/auth/guards/jwt-auth.guard.ts
+================
+import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+/**
+ * JwtAuthGuard
+ *
+ * Protege endpoints verificando el JWT en el header Authorization.
+ * Si el token es inválido o no existe → 401 Unauthorized.
+ *
+ * Uso:
+ *   @UseGuards(JwtAuthGuard)
+ *   @Get('perfil')
+ *   getProfile() { ... }
+ */
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  override canActivate(context: ExecutionContext) {
+    return super.canActivate(context);
+  }
+
+  override handleRequest<TUser>(err: Error, user: TUser): TUser {
+    if (err || !user) {
+      throw new UnauthorizedException(
+        'Token inválido o expirado. Por favor, inicia sesión nuevamente.',
+      );
+    }
+    return user;
+  }
+}
+
+================
+File: backend/src/auth/guards/roles.guard.ts
+================
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Role } from '@prisma/client';
+import { ROLES_KEY } from '../decorators/auth.decorators';
+import { AuthenticatedUser } from '../auth.types';
+
+/**
+ * RolesGuard
+ *
+ * Verifica que el usuario autenticado tenga uno de los roles
+ * declarados con @Roles() en el endpoint.
+ *
+ * IMPORTANTE: Siempre debe usarse DESPUÉS de JwtAuthGuard:
+ *   @UseGuards(JwtAuthGuard, RolesGuard)
+ *
+ * Jerarquía de permisos GearTrace:
+ *   GERENTE  → puede todo
+ *   MECANICO → puede operar inventario y LEDs
+ *   CLIENTE  → solo puede consultar
+ */
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    // Leer los roles requeridos del decorador @Roles()
+    const requiredRoles = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    // Si el endpoint no tiene @Roles(), está abierto a todos los autenticados
+    if (!requiredRoles || requiredRoles.length === 0) {
+      return true;
+    }
+
+    const request = context.switchToHttp().getRequest<{ user: AuthenticatedUser }>();
+    const user = request.user;
+
+    if (!user) {
+      throw new ForbiddenException('Usuario no autenticado');
+    }
+
+    // GERENTE siempre tiene acceso a todo
+    if (user.role === Role.GERENTE) {
+      return true;
+    }
+
+    // Verificar si el rol del usuario está en la lista de roles permitidos
+    const hasRole = requiredRoles.includes(user.role);
+
+    if (!hasRole) {
+      throw new ForbiddenException(
+        `Acceso denegado. Se requiere uno de los roles: ${requiredRoles.join(', ')}. Tu rol actual es: ${user.role}`,
+      );
+    }
+
+    return true;
+  }
+}
+
+================
+File: backend/src/auth/strategies/jwt.strategy.ts
+================
+import { Injectable, Logger } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../../prisma/prisma.service';
+import { JwtPayload, AuthenticatedUser } from '../auth.types';
+import { UnauthorizedException } from '@nestjs/common';
+
+/**
+ * JwtStrategy
+ *
+ * Passport strategy para validar JWT en cada request.
+ * El JWT se extrae del header: Authorization: Bearer <token>
+ *
+ * validate() se llama automáticamente en cada request protegido.
+ * El valor retornado se asigna a req.user.
+ */
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      secretOrKey: config.get<string>('JWT_SECRET', 'geartrace-dev-secret-change-in-production'),
+    });
+  }
+
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    // Verificar que el usuario sigue existiendo y activo en la BD
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, email: true, role: true, name: true, isActive: true },
+    });
+
+    if (!user || !user.isActive) {
+      this.logger.warn(`Token válido pero usuario ${payload.sub} inactivo o eliminado`);
+      throw new UnauthorizedException('Usuario no encontrado o inactivo');
+    }
+
+    // Este objeto estará disponible en req.user en todos los endpoints
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+    };
+  }
+}
+
+================
+File: backend/src/auth/auth.controller.ts
+================
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  Patch,
+  ParseIntPipe,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
+import { Roles, CurrentUser } from './decorators/auth.decorators';
+import { Role } from '@prisma/client';
+import { AuthenticatedUser } from './auth.types';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  // ── Rutas públicas (sin autenticación) ────────────────────
+
+  /** POST /api/auth/login */
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  login(@Body() dto: LoginDto) {
+    return this.authService.login(dto);
+  }
+
+  /**
+   * POST /api/auth/register
+   * Registro público: solo crea usuarios con rol CLIENTE.
+   * Para crear MECANICO/GERENTE usar el endpoint de admin.
+   */
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  register(@Body() dto: RegisterDto) {
+    // Forzar CLIENTE en registro público
+    return this.authService.register({ ...dto, role: Role.CLIENTE });
+  }
+
+  // ── Rutas autenticadas ─────────────────────────────────────
+
+  /** GET /api/auth/me → Perfil del usuario logueado */
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  getProfile(@CurrentUser() user: AuthenticatedUser) {
+    return { user };
+  }
+
+  // ── Rutas exclusivas del GERENTE ──────────────────────────
+
+  /** GET /api/auth/users → Lista todos los usuarios */
+  @Get('users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  findAllUsers() {
+    return this.authService.findAllUsers();
+  }
+
+  /**
+   * POST /api/auth/admin/create → El gerente crea usuarios con cualquier rol
+   */
+  @Post('admin/create')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.CREATED)
+  adminCreateUser(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  /** PATCH /api/auth/users/:id/role → Cambiar rol de un usuario */
+  @Patch('users/:id/role')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  changeRole(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('role') role: Role,
+  ) {
+    return this.authService.changeUserRole(id, role);
+  }
+
+  /** PATCH /api/auth/users/:id/toggle → Activar/desactivar usuario */
+  @Patch('users/:id/toggle')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  toggleActive(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('isActive') isActive: boolean,
+  ) {
+    return this.authService.toggleUserActive(id, isActive);
+  }
+}
+
+================
+File: backend/src/auth/auth.module.ts
+================
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtStrategy } from './strategies/jwt.strategy';
+
+@Module({
+  imports: [
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+
+    // JWT con secret tomado del .env y expiración configurable
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get<string>(
+          'JWT_SECRET',
+          'geartrace-dev-secret-change-in-production',
+        ),
+        signOptions: {
+          expiresIn: config.get<string>('JWT_EXPIRES_IN', '8h'),
+        },
+      }),
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy],
+  exports: [JwtModule, PassportModule, AuthService],
+})
+export class AuthModule {}
+
+================
+File: backend/src/auth/auth.types.ts
+================
+import { Role } from '@prisma/client';
+
+/**
+ * Payload que se firma dentro del JWT.
+ * Debe ser mínimo para no exponer datos sensibles.
+ */
+export interface JwtPayload {
+  sub: number;    // User ID (estándar JWT)
+  email: string;
+  role: Role;
+  name: string;
+}
+
+/**
+ * Datos del usuario autenticado disponibles en los guards y decoradores.
+ * Se adjunta en req.user por la JwtStrategy.
+ */
+export interface AuthenticatedUser {
+  id: number;
+  email: string;
+  role: Role;
+  name: string;
+}
+
+================
+File: backend/src/inventory/dto/create-box.dto.ts
+================
+import {
+  IsString,
+  IsInt,
+  IsOptional,
+  Min,
+  Max,
+  MaxLength,
+  Matches,
+} from 'class-validator';
+
+export class CreateBoxDto {
+  @IsString()
+  @MaxLength(100)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  description?: string;
+
+  @IsInt()
+  @Min(0)
+  @Max(4)
+  ledIndex: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  location?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^#[0-9A-Fa-f]{6}$/, {
+    message: 'colorHex debe ser un color hexadecimal válido (ej: #FF6600)',
+  })
+  colorHex?: string;
+}
+
+================
+File: backend/src/inventory/dto/create-part.dto.ts
+================
+import {
+  IsString,
+  IsInt,
+  IsOptional,
+  IsUrl,
+  IsArray,
+  Min,
+  MaxLength,
+  Matches,
+} from 'class-validator';
+
+export class CreatePartDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  @IsString()
+  @MaxLength(50)
+  @Matches(/^[A-Z0-9\-]+$/, {
+    message: 'El código solo puede contener letras mayúsculas, números y guiones',
+  })
+  code: string;
+
+  @IsInt()
+  @Min(0)
+  quantity: number;
+
+  @IsInt()
+  @Min(1)
+  boxId: number;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsUrl()
+  photoUrl?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  keywords?: string[];
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  minStock?: number;
+}
+
+================
+File: backend/src/inventory/dto/update-box.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { CreateBoxDto } from './create-box.dto';
+
+export class UpdateBoxDto extends PartialType(CreateBoxDto) {}
+
+================
+File: backend/src/inventory/dto/update-part.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { CreatePartDto } from './create-part.dto';
+
+export class UpdatePartDto extends PartialType(CreatePartDto) {}
+
+================
+File: backend/src/inventory/inventory.module.ts
+================
+import { Module } from '@nestjs/common';
+import { InventoryService } from './inventory.service';
+import { InventoryController } from './inventory.controller';
+
+@Module({
+  controllers: [InventoryController],
+  providers: [InventoryService],
+  // Exportamos el servicio para que AlexaModule pueda inyectarlo
+  exports: [InventoryService],
+})
+export class InventoryModule {}
+
+================
+File: backend/src/led/led.gateway.ts
+================
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  OnGatewayInit,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { Logger } from '@nestjs/common';
+import { LedControllerService } from './led-controller.service';
+
+// ══════════════════════════════════════════════════════════════════════════
+// Eventos Socket.io — GearTrace
+//
+// SERVIDOR → CLIENTE (emitidos por NestJS al Dashboard de React):
+//   led:activated   Alexa encontró una pieza y encendió el LED
+//   led:off         El LED fue apagado (timeout o manual)
+//   led:status      Estado inicial al conectarse un cliente nuevo
+//   hw:status       Info del modo hardware (real vs simulado)
+//
+// CLIENTE → SERVIDOR (recibidos desde el Dashboard):
+//   led:turnOff     El operador apaga el LED manualmente desde el dashboard
+//   led:test        El operador prueba un LED específico
+// ══════════════════════════════════════════════════════════════════════════
+export const SOCKET_EVENTS = {
+  // Server → Client
+  LED_ACTIVATED : 'led:activated',
+  LED_OFF       : 'led:off',
+  LED_STATUS    : 'led:status',
+  HW_STATUS     : 'hw:status',
+  // Client → Server
+  LED_TURN_OFF  : 'led:turnOff',
+  LED_TEST      : 'led:test',
+} as const;
+
+/** Payload que el servidor emite cuando un LED se activa */
+export interface LedActivatedPayload {
+  ledIndex : number;
+  partName : string;
+  colorHex : string;
+  timestamp: string;
+  simulated: boolean;  // true si estamos en modo sin hardware
+}
+
+@WebSocketGateway({
+  cors: { origin: '*' },
+  namespace: '/',
+  transports: ['websocket', 'polling'],
+})
+export class LedGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  @WebSocketServer()
+  server: Server;
+
+  private readonly logger = new Logger(LedGateway.name);
+
+  /** Mapa de timeouts activos por ledIndex → para poder cancelarlos */
+  private activeTimeouts = new Map<number, NodeJS.Timeout>();
+
+  constructor(private readonly ledService: LedControllerService) {}
+
+  // ──────────────────────────────────────────────────────────
+  // Ciclo de vida del Gateway
+  // ──────────────────────────────────────────────────────────
+
+  afterInit(): void {
+    this.logger.log('🔌 Socket.io Gateway inicializado y escuchando');
+  }
+
+  handleConnection(client: Socket): void {
+    this.logger.log(`📲 Cliente conectado: ${client.id}`);
+
+    // Al conectar, enviar al cliente el estado del hardware
+    const hwStatus = this.ledService.getStatus();
+    client.emit(SOCKET_EVENTS.HW_STATUS, hwStatus);
+  }
+
+  handleDisconnect(client: Socket): void {
+    this.logger.log(`🔴 Cliente desconectado: ${client.id}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Mensajes recibidos DESDE el cliente (Dashboard React)
+  // ──────────────────────────────────────────────────────────
+
+  /** El operador apaga un LED manualmente desde el Dashboard */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TURN_OFF)
+  handleManualOff(
+    @MessageBody() data: { ledIndex: number },
+    @ConnectedSocket() client: Socket,
+  ): void {
+    const { ledIndex } = data;
+    this.logger.log(`🖱️  Apagado manual solicitado por cliente ${client.id} → LED ${ledIndex}`);
+
+    // Cancelar el timeout automático si existe
+    this.cancelAutoOff(ledIndex);
+
+    this.ledService.turnOff(ledIndex);
+    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, manual: true });
+  }
+
+  /** El operador prueba un LED específico desde el Dashboard */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
+  async handleLedTest(
+    @MessageBody() data: { ledIndex: number; colorHex?: string },
+    @ConnectedSocket() client: Socket,
+  ): Promise<void> {
+    const { ledIndex, colorHex } = data;
+    this.logger.log(`🧪 Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
+
+    // Efecto de parpadeo para testeo visual
+    await this.ledService.blink(ledIndex, 3, colorHex);
+
+    const payload: LedActivatedPayload = {
+      ledIndex,
+      partName : `[TEST] LED ${ledIndex}`,
+      colorHex: colorHex ?? '#FFFFFF',
+      timestamp: new Date().toISOString(),
+      simulated: this.ledService.getStatus().simulationMode,
+    };
+    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
+
+    // Auto-apagar tras 5s en modo test
+    this.scheduleAutoOff(ledIndex, 5_000);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // API pública — llamada desde AlexaController
+  // ──────────────────────────────────────────────────────────
+
+  /**
+   * Enciende el LED correspondiente a la pieza encontrada por Alexa,
+   * emite el evento a todos los clientes del Dashboard y programa
+   * el apagado automático tras 10 segundos.
+   *
+   * @param ledIndex  Índice del LED en la tira (0-4)
+   * @param partName  Nombre de la pieza encontrada (para el dashboard)
+   * @param colorHex  Color del LED (viene de Box.colorHex en la BD)
+   */
+  async triggerLed(
+    ledIndex: number,
+    partName: string,
+    colorHex?: string,
+  ): Promise<void> {
+    // Cancelar timeout previo si el mismo LED ya estaba encendido
+    this.cancelAutoOff(ledIndex);
+
+    // Parpadeo inicial para llamar la atención y luego dejarlo encendido
+    await this.ledService.blink(ledIndex, 2, colorHex);
+
+    // Construir y emitir el payload al Dashboard
+    const payload: LedActivatedPayload = {
+      ledIndex,
+      partName,
+      colorHex: colorHex ?? '#FFFFFF',
+      timestamp: new Date().toISOString(),
+      simulated: this.ledService.getStatus().simulationMode,
+    };
+
+    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
+
+    this.logger.log(
+      `📡 Evento "${SOCKET_EVENTS.LED_ACTIVATED}" emitido → LED ${ledIndex} | "${partName}"`,
+    );
+
+    // Programar apagado automático a los 10 segundos
+    this.scheduleAutoOff(ledIndex, 10_000);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Helpers privados
+  // ──────────────────────────────────────────────────────────
+
+  private scheduleAutoOff(ledIndex: number, delayMs: number): void {
+    const timeout = setTimeout(() => {
+      this.ledService.turnOff(ledIndex);
+      this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, auto: true });
+      this.activeTimeouts.delete(ledIndex);
+      this.logger.log(`💤 LED ${ledIndex} apagado automáticamente (${delayMs / 1000}s)`);
+    }, delayMs);
+
+    this.activeTimeouts.set(ledIndex, timeout);
+  }
+
+  private cancelAutoOff(ledIndex: number): void {
+    const existing = this.activeTimeouts.get(ledIndex);
+    if (existing) {
+      clearTimeout(existing);
+      this.activeTimeouts.delete(ledIndex);
+    }
+  }
+}
+
+================
+File: backend/src/led/led.module.ts
+================
+import { Module, forwardRef } from '@nestjs/common';
+import { LedGateway } from './led.gateway';
+import { LedControllerService } from './led-controller.service';
+import { AlexaModule } from '../alexa/alexa.module';
+
+@Module({
+  imports: [forwardRef(() => AlexaModule)],
+  providers: [LedGateway, LedControllerService],
+  exports: [LedGateway, LedControllerService],
+})
+export class LedModule {}
+
+================
+File: backend/src/prisma/prisma.module.ts
+================
+import { Module, Global } from '@nestjs/common';
+import { PrismaService } from './prisma.service';
+
+// @Global() hace que PrismaService esté disponible en toda la app
+// sin necesidad de importar PrismaModule en cada módulo
+@Global()
+@Module({
+  providers: [PrismaService],
+  exports: [PrismaService],
+})
+export class PrismaModule {}
+
+================
+File: backend/src/prisma/prisma.service.ts
+================
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
+
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(PrismaService.name);
+
+  constructor() {
+    super({
+      log: [
+        { emit: 'event', level: 'query' },
+        { emit: 'stdout', level: 'info' },
+        { emit: 'stdout', level: 'warn' },
+        { emit: 'stdout', level: 'error' },
+      ],
+    });
+  }
+
+  async onModuleInit(): Promise<void> {
+    await this.$connect();
+    this.logger.log('✅ Conexión a PostgreSQL establecida');
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.$disconnect();
+    this.logger.log('🔌 Conexión a PostgreSQL cerrada');
+  }
+}
+
+================
+File: backend/src/app.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'node:path';
+import { PrismaModule } from './prisma/prisma.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { AlexaModule } from './alexa/alexa.module';
+import { LedModule } from './led/led.module';
+import { AuthModule } from './auth/auth.module';
+import { SearchLogModule } from './logs/search-log.module';
+
+@Module({
+  imports: [
+    // Carga variables de entorno desde .env de forma global
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
+
+    // Módulos de la aplicación
+    PrismaModule,
+    AuthModule,
+    InventoryModule,
+    AlexaModule,
+    LedModule,
+    SearchLogModule,
+  ],
+})
+export class AppModule {}
+
+================
+File: backend/clinerules.md
+================
+# Contexto Técnico: GearTrace Backend
+
+## Tecnologías
+ NestJS | Prisma ORM | PostgreSQL 15 | Socket.io | Class-Validator
+
+## Arquitectura y Módulos
+- Auth: JWT, Guards (`JwtAuthGuard`, `RolesGuard`), Roles (`GERENTE`, `MECANICO`, `CLIENTE`).
+- Inventory: Entidades `Box` y `Part`.
+- Alexa: Controller `/api/webhook/alexa` que maneja `BuscarPiezaIntent`.
+- LED & WebSockets: `LedControllerService` (fallback simulación/GPIO real) y `LedGateway`.
+
+## Reglas de Desarrollo Backend
+1. Todas las rutas deben llevar el prefijo global `/api`.
+2. Validar payloads siempre con DTOs de `class-validator`.
+3. Al modificar `prisma/schema.prisma`, recordar generar la migración.
+4. Refactorizar métodos por partes sin romper las firmas existentes.
+
+================
+File: backend/repomix.config.json
+================
+{
+  "output": {
+    "filePath": "repomix-output.xml"
+  },
+  "ignore": {
+    "customPatterns": [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/coverage/**",
+      "**/*.log",
+      "**/migration_lock.toml",
+      "repomix-output.xml"
+    ]
+  }
+}
+
+================
+File: backend/tsconfig.json
+================
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src/**/*", "prisma/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+
+================
+File: frontend/src/components/Inventory/InventoryList.tsx
+================
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Plus, Package } from 'lucide-react';
+import api from '../../api/axios';
+import PartFormModal, { PartFormValues } from './PartFormModal';
+
+interface InventoryPart {
+  id: number;
+  name: string;
+  code: string;
+  quantity: number;
+  minStock: number;
+  keywords: string[];
+  box?: {
+    id: number;
+    name: string;
+  };
+}
+
+const toFormValues = (part: InventoryPart): PartFormValues => ({
+  id: part.id,
+  name: part.name,
+  code: part.code,
+  quantity: part.quantity,
+  boxId: part.box?.id ?? 0,
+  minStock: part.minStock,
+  keywords: part.keywords,
+});
+
+export default function InventoryList() {
+  const [parts, setParts] = useState<InventoryPart[]>([]);
+  const [search, setSearch] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedPart, setSelectedPart] = useState<PartFormValues | null>(null);
+
+  const loadParts = async () => {
+    setIsLoading(true);
+    try {
+      const response = await api.get<InventoryPart[]>('/inventory/parts');
+      setParts(response.data);
+      setError(null);
+    } catch (requestError) {
+      console.error('Error al cargar las piezas', requestError);
+      setError('No se pudieron cargar las piezas.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadParts();
+  }, []);
+
+  const filteredParts = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+
+    if (!normalizedSearch) {
+      return parts;
+    }
+
+    return parts.filter(
+      (part) =>
+        part.name.toLowerCase().includes(normalizedSearch) ||
+        part.code.toLowerCase().includes(normalizedSearch),
+    );
+  }, [parts, search]);
+
+  return (
+    <section className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+              <Package size={24} />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-white">Inventario</h2>
+              <p className="text-sm text-slate-400">
+                Gestiona las piezas almacenadas.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedPart(null);
+            setIsModalOpen(true);
+          }}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900"
+        >
+          <Plus size={18} />
+          Nueva Pieza
+        </button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4">
+        <label htmlFor="inventory-search" className="sr-only">
+          Buscar piezas
+        </label>
+        <div className="relative">
+          <Search
+            size={18}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+          />
+          <input
+            id="inventory-search"
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Buscar por nombre o código..."
+            className="w-full rounded-xl border border-slate-700 bg-slate-900/70 py-2.5 pl-10 pr-4 text-slate-100 outline-none transition-colors placeholder:text-slate-500 focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+          />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+        {isLoading ? (
+          <div className="p-8 text-center text-slate-400">Cargando piezas...</div>
+        ) : error ? (
+          <div className="p-8 text-center text-red-400">{error}</div>
+        ) : filteredParts.length === 0 ? (
+          <div className="p-8 text-center text-slate-400">
+            No se encontraron piezas.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead className="border-b border-slate-700 bg-slate-800">
+                <tr>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Pieza</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Código</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Caja</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Stock</th>
+                  <th className="px-6 py-4 text-right font-semibold text-slate-300">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/70">
+                {filteredParts.map((part) => (
+                  <tr key={part.id} className="transition-colors hover:bg-slate-700/30">
+                    <td className="px-6 py-4 font-medium text-white">{part.name}</td>
+                    <td className="px-6 py-4 text-slate-400">{part.code}</td>
+                    <td className="px-6 py-4 text-slate-400">
+                      {part.box?.name ?? 'Sin caja'}
+                    </td>
+                    <td
+                      className={`px-6 py-4 font-semibold ${
+                        part.quantity <= part.minStock
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                      }`}
+                    >
+                      {part.quantity}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedPart(toFormValues(part));
+                          setIsModalOpen(true);
+                        }}
+                        className="font-medium text-brand-400 transition-colors hover:text-brand-300"
+                      >
+                        Editar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <PartFormModal
+        isOpen={isModalOpen}
+        part={selectedPart}
+        onClose={() => setIsModalOpen(false)}
+        onSaved={() => {
+          void loadParts();
+        }}
+      />
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/Inventory/PartFormModal.tsx
+================
+import { FormEvent, useEffect, useState } from 'react';
+import { X } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../../api/axios';
+
+interface InventoryBox {
+  id: number;
+  name: string;
+}
+
+export interface PartFormValues {
+  id?: number;
+  name: string;
+  code: string;
+  quantity: number;
+  boxId: number;
+  minStock: number;
+  keywords: string[];
+}
+
+interface PartFormModalProps {
+  isOpen: boolean;
+  part?: PartFormValues | null;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+const emptyForm: PartFormValues = {
+  name: '',
+  code: '',
+  quantity: 0,
+  boxId: 0,
+  minStock: 1,
+  keywords: [],
+};
+
+export default function PartFormModal({
+  isOpen,
+  part,
+  onClose,
+  onSaved,
+}: PartFormModalProps) {
+  const [boxes, setBoxes] = useState<InventoryBox[]>([]);
+  const [form, setForm] = useState<PartFormValues>(emptyForm);
+  const [keywordsText, setKeywordsText] = useState('');
+  const [isLoadingBoxes, setIsLoadingBoxes] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    setForm(part ?? emptyForm);
+    setKeywordsText(part?.keywords.join(', ') ?? '');
+
+    const loadBoxes = async () => {
+      setIsLoadingBoxes(true);
+      try {
+        const response = await api.get<InventoryBox[]>('/inventory/boxes');
+        setBoxes(response.data);
+      } catch (error) {
+        console.error('Error al cargar las cajas', error);
+        toast.error('No se pudieron cargar las cajas disponibles.');
+      } finally {
+        setIsLoadingBoxes(false);
+      }
+    };
+
+    void loadBoxes();
+  }, [isOpen, part]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const updateField = <K extends keyof PartFormValues>(
+    field: K,
+    value: PartFormValues[K],
+  ) => {
+    setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+
+    const payload = {
+      name: form.name.trim(),
+      code: form.code.trim(),
+      quantity: form.quantity,
+      boxId: form.boxId,
+      minStock: form.minStock,
+      keywords: keywordsText
+        .split(',')
+        .map((keyword) => keyword.trim())
+        .filter(Boolean),
+    };
+
+    try {
+      if (part?.id) {
+        await api.put(`/inventory/parts/${part.id}`, payload);
+        toast.success('Pieza actualizada correctamente.');
+      } else {
+        await api.post('/inventory/parts', payload);
+        toast.success('Pieza creada correctamente.');
+      }
+
+      onSaved();
+      onClose();
+    } catch (error) {
+      console.error('Error al guardar la pieza', error);
+      toast.error('No se pudo guardar la pieza.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="part-form-title"
+    >
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-800 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-700 px-6 py-4">
+          <h2 id="part-form-title" className="text-xl font-bold text-white">
+            {part ? 'Editar pieza' : 'Nueva pieza'}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white"
+            aria-label="Cerrar modal"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5 p-6">
+          <div className="grid gap-5 sm:grid-cols-2">
+            <label className="space-y-2 text-sm text-slate-300">
+              Nombre
+              <input
+                required
+                maxLength={150}
+                value={form.name}
+                onChange={(event) => updateField('name', event.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              Código
+              <input
+                required
+                maxLength={50}
+                value={form.code}
+                onChange={(event) => updateField('code', event.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              Cantidad
+              <input
+                required
+                min={0}
+                type="number"
+                value={form.quantity}
+                onChange={(event) => updateField('quantity', Number(event.target.value))}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              Stock mínimo
+              <input
+                required
+                min={0}
+                type="number"
+                value={form.minStock}
+                onChange={(event) => updateField('minStock', Number(event.target.value))}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300 sm:col-span-2">
+              Caja
+              <select
+                required
+                value={form.boxId || ''}
+                disabled={isLoadingBoxes}
+                onChange={(event) => updateField('boxId', Number(event.target.value))}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+              >
+                <option value="" disabled>
+                  {isLoadingBoxes ? 'Cargando cajas...' : 'Selecciona una caja'}
+                </option>
+                {boxes.map((box) => (
+                  <option key={box.id} value={box.id}>
+                    {box.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300 sm:col-span-2">
+              Keywords
+              <input
+                value={keywordsText}
+                onChange={(event) => setKeywordsText(event.target.value)}
+                placeholder="filtro, aceite, motor"
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none placeholder:text-slate-500 focus:border-brand-500"
+              />
+              <span className="block text-xs text-slate-500">
+                Separa las palabras clave con comas.
+              </span>
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-3 border-t border-slate-700 pt-5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl px-4 py-2.5 font-semibold text-slate-300 transition-colors hover:bg-slate-700"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting || isLoadingBoxes}
+              className="rounded-xl bg-brand-500 px-5 py-2.5 font-semibold text-white transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isSubmitting ? 'Guardando...' : 'Guardar pieza'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+================
+File: frontend/src/components/Login.tsx
+================
+import { useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import api from '../api/axios';
+import { Wrench } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+export default function Login() {
+  const [email, setEmail] = useState('gerente@geartrace.com');
+  const [password, setPassword] = useState('password123');
+  const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    
+    try {
+      const response = await api.post('/auth/login', { email, password });
+      toast.success(`Bienvenido, ${response.data.user.name}`);
+      login(response.data.accessToken, response.data.user);
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Error al iniciar sesión');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
+      {/* Elemento de diseño de fondo (glow) */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-brand-500 rounded-full blur-[128px] opacity-20 pointer-events-none"></div>
+
+      <div className="max-w-md w-full space-y-8 bg-slate-800/80 backdrop-blur-xl p-10 rounded-2xl shadow-2xl border border-slate-700 relative z-10">
+        <div>
+          <div className="mx-auto h-16 w-16 bg-brand-500/20 text-brand-500 flex items-center justify-center rounded-2xl shadow-[0_0_20px_rgba(249,115,22,0.3)]">
+            <Wrench size={32} strokeWidth={2.5} />
+          </div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-white">
+            GearTrace
+          </h2>
+          <p className="mt-2 text-center text-sm text-slate-400">
+            Sistema de Gestión Logística Inteligente
+          </p>
+        </div>
+        
+        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+          <div className="space-y-4 rounded-md shadow-sm">
+            <div>
+              <label htmlFor="email-address" className="sr-only">Correo electrónico</label>
+              <input
+                id="email-address"
+                name="email"
+                type="email"
+                required
+                className="appearance-none rounded-xl relative block w-full px-4 py-3 border border-slate-600 bg-slate-900/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:z-10 sm:text-sm transition-all"
+                placeholder="Correo electrónico"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="password" className="sr-only">Contraseña</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                className="appearance-none rounded-xl relative block w-full px-4 py-3 border border-slate-600 bg-slate-900/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:z-10 sm:text-sm transition-all"
+                placeholder="Contraseña"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-brand-600 hover:bg-brand-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-500 focus:ring-offset-slate-900 transition-all disabled:opacity-70 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(234,88,12,0.4)] hover:shadow-[0_0_25px_rgba(249,115,22,0.6)]"
+            >
+              {loading ? (
+                <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+              ) : (
+                'Iniciar Sesión'
+              )}
+            </button>
+          </div>
+          
+          <div className="text-center text-xs text-slate-500 mt-4 space-y-1">
+            <p>Demo accounts (pass: password123):</p>
+            <p>gerente@geartrace.com | mecanico@... | cliente@...</p>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+================
+File: frontend/src/contexts/AuthContext.tsx
+================
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import api from '../api/axios';
+import { useNavigate } from 'react-router-dom';
+
+export type Role = 'GERENTE' | 'MECANICO' | 'CLIENTE';
+
+export interface User {
+  id: number;
+  name: string;
+  email: string;
+  role: Role;
+}
+
+interface AuthContextType {
+  user: User | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  login: (token: string, user: User) => void;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    // Restaurar sesión desde localStorage
+    const initAuth = async () => {
+      const token = localStorage.getItem('geartrace_token');
+      if (token) {
+        try {
+          // Validar el token contra el backend
+          const response = await api.get('/auth/me');
+          setUser(response.data.user);
+        } catch (error) {
+          console.error("Token inválido o expirado");
+          localStorage.removeItem('geartrace_token');
+        }
+      }
+      setIsLoading(false);
+    };
+
+    initAuth();
+
+    // Escuchar evento de interceptor de axios
+    const handleUnauthorized = () => {
+      setUser(null);
+      navigate('/login');
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+  }, [navigate]);
+
+  const login = (token: string, userData: User) => {
+    localStorage.setItem('geartrace_token', token);
+    setUser(userData);
+    navigate('/dashboard');
+  };
+
+  const logout = () => {
+    localStorage.removeItem('geartrace_token');
+    setUser(null);
+    navigate('/login');
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, isLoading, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
+
+================
+File: frontend/src/index.css
+================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-900 text-slate-100 antialiased;
+  }
+}
+
+/* Custom styles for the glow effect if needed beyond tailwind classes */
+.led-glow {
+  box-shadow: 0 0 15px currentColor;
+}
+
+================
+File: frontend/src/main.tsx
+================
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App.tsx'
+import './index.css'
+import { AuthProvider } from './contexts/AuthContext.tsx'
+import { BrowserRouter } from 'react-router-dom'
+import { Toaster } from 'react-hot-toast'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+        <Toaster position="top-right" toastOptions={{
+          style: {
+            background: '#1e293b',
+            color: '#fff',
+            border: '1px solid #334155'
+          }
+        }}/>
+      </AuthProvider>
+    </BrowserRouter>
+  </React.StrictMode>,
+)
+
+================
+File: frontend/src/vite-env.d.ts
+================
+/// <reference types="vite/client" />
+
+interface ImportMetaEnv {
+  readonly VITE_API_URL?: string;
+  readonly VITE_SOCKET_URL?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
+================
+File: frontend/.env.example
+================
+# URL base del Backend NestJS (en local o túnel Ngrok / Vercel)
+# Si no incluye /api al final, el cliente axios lo añade automáticamente.
+VITE_API_URL=http://localhost:3000
+
+# URL del servidor Socket.io de GearTrace
+VITE_SOCKET_URL=http://localhost:3000
+
+================
+File: frontend/clinerules.md
+================
+# Contexto Técnico: GearTrace Frontend
+
+## Tecnologías
+ React 18 | Vite | TailwindCSS | Lucide Icons | Axios | Socket.io-client
+
+## Estructura
+- `/src/api/axios.ts`: Instancia con interceptor para adjuntar token JWT automáticamente.
+- `/src/contexts/AuthContext.tsx`: Contexto de autenticación global.
+- `/src/components/Dashboard.tsx`: Escucha de eventos Socket.io (`hw:status`, `led:activated`, `led:off`).
+
+## Reglas de Desarrollo Frontend
+1. Usar componentes funcionales en TypeScript con tipos explícitos.
+2. Utilizar clases utilitarias de TailwindCSS para el diseño (tema oscuro slate-900 / brand orange).
+3. No hacer peticiones `fetch` directas; usar siempre la instancia de `@/api/axios`.
+
+================
+File: frontend/index.html
+================
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GearTrace | Logística Inteligente</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+================
+File: frontend/package.json
+================
+{
+  "name": "geartrace-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.0",
+    "socket.io-client": "^4.7.4",
+    "axios": "^1.6.7",
+    "react-hot-toast": "^2.4.1",
+    "lucide-react": "^0.323.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.55",
+    "@types/react-dom": "^18.2.19",
+    "@typescript-eslint/eslint-plugin": "^7.0.2",
+    "@typescript-eslint/parser": "^7.0.2",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0"
+  }
+}
+
+================
+File: frontend/postcss.config.js
+================
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+================
+File: frontend/repomix.config.json
+================
+{
+  "output": {
+    "filePath": "repomix-output.xml"
+  },
+  "ignore": {
+    "customPatterns": [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/*.svg",
+      "**/*.png",
+      "repomix-output.xml"
+    ]
+  }
+}
+
+================
+File: frontend/tailwind.config.js
+================
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+      },
+      colors: {
+        brand: {
+          50:  '#fff7ed',
+          100: '#ffedd5',
+          200: '#fed7aa',
+          300: '#fdba74',
+          400: '#fb923c',
+          500: '#f97316',
+          600: '#ea580c',
+          700: '#c2410c',
+          800: '#9a3412',
+          900: '#7c2d12',
+        },
+      },
+      animation: {
+        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        'glow': 'glow 2s ease-in-out infinite alternate',
+      },
+      keyframes: {
+        glow: {
+          '0%':   { boxShadow: '0 0 5px rgba(249,115,22,0.5)' },
+          '100%': { boxShadow: '0 0 20px rgba(249,115,22,0.9), 0 0 40px rgba(249,115,22,0.4)' },
+        },
+      },
+    },
+  },
+  plugins: [],
+}
+
+================
+File: frontend/tsconfig.node.json
+================
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["vite.config.ts"]
+}
+
+================
+File: frontend/vercel.json
+================
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
+
+================
+File: frontend/vite.config.ts
+================
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    // Proxy para evitar CORS en desarrollo
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/socket.io': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
+})
+
+================
+File: github/copilot-instructions.md
+================
+# GearTrace - Reglas de Monorepo
+
+## Estructura General
+- `/backend`: API REST, WebSockets e IoT construidos con NestJS + Prisma + PostgreSQL.
+- `/frontend`: Dashboard en tiempo real construido con React + Vite + TailwindCSS.
+
+## Reglas Globales
+1. No cruzar código de backend en archivos del frontend ni viceversa, solo hacerlo si se refactoriza codigo de una funcion especifica.
+2. Mantener la arquitectura modular (Backend desacoplado del Frontend).
+3. Toda comunicación entre ambos se realiza exclusivamente vía API REST (`/api/...`) o Socket.io (`led:activated`, etc.).
+
+================
+File: .gitignore
+================
+# ──────────────────────────────────────────────
+# GearTrace - .gitignore (Monorepo)
+# ──────────────────────────────────────────────
+
+# Dependencias
+node_modules/
+.pnp
+.pnp.js
+
+# Builds
+dist/
+build/
+.next/
+
+# Variables de entorno (¡NUNCA versionar!)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Prisma: cliente generado (se regenera con prisma generate)
+backend/node_modules/.prisma/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Testing
+coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Raspberry Pi / Hardware
+*.pid
+
+================
+File: docker-compose.yml
+================
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: geartrace_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-geartrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-geartrace_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-geartrace_db}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-geartrace} -d ${POSTGRES_DB:-geartrace_db}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geartrace_network
+
+  # Servicio opcional: pgAdmin para gestión visual de la BD
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: geartrace_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@geartrace.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - '${PGADMIN_PORT:-5050}:80'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - geartrace_network
+    profiles:
+      - tools # Solo se levanta con: docker compose --profile tools up
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  geartrace_network:
+    driver: bridge
+
+================
+File: package.json
+================
+{
+  "name": "GearTrace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monorepo de GearTrace con automatizaciones de contexto de IA",
+  "scripts": {
+    "repomix:backend": "cd backend && npx repomix",
+    "repomix:frontend": "cd frontend && npx repomix",
+    "repomix:all": "npm run repomix:backend && npm run repomix:frontend"
+  },
+  "devDependencies": {
+    "repomix": "^0.2.0"
+  }
+}
+
+================
+File: backend/prisma/seed.ts
+================
+import { PrismaClient, Role } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+
+const prisma = new PrismaClient();
+const BCRYPT_ROUNDS = 10;
+
+async function main() {
+  console.log('🌱 Iniciando seedeo de la base de datos...');
+
+  // 1. Limpiar datos existentes (opcional, cuidado en producción)
+  // await prisma.searchLog.deleteMany();
+  // await prisma.part.deleteMany();
+  // await prisma.box.deleteMany();
+  // await prisma.user.deleteMany();
+
+  // 2. Crear Usuarios con sus roles (password: password123)
+  const defaultPassword = await bcrypt.hash('password123', BCRYPT_ROUNDS);
+
+  console.log('👤 Creando usuarios...');
+  
+  const gerente = await prisma.user.upsert({
+    where: { email: 'gerente@geartrace.com' },
+    update: { password: defaultPassword },
+    create: {
+      name: 'Gerente Principal',
+      email: 'gerente@geartrace.com',
+      password: defaultPassword,
+      role: Role.GERENTE,
+    },
+  });
+
+  const mecanico = await prisma.user.upsert({
+    where: { email: 'mecanico@geartrace.com' },
+    update: { password: defaultPassword },
+    create: {
+      name: 'Mecánico Jefe',
+      email: 'mecanico@geartrace.com',
+      password: defaultPassword,
+      role: Role.MECANICO,
+    },
+  });
+
+  const cliente = await prisma.user.upsert({
+    where: { email: 'cliente@geartrace.com' },
+    update: { password: defaultPassword },
+    create: {
+      name: 'Cliente Demo',
+      email: 'cliente@geartrace.com',
+      password: defaultPassword,
+      role: Role.CLIENTE,
+    },
+  });
+
+  console.log(`✅ Usuarios creados: ${gerente.email}, ${mecanico.email}, ${cliente.email}`);
+
+  // 3. Crear Cajas (solo si no existen)
+  console.log('📦 Creando cajas físicas...');
+  
+  const cajasData = [
+    { name: 'Caja A - Filtros', ledIndex: 0, location: 'Estante 1, Nivel A', colorHex: '#FF4500' },
+    { name: 'Caja B - Frenos', ledIndex: 1, location: 'Estante 1, Nivel B', colorHex: '#1E90FF' },
+    { name: 'Caja C - Correas', ledIndex: 2, location: 'Estante 2, Nivel A', colorHex: '#32CD32' },
+    { name: 'Caja D - Eléctrico', ledIndex: 3, location: 'Estante 2, Nivel B', colorHex: '#FFD700' },
+    { name: 'Caja E - Lubricantes', ledIndex: 4, location: 'Estante 3, Nivel A', colorHex: '#9400D3' },
+  ];
+
+  for (const c of cajasData) {
+    await prisma.box.upsert({
+      where: { ledIndex: c.ledIndex },
+      update: {},
+      create: c,
+    });
+  }
+
+  // 4. Crear Piezas
+  console.log('⚙️ Creando inventario de piezas...');
+  
+  // Buscar caja 1 y 2 para relacionar
+  const cajaA = await prisma.box.findUnique({ where: { ledIndex: 0 } });
+  const cajaB = await prisma.box.findUnique({ where: { ledIndex: 1 } });
+
+  if (cajaA && cajaB) {
+    await prisma.part.upsert({
+      where: { code: 'FLT-OIL-001' },
+      update: {},
+      create: {
+        name: 'Filtro de aceite Toyota',
+        code: 'FLT-OIL-001',
+        quantity: 15,
+        minStock: 3,
+        boxId: cajaA.id,
+        keywords: ['filtro aceite', 'filtro toyota', 'filtro'],
+      },
+    });
+
+    await prisma.part.upsert({
+      where: { code: 'BRK-PAD-001' },
+      update: {},
+      create: {
+        name: 'Pastillas de freno Brembo',
+        code: 'BRK-PAD-001',
+        quantity: 6,
+        minStock: 2,
+        boxId: cajaB.id,
+        keywords: ['pastillas', 'frenos', 'pastillas freno'],
+      },
+    });
+  }
+
+  console.log('🎉 ¡Seed finalizado exitosamente!');
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
+
+================
+File: backend/src/alexa/alexa.controller.ts
+================
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
+import { AlexaService, INTENTS, SLOTS } from './alexa.service';
+import { AlexaRequestEnvelope, AlexaIntentRequest } from './alexa.types';
+import { LedGateway } from '../led/led.gateway';
+import { InventoryService } from '../inventory/inventory.service';
+
+/**
+ * AlexaController
+ *
+ * Expone POST /api/webhook/alexa — Amazon lo invoca cuando el usuario
+ * habla con la Skill de GearTrace.
+ *
+ * Flujo completo:
+ *   Usuario → Alexa → Amazon → POST /api/webhook/alexa
+ *                                    │
+ *                    ┌───────────────┴──────────────────┐
+ *                    │                                  │
+ *             AlexaService                        LedGateway
+ *          procesa el intent                  enciende el LED +
+ *          y genera respuesta                emite evento Socket.io
+ *                    │                                  │
+ *                    └───────────────┬──────────────────┘
+ *                                   │
+ *                         JSON response → Amazon → Alexa → Usuario
+ *                         Socket.io event → Dashboard React (tiempo real)
+ */
+@Controller('webhook')
+export class AlexaController {
+  private readonly logger = new Logger(AlexaController.name);
+
+  constructor(
+    private readonly alexaService: AlexaService,
+    private readonly inventoryService: InventoryService,
+    @Inject(forwardRef(() => LedGateway))
+    private readonly ledGateway: LedGateway,
+  ) {}
+
+  /**
+   * POST /api/webhook/alexa
+   */
+  @Post('alexa')
+  @HttpCode(HttpStatus.OK)
+  async handleAlexaWebhook(@Body() envelope: AlexaRequestEnvelope) {
+    this.logger.log(`📩 Webhook recibido | Type: ${envelope?.request?.type}`);
+
+    try {
+      // ── Si es BuscarPiezaIntent, encender el LED ANTES de responder ──
+      if (
+        envelope?.request?.type === 'IntentRequest' &&
+        (envelope.request as AlexaIntentRequest).intent?.name === INTENTS.BUSCAR_PIEZA
+      ) {
+        const slot = (envelope.request as AlexaIntentRequest).intent?.slots?.[SLOTS.NOMBRE_PIEZA];
+
+        if (slot?.value) {
+          // Buscar la pieza para obtener ledIndex Y colorHex de la caja
+          const results = await this.inventoryService.searchPartByName(slot.value);
+
+          if (results && results.length > 0) {
+            const pieza = results[0];
+            const { ledIndex, colorHex, name: boxName } = pieza.box;
+
+            this.logger.log(
+              `💡 Activando LED ${ledIndex} (${colorHex}) para "${pieza.name}" en ${boxName}`,
+            );
+
+            // Disparar LED + Socket.io de forma no bloqueante
+            // (no usamos await para no retrasar la respuesta a Amazon)
+            void this.ledGateway.triggerLed(ledIndex, pieza.name, colorHex);
+          }
+        }
+      }
+
+      // ── Procesar intent y devolver respuesta a Amazon ──
+      const response = await this.alexaService.handleRequest(envelope);
+      this.logger.log('📤 Respuesta enviada a Amazon');
+      return response;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error procesando solicitud de Alexa: ${message}`);
+      // Respuesta de contingencia válida para que Alexa no falle
+      return {
+        version: '1.0',
+        response: {
+          outputSpeech: {
+            type: 'PlainText',
+            text: 'Hubo un problema al consultar GearTrace. Por favor, intenta de nuevo.',
+          },
+          shouldEndSession: true,
+        },
+      };
+    }
+  }
+}
+
+================
+File: backend/src/alexa/alexa.service.ts
+================
+import {
+  Injectable,
+  Logger,
+  BadRequestException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma/prisma.service';
+import { InventoryService } from '../inventory/inventory.service';
+import {
+  AlexaRequestEnvelope,
+  AlexaResponseEnvelope,
+  AlexaIntentRequest,
+  AlexaOutputSpeech,
+} from './alexa.types';
+
+// ──────────────────────────────────────────────────────────
+// Nombres de los Intents definidos en la Alexa Developer Console
+// ──────────────────────────────────────────────────────────
+export const INTENTS = {
+  BUSCAR_PIEZA: 'BuscarPiezaIntent',
+  LISTAR_CAJAS: 'ListarCajasIntent',
+  STOCK_BAJO: 'StockBajoIntent',
+  HELP: 'AMAZON.HelpIntent',
+  CANCEL: 'AMAZON.CancelIntent',
+  STOP: 'AMAZON.StopIntent',
+  FALLBACK: 'AMAZON.FallbackIntent',
+} as const;
+
+// ──────────────────────────────────────────────────────────
+// Nombres de los Slots en el modelo de interacción de Alexa
+// ──────────────────────────────────────────────────────────
+export const SLOTS = {
+  NOMBRE_PIEZA: 'nombrePieza',
+} as const;
+
+@Injectable()
+export class AlexaService {
+  private readonly logger = new Logger(AlexaService.name);
+  private readonly skillId: string;
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+    private readonly inventoryService: InventoryService,
+  ) {
+    this.skillId = this.config.get<string>('ALEXA_SKILL_ID', '');
+  }
+
+  /**
+   * Punto de entrada: recibe el envelope completo de Amazon y
+   * delega al manejador del tipo de request correspondiente.
+   */
+  async handleRequest(envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
+    this.logger.debug(`Request recibido: ${envelope.request.type}`);
+
+    // Validación del Skill ID si está configurado con un ID real (amzn1.ask.skill...)
+    const isConfiguredSkillId =
+      Boolean(this.skillId) &&
+      !this.skillId.includes('XXXX') &&
+      this.skillId.startsWith('amzn1.ask.skill.');
+
+    if (isConfiguredSkillId) {
+      const incomingSkillId =
+        envelope.session?.application?.applicationId ??
+        envelope.context?.System?.application?.applicationId;
+
+      if (incomingSkillId && incomingSkillId !== this.skillId) {
+        this.logger.warn(`Skill ID inválido: ${incomingSkillId} (esperado: ${this.skillId})`);
+        throw new BadRequestException('Skill ID no autorizado');
+      }
+    }
+
+    const { request } = envelope;
+
+    switch (request.type) {
+      case 'LaunchRequest':
+        return this.handleLaunchRequest();
+
+      case 'IntentRequest':
+        return this.handleIntentRequest(request as AlexaIntentRequest);
+
+      case 'SessionEndedRequest':
+        this.logger.log('Sesión de Alexa finalizada');
+        return this.buildResponse(
+          { type: 'PlainText', text: '' },
+          true,
+        );
+
+      default:
+        return this.buildResponse(
+          { type: 'PlainText', text: 'No entendí la solicitud.' },
+          true,
+        );
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Handlers por tipo de request
+  // ──────────────────────────────────────────────────────────
+
+  private handleLaunchRequest(): AlexaResponseEnvelope {
+    return this.buildResponse({
+      type: 'SSML',
+      ssml: `<speak>
+        Bienvenido a <emphasis level="strong">GearTrace</emphasis>.
+        Puedes pedirme que busque una pieza diciendo:
+        <break time="300ms"/>
+        <emphasis level="moderate">busca filtro de aceite</emphasis>.
+        ¿Qué pieza necesitas?
+      </speak>`,
+    });
+  }
+
+  private async handleIntentRequest(
+    request: AlexaIntentRequest,
+  ): Promise<AlexaResponseEnvelope> {
+    const { name: intentName } = request.intent;
+    this.logger.log(`Intent recibido: "${intentName}"`);
+
+    switch (intentName) {
+      case INTENTS.BUSCAR_PIEZA:
+        return this.handleBuscarPieza(request);
+
+      case INTENTS.LISTAR_CAJAS:
+        return this.handleListarCajas();
+
+      case INTENTS.STOCK_BAJO:
+        return this.handleStockBajo();
+
+      case INTENTS.HELP:
+        return this.buildResponse({
+          type: 'PlainText',
+          text: 'Puedes decirme "busca filtro de aceite" o "qué piezas tienen stock bajo". ¿Cómo puedo ayudarte?',
+        });
+
+      case INTENTS.CANCEL:
+      case INTENTS.STOP:
+        return this.buildResponse(
+          { type: 'PlainText', text: 'Hasta luego. GearTrace listo.' },
+          true,
+        );
+
+      case INTENTS.FALLBACK:
+      default:
+        return this.buildResponse({
+          type: 'PlainText',
+          text: 'No entendí bien. Intenta decir "busca" seguido del nombre de la pieza.',
+        });
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // BuscarPiezaIntent: el más importante de GearTrace
+  // ──────────────────────────────────────────────────────────
+
+  private async handleBuscarPieza(
+    request: AlexaIntentRequest,
+  ): Promise<AlexaResponseEnvelope> {
+    // 1. Extraer el slot "nombrePieza" del request de Alexa
+    const slot = request.intent.slots?.[SLOTS.NOMBRE_PIEZA];
+
+    if (!slot?.value) {
+      return this.buildResponse({
+        type: 'PlainText',
+        text: '¿Qué pieza necesitas encontrar? Por favor, dime el nombre de la pieza.',
+      });
+    }
+
+    const nombreBuscado = slot.value;
+    this.logger.log(`🔍 Buscando pieza: "${nombreBuscado}"`);
+
+    // 2. Buscar en la base de datos usando InventoryService
+    const resultados = await this.inventoryService.searchPartByName(nombreBuscado);
+
+    // 3. Registrar la búsqueda en el log de auditoría
+    await this.prisma.searchLog.create({
+      data: {
+        query: nombreBuscado,
+        found: resultados.length > 0,
+        partId: resultados[0]?.id ?? null,
+        alexaResponse: resultados.length > 0
+          ? `Encontrado en caja ${resultados[0].box.name}`
+          : 'No encontrado',
+      },
+    });
+
+    // 4. Si no se encontró nada
+    if (resultados.length === 0) {
+      return this.buildResponse(
+        {
+          type: 'SSML',
+          ssml: `<speak>
+            No encontré ninguna pieza con el nombre
+            <emphasis level="moderate">${nombreBuscado}</emphasis>
+            en el inventario.
+            Verifica el nombre e intenta de nuevo.
+          </speak>`,
+        },
+        true,
+      );
+    }
+
+    // 5. Pieza encontrada: extraer datos de la primera coincidencia
+    const pieza = resultados[0];
+    const caja = pieza.box;
+
+    this.logger.log(
+      `✅ Pieza encontrada: "${pieza.name}" → Caja "${caja.name}" (LED ${caja.ledIndex})`,
+    );
+
+    // El evento de encendido del LED se dispara desde el AlexaController
+    // usando el LedGateway (ver alexa.controller.ts)
+
+    const stockMsg = pieza.quantity <= pieza.minStock
+      ? ` Atención: el stock es bajo, solo quedan ${pieza.quantity} unidades.`
+      : ` Stock disponible: ${pieza.quantity} unidades.`;
+
+    return this.buildResponse(
+      {
+        type: 'SSML',
+        ssml: `<speak>
+          Encontré
+          <emphasis level="moderate">${pieza.name}</emphasis>.
+          Está en la <emphasis level="strong">${caja.name}</emphasis>,
+          ubicada en ${caja.location ?? 'el almacén'}.
+          He encendido el LED indicador.
+          ${stockMsg}
+        </speak>`,
+      },
+      true,
+    );
+  }
+
+  private async handleListarCajas(): Promise<AlexaResponseEnvelope> {
+    const cajas = await this.inventoryService.findAllBoxes();
+    const lista = cajas.map((c) => c.name).join(', ');
+
+    return this.buildResponse(
+      {
+        type: 'PlainText',
+        text: `El almacén tiene ${cajas.length} cajas: ${lista}.`,
+      },
+      true,
+    );
+  }
+
+  private async handleStockBajo(): Promise<AlexaResponseEnvelope> {
+    const piezas = await this.inventoryService.getLowStockParts();
+
+    if (piezas.length === 0) {
+      return this.buildResponse(
+        { type: 'PlainText', text: 'Todo el inventario tiene stock suficiente. ¡Buen trabajo!' },
+        true,
+      );
+    }
+
+    const lista = piezas.map((p) => p.name).join(', ');
+    return this.buildResponse(
+      {
+        type: 'PlainText',
+        text: `Hay ${piezas.length} piezas con stock bajo: ${lista}. Considera reabastecerlas pronto.`,
+      },
+      true,
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Helper: construye el envelope de respuesta
+  // ──────────────────────────────────────────────────────────
+
+  private buildResponse(
+    outputSpeech: AlexaOutputSpeech,
+    shouldEndSession = false,
+  ): AlexaResponseEnvelope {
+    return {
+      version: '1.0',
+      response: {
+        outputSpeech,
+        shouldEndSession,
+      },
+    };
+  }
+
+  /**
+   * Extrae el ledIndex de la pieza encontrada para ser usado
+   * externamente por el AlexaController al disparar el evento LED.
+   */
+  async getLedIndexForPart(partName: string): Promise<number | null> {
+    const results = await this.inventoryService.searchPartByName(partName);
+    if (results.length === 0) return null;
+    return results[0].box.ledIndex;
+  }
+}
+
+================
+File: backend/src/auth/auth.service.ts
+================
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+  Logger,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcryptjs';
+import { PrismaService } from '../prisma/prisma.service';
+import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { JwtPayload } from './auth.types';
+import { Role } from '@prisma/client';
+
+const BCRYPT_ROUNDS = 10;
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwt: JwtService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // ──────────────────────────────────────────────────────────
+  // REGISTER
+  // ──────────────────────────────────────────────────────────
+
+  async register(dto: RegisterDto) {
+    // Verificar que el correo no esté en uso
+    const exists = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+    if (exists) {
+      throw new ConflictException(
+        `El correo "${dto.email}" ya está registrado`,
+      );
+    }
+
+    // Hashear la contraseña con bcrypt
+    const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+
+    const user = await this.prisma.user.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        password: hashedPassword,
+        role: dto.role ?? Role.CLIENTE,
+      },
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+    });
+
+    this.logger.log(`✅ Usuario registrado: ${user.email} (${user.role})`);
+
+    return {
+      message: 'Usuario registrado exitosamente',
+      user,
+      ...this.generateTokens(user),
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // LOGIN
+  // ──────────────────────────────────────────────────────────
+
+  async login(dto: LoginDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+
+    // Mensaje genérico para no revelar si el email existe
+    const invalidMsg = 'Correo o contraseña incorrectos';
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException(invalidMsg);
+    }
+
+    const passwordMatch = await bcrypt.compare(dto.password, user.password);
+    if (!passwordMatch) {
+      this.logger.warn(`Login fallido para: ${dto.email}`);
+      throw new UnauthorizedException(invalidMsg);
+    }
+
+    this.logger.log(`🔑 Login exitoso: ${user.email} (${user.role})`);
+
+    return {
+      message: 'Login exitoso',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      ...this.generateTokens(user),
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // GESTIÓN DE USUARIOS (solo GERENTE)
+  // ──────────────────────────────────────────────────────────
+
+  async findAllUsers() {
+    return this.prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async toggleUserActive(userId: number, isActive: boolean) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive },
+      select: { id: true, name: true, email: true, role: true, isActive: true },
+    });
+  }
+
+  async changeUserRole(userId: number, role: Role) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { role },
+      select: { id: true, name: true, email: true, role: true },
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // JWT helpers
+  // ──────────────────────────────────────────────────────────
+
+  private generateTokens(user: {
+    id: number;
+    email: string;
+    role: Role;
+    name: string;
+  }) {
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+    };
+
+    const accessToken = this.jwt.sign(payload);
+
+    return { accessToken };
+  }
+}
+
+================
+File: backend/src/inventory/inventory.controller.ts
+================
+import {
+  Controller,
+  Delete,
+  Get,
+  Patch,
+  Post,
+  Body,
+  Param,
+  ParseIntPipe,
+  HttpCode,
+  HttpStatus,
+  ParseFilePipe,
+  FileTypeValidator,
+  MaxFileSizeValidator,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { randomUUID } from 'node:crypto';
+import { extname, join } from 'node:path';
+import { InventoryService } from './inventory.service';
+import { CreatePartDto } from './dto/create-part.dto';
+import { CreateBoxDto } from './dto/create-box.dto';
+import { UpdatePartDto } from './dto/update-part.dto';
+import { UpdateBoxDto } from './dto/update-box.dto';
+
+@Controller('inventory')
+export class InventoryController {
+  constructor(private readonly inventoryService: InventoryService) {}
+
+  // ── Boxes ─────────────────────────────────────────────────
+
+  /** GET /api/inventory/boxes → Lista todas las cajas con sus piezas */
+  @Get('boxes')
+  findAllBoxes() {
+    return this.inventoryService.findAllBoxes();
+  }
+
+  /** GET /api/inventory/boxes/:id → Detalle de una caja */
+  @Get('boxes/:id')
+  findOneBox(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.findOneBox(id);
+  }
+
+  /** POST /api/inventory/boxes → Crear nueva caja */
+  @Post('boxes')
+  @HttpCode(HttpStatus.CREATED)
+  createBox(@Body() dto: CreateBoxDto) {
+    return this.inventoryService.createBox(dto);
+  }
+
+  /** PATCH /api/inventory/boxes/:id → Actualizar una caja */
+  @Patch('boxes/:id')
+  updateBox(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateBoxDto,
+  ) {
+    return this.inventoryService.updateBox(id, dto);
+  }
+
+  /** DELETE /api/inventory/boxes/:id → Eliminar una caja vacía */
+  @Delete('boxes/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeBox(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.removeBox(id);
+  }
+
+  // ── Parts ─────────────────────────────────────────────────
+
+  /** GET /api/inventory/parts → Lista todas las piezas */
+  @Get('parts')
+  findAllParts() {
+    return this.inventoryService.findAllParts();
+  }
+
+  /** GET /api/inventory/parts/low-stock → Piezas bajo stock mínimo */
+  @Get('parts/low-stock')
+  getLowStockParts() {
+    return this.inventoryService.getLowStockParts();
+  }
+
+  /** GET /api/inventory/parts/:id → Detalle de una pieza */
+  @Get('parts/:id')
+  findOnePart(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.findOnePart(id);
+  }
+
+  /** POST /api/inventory/parts → Crear nueva pieza */
+  @Post('parts')
+  @HttpCode(HttpStatus.CREATED)
+  createPart(@Body() dto: CreatePartDto) {
+    return this.inventoryService.createPart(dto);
+  }
+
+  /** POST /api/inventory/parts/:id/image → Subir imagen de una pieza */
+  @Post('parts/:id/image')
+  @UseInterceptors(
+    FileInterceptor('image', {
+      storage: diskStorage({
+        destination: join(process.cwd(), 'uploads'),
+        filename: (_request, file, callback) => {
+          callback(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`);
+        },
+      }),
+    }),
+  )
+  uploadPartImage(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({
+            fileType: /^image\/(jpeg|png|gif|webp)$/,
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.inventoryService.updatePartPhoto(id, `/uploads/${file.filename}`);
+  }
+
+  /** PATCH /api/inventory/parts/:id → Actualizar una pieza */
+  @Patch('parts/:id')
+  updatePart(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePartDto,
+  ) {
+    return this.inventoryService.updatePart(id, dto);
+  }
+
+  /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
+  @Delete('parts/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removePart(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.removePart(id);
+  }
+
+  /** GET /api/inventory/search/:query → Búsqueda de piezas (usado internamente y por Alexa) */
+  @Get('search/:query')
+  searchPart(@Param('query') query: string) {
+    return this.inventoryService.searchPartByName(query);
+  }
+}
+
+================
+File: backend/src/inventory/inventory.service.ts
+================
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreatePartDto } from './dto/create-part.dto';
+import { CreateBoxDto } from './dto/create-box.dto';
+import { UpdatePartDto } from './dto/update-part.dto';
+import { UpdateBoxDto } from './dto/update-box.dto';
+import { Prisma } from '@prisma/client';
+
+@Injectable()
+export class InventoryService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  // ──────────────────────────────────────────────────────────
+  // BOXES
+  // ──────────────────────────────────────────────────────────
+
+  async findAllBoxes() {
+    return this.prisma.box.findMany({
+      include: {
+        parts: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            quantity: true,
+            minStock: true,
+            photoUrl: true,
+          },
+          orderBy: { name: 'asc' },
+        },
+      },
+      orderBy: { ledIndex: 'asc' },
+    });
+  }
+
+  async findOneBox(id: number) {
+    const box = await this.prisma.box.findUnique({
+      where: { id },
+      include: { parts: true },
+    });
+    if (!box) throw new NotFoundException(`Caja con id ${id} no encontrada`);
+    return box;
+  }
+
+  async createBox(dto: CreateBoxDto) {
+    try {
+      return await this.prisma.box.create({ data: dto });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async updateBox(id: number, dto: UpdateBoxDto) {
+    await this.findOneBox(id);
+
+    try {
+      return await this.prisma.box.update({
+        where: { id },
+        data: dto,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async removeBox(id: number) {
+    const box = await this.findOneBox(id);
+    if (box.parts.length > 0) {
+      throw new ConflictException(
+        'No se puede eliminar una caja que contiene piezas.',
+      );
+    }
+
+    await this.prisma.box.delete({ where: { id } });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // PARTS
+  // ──────────────────────────────────────────────────────────
+
+  async findAllParts() {
+    return this.prisma.part.findMany({
+      include: { box: { select: { id: true, name: true, ledIndex: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async findOnePart(id: number) {
+    const part = await this.prisma.part.findUnique({
+      where: { id },
+      include: { box: true },
+    });
+    if (!part) throw new NotFoundException(`Pieza con id ${id} no encontrada`);
+    return part;
+  }
+
+  async createPart(dto: CreatePartDto) {
+    // Verificar que la caja existe antes de crear la pieza
+    await this.findOneBox(dto.boxId);
+
+    try {
+      return await this.prisma.part.create({
+        data: dto,
+        include: { box: true },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Ya existe una pieza con el código "${dto.code}"`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async updatePartPhoto(id: number, photoUrl: string) {
+    await this.findOnePart(id);
+
+    return this.prisma.part.update({
+      where: { id },
+      data: { photoUrl },
+      include: { box: true },
+    });
+  }
+
+  async updatePart(id: number, dto: UpdatePartDto) {
+    await this.findOnePart(id);
+    if (dto.boxId !== undefined) {
+      await this.findOneBox(dto.boxId);
+    }
+
+    try {
+      return await this.prisma.part.update({
+        where: { id },
+        data: dto,
+        include: { box: true },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Ya existe una pieza con el código "${dto.code}"`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async removePart(id: number) {
+    await this.findOnePart(id);
+    await this.prisma.part.delete({ where: { id } });
+  }
+
+  /**
+   * Búsqueda por nombre o keywords para integración con Alexa.
+   * Usa búsqueda case-insensitive con ILIKE en PostgreSQL.
+   *
+   * @param query Texto buscado (nombre de pieza o keyword de voz)
+   * @returns Array de piezas con información de su caja (incluido ledIndex)
+   */
+  async searchPartByName(query: string) {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    const parts = await this.prisma.part.findMany({
+      where: {
+        OR: [
+          { name: { contains: normalizedQuery, mode: 'insensitive' } },
+          { code: { contains: normalizedQuery, mode: 'insensitive' } },
+          // Búsqueda en el array de keywords de PostgreSQL
+          {
+            keywords: {
+              has: normalizedQuery,
+            },
+          },
+        ],
+      },
+      include: {
+        box: {
+          select: {
+            id: true,
+            name: true,
+            ledIndex: true,
+            colorHex: true,
+            location: true,
+          },
+        },
+      },
+      take: 5, // Retornar máximo 5 coincidencias
+    });
+
+    return parts;
+  }
+
+  async updatePartQuantity(id: number, delta: number) {
+    const part = await this.findOnePart(id);
+    const newQuantity = part.quantity + delta;
+
+    if (newQuantity < 0) {
+      throw new ConflictException(
+        `Stock insuficiente. Disponible: ${part.quantity}`,
+      );
+    }
+
+    return this.prisma.part.update({
+      where: { id },
+      data: { quantity: newQuantity },
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // ALERTAS DE STOCK BAJO
+  // ──────────────────────────────────────────────────────────
+
+  async getLowStockParts() {
+    // Retorna piezas donde la cantidad está por debajo del mínimo
+    return this.prisma.$queryRaw<
+      Array<{ id: number; name: string; quantity: number; min_stock: number; box_name: string }>
+    >`
+      SELECT p.id, p.name, p.quantity, p.min_stock, b.name as box_name
+      FROM parts p
+      JOIN boxes b ON p.box_id = b.id
+      WHERE p.quantity <= p.min_stock
+      ORDER BY p.quantity ASC
+    `;
+  }
+}
+
+================
+File: backend/src/led/led-controller.service.ts
+================
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+// ══════════════════════════════════════════════════════════════════════════
+// LedControllerService — Control de tira WS2812B con fallback a simulación
+//
+// Librería usada: rpi-ws281x-native
+//   - En Raspberry Pi 4: controla el hardware GPIO real (pin 18 / PWM0)
+//   - En PC/Mac/Windows: la librería falla al cargar (no hay GPIO).
+//     El try/catch captura el error silenciosamente y activa el modo
+//     simulación, donde todos los métodos hacen console.log descriptivo.
+//
+// Para instalar la librería en la Raspberry Pi:
+//   npm install rpi-ws281x-native
+//   (requiere compilación nativa con node-gyp y permisos de root)
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Tipado mínimo de la librería rpi-ws281x-native.
+ * La declaramos aquí para no depender de @types que no existen.
+ */
+interface Ws281xChannel {
+  array: Uint32Array;
+}
+
+interface Ws281xLib {
+  init(ledCount: number, options: { gpio: number; strip: string }): Ws281xChannel;
+  render(channel: Ws281xChannel): void;
+  reset(): void;
+}
+
+/** Color apagado */
+const COLOR_OFF = 0x000000;
+
+/** Convierte un color hexadecimal CSS (#RRGGBB) al formato GRB que usa la librería */
+function hexToGrb(hex: string): number {
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+    throw new Error(`Color hexadecimal inválido: ${hex}`);
+  }
+
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  // WS2812B usa orden G-R-B en el protocolo de la librería nativa
+  return ((g & 0xff) << 16) | ((r & 0xff) << 8) | (b & 0xff);
+}
+
+@Injectable()
+export class LedControllerService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(LedControllerService.name);
+
+  /** Instancia de la librería nativa (null si no hay hardware) */
+  private ws281x: Ws281xLib | null = null;
+
+  /** Canal/buffer de píxeles de la tira */
+  private channel: Ws281xChannel | null = null;
+
+  /** true cuando estamos en una PC sin GPIO */
+  private simulationMode = false;
+
+  /** Número total de LEDs en la tira (configurable en .env) */
+  private readonly ledCount: number;
+
+  /** Pin GPIO de la Raspberry Pi */
+  private readonly gpioPin: number;
+
+  /** Colores por defecto para cada LED (índice 0-4) */
+  private readonly defaultColors: string[] = [
+    '#FF4500', // LED 0 — Caja A (naranja)
+    '#1E90FF', // LED 1 — Caja B (azul)
+    '#32CD32', // LED 2 — Caja C (verde)
+    '#FFD700', // LED 3 — Caja D (dorado)
+    '#9400D3', // LED 4 — Caja E (violeta)
+  ];
+
+  constructor(private readonly config: ConfigService) {
+    this.ledCount = parseInt(this.config.get('LED_COUNT', '5'), 10);
+    this.gpioPin  = parseInt(this.config.get('LED_GPIO_PIN', '18'), 10);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Ciclo de vida NestJS
+  // ──────────────────────────────────────────────────────────
+
+  onModuleInit(): void {
+    this.initHardware();
+  }
+
+  onModuleDestroy(): void {
+    this.shutdown();
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Inicialización del hardware (con fallback)
+  // ──────────────────────────────────────────────────────────
+
+  private initHardware(): void {
+    // 1. Verificar si el .env activa explícitamente el modo simulación
+    const simulateEnv = this.config.get<string>('SIMULATE_HARDWARE');
+    const isSimulateExplicit = simulateEnv !== undefined
+      ? String(simulateEnv).trim().toLowerCase() === 'true' || simulateEnv === '1'
+      : true; // Default seguro a simulación si no se especifica
+
+    if (isSimulateExplicit) {
+      this.activateSimulationMode(
+        'SIMULATE_HARDWARE=true en .env (entorno de desarrollo local / CachyOS)',
+      );
+      return;
+    }
+
+    // 2. Verificar compatibilidad de arquitectura (Raspberry Pi suele ser arm/arm64)
+    const isArm = process.arch === 'arm' || process.arch === 'arm64';
+    const isLinux = process.platform === 'linux';
+
+    if (!isLinux || !isArm) {
+      this.activateSimulationMode(
+        `Arquitectura no compatible con GPIO nativo detectada (${process.platform}-${process.arch}, ej. CachyOS/x86_64).`,
+      );
+      return;
+    }
+
+    try {
+      // ── CÓDIGO REAL: carga la librería nativa de hardware en Raspberry Pi ──
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      this.ws281x = require('rpi-ws281x-native') as Ws281xLib;
+
+      if (!this.ws281x || typeof this.ws281x.init !== 'function') {
+        throw new Error('La librería rpi-ws281x-native no exporta el método init.');
+      }
+
+      // Inicializar la tira con el número de LEDs y el pin GPIO
+      this.channel = this.ws281x.init(this.ledCount, {
+        gpio: this.gpioPin,
+        strip: 'rgb',          // Tipo de tira: RGB
+      });
+
+      // Asegurar que todos los LEDs inician apagados
+      this.channel.array.fill(COLOR_OFF);
+      this.ws281x.render(this.channel);
+      this.simulationMode = false;
+
+      this.logger.log(
+        `✅ Tira WS2812B inicializada: ${this.ledCount} LEDs en GPIO ${this.gpioPin} (Hardware real activo)`,
+      );
+    } catch (error: unknown) {
+      // ── FALLBACK TRANSPARENTE ──────────────────────────────────────
+      // Captura: falta del módulo nativo, fallos de compilación o falta de permisos /dev/mem
+      const message = error instanceof Error ? error.message : String(error);
+      this.activateSimulationMode(`Fallo al cargar o inicializar rpi-ws281x-native: ${message}`);
+    }
+  }
+
+  private activateSimulationMode(reason: string): void {
+    this.simulationMode = true;
+    this.ws281x = null;
+    this.channel = null;
+    this.logger.warn(
+      `⚠️  Hardware GPIO no disponible. Modo simulación activado.\n   Razón: ${reason}`,
+    );
+    this.logger.warn(
+      '   Los comandos de LED se imprimirán en consola con el prefijo [HARDWARE SIMULADO]',
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // API pública de control de LEDs
+  // ──────────────────────────────────────────────────────────
+
+  /**
+   * Enciende el LED en el índice dado con el color de la caja.
+   *
+   * @param ledIndex  Índice del LED (0-4)
+   * @param colorHex  Color en formato #RRGGBB (opcional, usa el default de la caja)
+   */
+  turnOn(ledIndex: number, colorHex?: string): void {
+    this.validateIndex(ledIndex);
+    const color = colorHex ?? this.defaultColors[ledIndex] ?? '#FFFFFF';
+
+    if (this.simulationMode || !this.ws281x || !this.channel) {
+      // ── SIMULACIÓN ──────────────────────────────────────────────
+      console.log(
+        `[HARDWARE SIMULADO] → Encendiendo LED en índice: ${ledIndex} | Color: ${color}`,
+      );
+      return;
+    }
+
+    // ── HARDWARE REAL ───────────────────────────────────────────
+    try {
+      this.channel.array[ledIndex] = hexToGrb(color);
+      this.ws281x.render(this.channel);
+      this.logger.log(`💡 LED ${ledIndex} encendido → ${color}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al encender LED ${ledIndex}: ${msg}`);
+      // Fallback a simulación si el hardware falla en tiempo de ejecución
+      console.log(
+        `[HARDWARE SIMULADO - FALLBACK] → Encendiendo LED en índice: ${ledIndex}`,
+      );
+    }
+  }
+
+  /**
+   * Apaga el LED en el índice dado.
+   *
+   * @param ledIndex  Índice del LED (0-4)
+   */
+  turnOff(ledIndex: number): void {
+    this.validateIndex(ledIndex);
+
+    if (this.simulationMode || !this.ws281x || !this.channel) {
+      console.log(
+        `[HARDWARE SIMULADO] → Apagando LED en índice: ${ledIndex}`,
+      );
+      return;
+    }
+
+    try {
+      this.channel.array[ledIndex] = COLOR_OFF;
+      this.ws281x.render(this.channel);
+      this.logger.log(`💤 LED ${ledIndex} apagado`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al apagar LED ${ledIndex}: ${msg}`);
+    }
+  }
+
+  /**
+   * Apaga TODOS los LEDs de la tira.
+   * Útil al reiniciar el servidor o en cleanup.
+   */
+  turnOffAll(): void {
+    if (this.simulationMode || !this.ws281x || !this.channel) {
+      console.log('[HARDWARE SIMULADO] → Apagando TODOS los LEDs');
+      return;
+    }
+
+    try {
+      this.channel.array.fill(COLOR_OFF);
+      this.ws281x.render(this.channel);
+      this.logger.log('💤 Todos los LEDs apagados');
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error al apagar todos los LEDs: ${msg}`);
+    }
+  }
+
+  /**
+   * Efecto de parpadeo: enciende y apaga el LED N veces.
+   * Sirve para llamar la atención del usuario en el almacén.
+   *
+   * @param ledIndex  Índice del LED
+   * @param times     Número de parpadeos (default: 3)
+   * @param colorHex  Color del parpadeo
+   */
+  async blink(ledIndex: number, times = 3, colorHex?: string): Promise<void> {
+    this.validateIndex(ledIndex);
+    if (!Number.isInteger(times) || times < 1) {
+      throw new Error(`El número de parpadeos debe ser un entero positivo: ${times}`);
+    }
+
+    for (let i = 0; i < times; i++) {
+      this.turnOn(ledIndex, colorHex);
+      await this.sleep(400);
+      this.turnOff(ledIndex);
+      await this.sleep(300);
+    }
+
+    // Dejar el LED encendido al final del parpadeo
+    this.turnOn(ledIndex, colorHex);
+  }
+
+  /**
+   * Retorna el estado actual del modo de operación.
+   * Usado por el Gateway para incluir info en los eventos de Socket.io.
+   */
+  getStatus(): { simulationMode: boolean; ledCount: number; gpioPin: number } {
+    return {
+      simulationMode: this.simulationMode,
+      ledCount: this.ledCount,
+      gpioPin: this.gpioPin,
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Helpers privados
+  // ──────────────────────────────────────────────────────────
+
+  private validateIndex(ledIndex: number): void {
+    if (ledIndex < 0 || ledIndex >= this.ledCount) {
+      throw new Error(
+        `ledIndex ${ledIndex} fuera de rango (0-${this.ledCount - 1})`,
+      );
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private shutdown(): void {
+    if (!this.simulationMode && this.ws281x) {
+      try {
+        this.ws281x.reset(); // Apaga todos los LEDs y libera el GPIO
+        this.logger.log('🔌 Tira WS2812B liberada correctamente');
+      } catch {
+        // Ignorar errores al apagar
+      }
+    }
+  }
+}
+
+================
+File: backend/src/main.ts
+================
+import { NestFactory } from '@nestjs/core';
+import { ValidationPipe, Logger } from '@nestjs/common';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const logger = new Logger('GearTrace');
+  const app = await NestFactory.create(AppModule);
+
+  // Prefijo global de la API REST
+  app.setGlobalPrefix('api');
+
+  // Validación automática de DTOs con class-validator
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,       // Elimina campos no declarados en el DTO
+      forbidNonWhitelisted: true,
+      transform: true,       // Transforma payloads al tipo del DTO
+    }),
+  );
+
+  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
+  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+    'http://geartrace.local',
+    ...configuredOrigins,
+  ];
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
+      if (defaultAllowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // 3. Despliegues en Vercel (*.vercel.app y subdominios)
+      if (/^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/.test(origin)) {
+        return callback(null, true);
+      }
+
+      // 4. Dominios de túnel Ngrok (*.ngrok-free.app, *.ngrok.app)
+      if (/^https:\/\/([a-zA-Z0-9-]+\.)*ngrok(-free)?\.app$/.test(origin)) {
+        return callback(null, true);
+      }
+
+      // 5. Red local (Raspberry Pi y clientes LAN: 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+      if (
+        /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
+          origin,
+        )
+      ) {
+        return callback(null, true);
+      }
+
+      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
+      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+  });
+
+  const port = process.env.PORT ?? 3000;
+  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
+  await app.listen(port, '0.0.0.0');
+
+  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
+  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
+  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
+}
+
+bootstrap();
+
+================
+File: backend/.env.example
+================
+# ─── Base de Datos ──────────────────────────────────────────────────────────
+# Debe coincidir con los valores del docker-compose.yml en la raíz
+POSTGRES_USER=geartrace
+POSTGRES_PASSWORD=geartrace_secret
+POSTGRES_DB=geartrace_db
+POSTGRES_PORT=5432
+POSTGRES_HOST=localhost
+
+# URL de conexión para Prisma ORM
+DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?schema=public"
+
+# ─── Aplicación NestJS ──────────────────────────────────────────────────────
+PORT=3000
+NODE_ENV=development
+
+# ─── CORS Origins ────────────────────────────────────────────────────────────
+# Orígenes adicionales separados por coma (ej. https://tu-app.vercel.app)
+# Ya se permiten por defecto: localhost:5173, localhost:3000, *.vercel.app, *.ngrok-free.app y la LAN 192.168.x.x
+CORS_ORIGIN=https://geartrace.vercel.app
+
+# ─── JWT Auth ───────────────────────────────────────────────────────────────
+# Cambia este secret en producción (mínimo 32 caracteres aleatorios)
+JWT_SECRET=geartrace-super-secret-key-change-in-production-2024
+JWT_EXPIRES_IN=8h
+
+# ─── Hardware IoT ───────────────────────────────────────────────────────────
+# Número total de LEDs en la tira WS2812B
+LED_COUNT=5
+# Pin GPIO en la Raspberry Pi (pin 18 = PWM0)
+LED_GPIO_PIN=18
+# Modo Simulación:
+# - CachyOS / PC Desarrollo: SIMULATE_HARDWARE=true (logs en consola, sin librerías nativas)
+# - Raspberry Pi (Hardware Real): SIMULATE_HARDWARE=false (controla pines GPIO reales vía rpi-ws281x-native)
+SIMULATE_HARDWARE=true
+
+# ─── Alexa Webhook ──────────────────────────────────────────────────────────
+# Skill ID de tu Alexa Custom Skill (opcional para desarrollo, validado en prod si es un ID real)
+ALEXA_SKILL_ID=amzn1.ask.skill.XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+
+================
+File: frontend/src/api/axios.ts
+================
+import axios from 'axios';
+
+// Obtener la URL base desde la variable de entorno o usar fallback por defecto
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
+const baseURL = rawApiUrl.endsWith('/api')
+  ? rawApiUrl
+  : `${rawApiUrl.replace(/\/$/, '')}/api`;
+
+// Instancia de axios preconfigurada
+const api = axios.create({
+  baseURL,
+});
+
+// Interceptor para inyectar el token JWT en cada request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('geartrace_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Interceptor para manejar errores globalmente (ej. 401 Unauthorized)
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Si el token expira, limpiamos localstorage y forzamos login
+      localStorage.removeItem('geartrace_token');
+      localStorage.removeItem('geartrace_user');
+      window.dispatchEvent(new Event('auth:unauthorized'));
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+
+================
+File: frontend/src/components/Dashboard.tsx
+================
+import { useEffect, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+import { useAuth } from '../contexts/AuthContext';
+import api from '../api/axios';
+import { Cpu, Package, Server, AlertCircle } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+interface HwStatus {
+  simulationMode: boolean;
+  ledCount: number;
+  gpioPin: number;
+}
+
+interface LedState {
+  index: number;
+  isActive: boolean;
+  color?: string;
+  partName?: string;
+}
+
+export default function Dashboard() {
+  const { user } = useAuth();
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [hwStatus, setHwStatus] = useState<HwStatus | null>(null);
+  const [leds, setLeds] = useState<LedState[]>(Array.from({ length: 5 }, (_, i) => ({ index: i, isActive: false })));
+  const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });
+
+  useEffect(() => {
+    // 1. Cargar estadísticas iniciales
+    const loadStats = async () => {
+      try {
+        const [boxesRes, partsRes, lowStockRes] = await Promise.all([
+          api.get('/inventory/boxes'),
+          api.get('/inventory/parts'),
+          api.get('/inventory/parts/low-stock')
+        ]);
+        setStats({
+          boxes: boxesRes.data.length,
+          parts: partsRes.data.length,
+          lowStock: lowStockRes.data.length
+        });
+      } catch (error) {
+        console.error("Error al cargar estadísticas", error);
+      }
+    };
+    loadStats();
+
+    // 2. Conectar a Socket.io usando VITE_SOCKET_URL con fallback a http://localhost:3000
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
+    const newSocket = io(socketUrl);
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('✅ Conectado al Socket de GearTrace');
+    });
+
+    newSocket.on('hw:status', (status: HwStatus) => {
+      setHwStatus(status);
+      // Ajustar cantidad de LEDs según el hardware
+      setLeds(Array.from({ length: status.ledCount }, (_, i) => ({ index: i, isActive: false })));
+    });
+
+    newSocket.on('led:activated', (data: { ledIndex: number, partName: string, colorHex?: string }) => {
+      toast.custom((t) => (
+        <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-slate-800 shadow-[0_0_20px_rgba(249,115,22,0.3)] rounded-xl pointer-events-auto flex ring-1 ring-brand-500/50`}>
+          <div className="flex-1 w-0 p-4">
+            <div className="flex items-start">
+              <div className="flex-shrink-0 pt-0.5">
+                <div className="h-10 w-10 rounded-lg bg-brand-500/20 flex items-center justify-center text-brand-500 animate-pulse-slow">
+                <Cpu size={24} />
+                </div>
+              </div>
+              <div className="ml-3 flex-1">
+                <p className="text-sm font-medium text-white">
+                  Alexa activó LED {data.ledIndex}
+                </p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Encontró: <span className="text-brand-400 font-semibold">{data.partName}</span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ));
+
+      setLeds(prev => prev.map(l => 
+        l.index === data.ledIndex ? { ...l, isActive: true, partName: data.partName, color: data.colorHex || '#F97316' } : l
+      ));
+    });
+
+    newSocket.on('led:off', (data: { ledIndex: number, manual?: boolean }) => {
+      if (data.manual) {
+        toast.success(`LED ${data.ledIndex} apagado manualmente`);
+      }
+      setLeds(prev => prev.map(l => 
+        l.index === data.ledIndex ? { ...l, isActive: false, partName: undefined } : l
+      ));
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
+  }, []);
+
+  const handleTurnOffLed = (index: number) => {
+    if (socket) {
+      socket.emit('led:turnOff', { ledIndex: index });
+    }
+  };
+
+  const handleTestLed = (index: number) => {
+    if (socket) {
+      socket.emit('led:test', { ledIndex: index, colorHex: '#38BDF8' });
+    }
+  };
+
+  const isOperative = user?.role === 'GERENTE' || user?.role === 'MECANICO';
+
+  return (
+    <div className="space-y-6">
+      {/* Cards de Resumen */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex items-center gap-4 hover:border-brand-500/50 transition-colors">
+          <div className="p-4 bg-blue-500/10 text-blue-400 rounded-xl">
+            <Package size={28} />
+          </div>
+          <div>
+            <p className="text-slate-400 text-sm font-medium">Total Cajas</p>
+            <p className="text-3xl font-bold">{stats.boxes}</p>
+          </div>
+        </div>
+
+        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex items-center gap-4 hover:border-brand-500/50 transition-colors">
+          <div className="p-4 bg-emerald-500/10 text-emerald-400 rounded-xl">
+            <Server size={28} />
+          </div>
+          <div>
+            <p className="text-slate-400 text-sm font-medium">Tipos de Piezas</p>
+            <p className="text-3xl font-bold">{stats.parts}</p>
+          </div>
+        </div>
+
+        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex items-center gap-4 hover:border-brand-500/50 transition-colors">
+          <div className="p-4 bg-rose-500/10 text-rose-400 rounded-xl">
+            <AlertCircle size={28} />
+          </div>
+          <div>
+            <p className="text-slate-400 text-sm font-medium">Stock Bajo</p>
+            <p className="text-3xl font-bold">{stats.lowStock}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Panel de LEDs */}
+        <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden flex flex-col">
+          <div className="p-6 border-b border-slate-700 flex justify-between items-center">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <span className="h-3 w-3 rounded-sm bg-brand-500 shadow-[0_0_12px_rgba(249,115,22,0.8)]" /> Control de Tira WS2812B
+            </h2>
+            {hwStatus?.simulationMode && (
+              <span className="px-3 py-1 bg-amber-500/10 text-amber-500 text-xs font-semibold rounded-full border border-amber-500/20 flex items-center gap-1.5">
+                <Cpu size={12} /> MODO SIMULACIÓN
+              </span>
+            )}
+          </div>
+          
+          <div className="p-8 flex-1 flex flex-col justify-center">
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4 shadow-[inset_0_2px_12px_rgba(0,0,0,0.45)]">
+              <div className="flex items-stretch overflow-x-auto rounded-lg bg-slate-900 p-1">
+                {leds.map((led) => (
+                  <div key={led.index} className="group relative min-w-[92px] flex-1 border-r border-slate-800 last:border-r-0">
+                    <div
+                      className={`relative mx-1 h-20 rounded-sm border transition-all duration-300 ${
+                        led.isActive
+                          ? 'border-white/80'
+                          : 'border-slate-800 bg-slate-950'
+                      }`}
+                      style={led.isActive ? {
+                        backgroundColor: led.color,
+                        boxShadow: `0 0 12px ${led.color}, 0 0 30px ${led.color}99, inset 0 0 12px rgba(255,255,255,0.7)`,
+                      } : undefined}
+                      title={led.isActive ? led.partName : `LED ${led.index} apagado`}
+                    >
+                      <span className="absolute inset-x-2 top-2 h-px bg-white/40" />
+                      <span className="absolute bottom-2 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-slate-700" />
+                    </div>
+                    <div className="absolute inset-x-0 top-full z-10 mt-2 text-center opacity-0 transition-opacity group-hover:opacity-100">
+                      <div className="truncate px-1 text-xs font-semibold text-slate-300">
+                        LED {led.index}
+                      </div>
+                      <div className="truncate px-1 text-[11px] text-slate-500">
+                        {led.isActive ? led.partName : 'Apagado'}
+                      </div>
+                      {isOperative && (
+                        <button
+                          onClick={() => led.isActive ? handleTurnOffLed(led.index) : handleTestLed(led.index)}
+                          className={`mt-2 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                            led.isActive
+                              ? 'border border-red-500/30 bg-red-500/20 text-red-400 hover:bg-red-500/40'
+                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {led.isActive ? 'Apagar' : 'Test'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Panel de Info Hardware */}
+        <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6">
+          <h2 className="text-lg font-semibold flex items-center gap-2 mb-6">
+            <Cpu className="text-slate-400" /> Estado del Hardware
+          </h2>
+          
+          {hwStatus ? (
+            <div className="space-y-4">
+              <div className="p-4 bg-slate-900/50 rounded-xl border border-slate-700/50 flex justify-between items-center">
+                <span className="text-slate-400 text-sm">Modo de Operación</span>
+                {hwStatus.simulationMode ? (
+                  <span className="text-amber-400 text-sm font-semibold flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-amber-400"></div> Software (Simulado)</span>
+                ) : (
+                  <span className="text-emerald-400 text-sm font-semibold flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400"></div> GPIO Real Activo</span>
+                )}
+              </div>
+              
+              <div className="p-4 bg-slate-900/50 rounded-xl border border-slate-700/50 flex justify-between items-center">
+                <span className="text-slate-400 text-sm">LEDs Configurados</span>
+                <span className="text-white font-medium">{hwStatus.ledCount} (WS2812B)</span>
+              </div>
+              
+              <div className="p-4 bg-slate-900/50 rounded-xl border border-slate-700/50 flex justify-between items-center">
+                <span className="text-slate-400 text-sm">Pin GPIO</span>
+                <span className="text-white font-medium">Pin {hwStatus.gpioPin}</span>
+              </div>
+              
+              <div className="mt-8 p-4 bg-brand-500/10 border border-brand-500/20 rounded-xl">
+                <h3 className="text-brand-400 text-sm font-semibold mb-2">Simulación de Alexa</h3>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  Puedes probar la integración enviando un POST a <code className="bg-slate-900 px-1 py-0.5 rounded text-brand-300">/api/webhook/alexa</code> simulando el payload de Amazon.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-slate-500"></div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+================
+File: frontend/src/App.tsx
+================
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { useAuth } from './contexts/AuthContext'
+import Login from './components/Login'
+import Dashboard from './components/Dashboard'
+import Layout from './components/Layout'
+import InventoryList from './components/Inventory/InventoryList'
+import UsersManagement from './components/Users/UsersManagement'
+import AuditLogs from './components/AuditLogs'
+
+function App() {
+  const { isAuthenticated, isLoading, user } = useAuth()
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-500"></div>
+      </div>
+    )
+  }
+
+  return (
+    <Routes>
+      <Route 
+        path="/login" 
+        element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />} 
+      />
+      
+      <Route 
+        path="/" 
+        element={isAuthenticated ? <Layout /> : <Navigate to="/login" />}
+      >
+        <Route index element={<Navigate to="/dashboard" />} />
+        <Route path="dashboard" element={<Dashboard />} />
+        <Route path="inventory" element={<InventoryList />} />
+        <Route path="logs" element={<AuditLogs />} />
+        <Route
+          path="users"
+          element={
+            user?.role === 'GERENTE' ? (
+              <UsersManagement />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          }
+        />
+      </Route>
+
+      <Route path="*" element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} />} />
+    </Routes>
+  )
+}
+
+export default App
+
+================
+File: frontend/tsconfig.json
+================
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
+
+================
+File: README.md
+================
+# ⚙️ GearTrace — Sistema Inteligente de Gestión de Inventario para Taller Mecánico
+
+GearTrace es una plataforma de logística y gestión visual de herramientas y repuestos diseñada para talleres mecánicos. Integra un dashboard interactivo en tiempo real con una guía luminosa IoT (tira de LEDs direccionables WS2812B) y control por voz mediante Amazon Alexa, permitiendo a mecánicos y gerentes localizar piezas al instante en estanterías físicas.
+
+---
+
+## 🏗️ Arquitectura del Sistema
+
+```
+                         ┌────────────────────────────────────────┐
+                         │           Amazon Alexa Echo            │
+                         └──────────────────┬─────────────────────┘
+                                            │ (Voz: "Busca filtro...")
+                                            ▼
+┌───────────────────────┐        ┌───────────────────────┐        ┌───────────────────────┐
+│   Frontend en Vercel  │        │     Túnel HTTPS       │        │   Red Local (LAN)     │
+│   (React + Vite SPA)  │        │   (Ngrok / Cloudflare)│        │   (PC / Móvil Taller) │
+└───────────┬───────────┘        └──────────┬────────────┘        └───────────┬───────────┘
+            │ HTTPS / WSS                   │ POST /api/webhook/alexa         │ HTTP / WS
+            ▼                               ▼                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                             GearTrace Backend (NestJS 10)                               │
+│  ┌─────────────────────────┐   ┌──────────────────────────┐   ┌──────────────────────┐  │
+│  │   Auth & Inventory API  │   │  LedControllerService    │   │  Socket.io Gateway   │  │
+│  │   (Prisma ORM + JWT)    │   │  (Detección dinámica HW) │   │  (Eventos en vivo)   │  │
+│  └───────────┬─────────────┘   └─────────────┬────────────┘   └──────────┬───────────┘  │
+└──────────────┼───────────────────────────────┼───────────────────────────┼──────────────┘
+               │                               │                           │
+               ▼                               ▼                           ▼
+     ┌──────────────────┐            ┌───────────────────┐       ┌───────────────────┐
+     │  PostgreSQL 15   │            │ Hardware Físico   │       │ Dashboard Web     │
+     │  (Docker Compose)│            │ Tira LED WS2812B  │       │ Actualización     │
+     │                  │            │ (GPIO 18 / PWM0)  │       │ en tiempo real    │
+     └──────────────────┘            └───────────────────┘       └───────────────────┘
+```
+
+El monorepo se compone de:
+- **`frontend/`**: Single Page Application construida con **React 18**, **Vite**, **TailwindCSS** y **Socket.io Client**. Listo para desplegar en **Vercel**.
+- **`backend/`**: Servidor **NestJS**, **Prisma ORM**, autenticación **JWT**, **Socket.io Gateway** y Webhook compatible con **Alexa Skills Kit**.
+- **`docker-compose.yml`**: Contenedor de **PostgreSQL 15 Alpine** y opcionalmente **pgAdmin4**.
+
+---
+
+## 🚀 Entornos de Ejecución
+
+GearTrace está preparado para funcionar sin cambios en el código en dos entornos principales:
+1. **CachyOS / Linux x86_64 / macOS / Windows** (Entorno de Desarrollo Local)
+2. **Raspberry Pi 4 / Raspberry Pi OS ARM64** (Entorno de Producción con Hardware Físico)
+
+---
+
+## 💻 1. Ejecución en Entorno Local (CachyOS / Linux x86_64)
+
+En este entorno no hay pines GPIO de Raspberry Pi. El backend detecta la arquitectura y/o la variable de entorno y activa de forma automática el **modo simulación**, imprimiendo los cambios de los LEDs por consola.
+
+### Prerrequisitos
+- Node.js 18+ (recomendado Node.js 20 LTS o superior)
+- Docker y Docker Compose
+- Git
+
+### Paso 1: Clonar el repositorio
+```bash
+git clone https://github.com/tu-usuario/GearTrace.git
+cd GearTrace
+```
+
+### Paso 2: Levantar la Base de Datos
+Inicia el contenedor de PostgreSQL:
+```bash
+docker compose up -d postgres
+```
+
+### Paso 3: Configurar y Ejecutar el Backend
+1. Ingresa a la carpeta del backend y crea el archivo `.env`:
+   ```bash
+   cd backend
+   cp .env.example .env
+   ```
+2. Asegúrate de que `.env` tenga:
+   ```env
+   SIMULATE_HARDWARE=true
+   PORT=3000
+   DATABASE_URL="postgresql://geartrace:geartrace_secret@localhost:5432/geartrace_db?schema=public"
+   ```
+3. Instala dependencias y genera el cliente Prisma:
+   ```bash
+   npm install
+   npx prisma generate
+   ```
+4. Aplica las migraciones e inserta los datos iniciales (Seed):
+   ```bash
+   npm run prisma:migrate
+   npm run prisma:seed
+   ```
+5. Inicia el servidor en modo desarrollo:
+   ```bash
+   npm run start:dev
+   ```
+   > Verás en la consola:
+   > `⚠️  Hardware GPIO no disponible. Modo simulación activado.`
+   > `🚀 GearTrace Backend corriendo en: http://localhost:3000/api`
+
+### Paso 4: Configurar y Ejecutar el Frontend
+1. En otra terminal, ingresa a la carpeta del frontend y crea el archivo `.env`:
+   ```bash
+   cd frontend
+   cp .env.example .env
+   ```
+2. Contenido de `frontend/.env`:
+   ```env
+   VITE_API_URL=http://localhost:3000
+   VITE_SOCKET_URL=http://localhost:3000
+   ```
+3. Instala dependencias y arranca el servidor de desarrollo Vite:
+   ```bash
+   npm install
+   npm run dev
+   ```
+4. Abre tu navegador en [http://localhost:5173](http://localhost:5173).
+
+---
+
+## 🍓 2. Despliegue en Raspberry Pi 4 (Entorno Físico con Hardware)
+
+En la Raspberry Pi, el backend se conecta directamente a los pines físicos para controlar la tira de LEDs WS2812B.
+
+### Conexión del Circuito (Tira LED WS2812B)
+| Pin Tira LED | Conexión en Raspberry Pi / Fuente |
+| :--- | :--- |
+| **5V (VCC)** | Fuente externa de 5V (2A o superior) |
+| **GND** | GND de la fuente externa **Y** Pin 6/9/14/20/25/30/34/39 (GND) de la Raspberry Pi |
+| **DIN (Data)** | Pin Físico 12 (**GPIO 18 / PWM0**) vía resistencia de 330Ω - 470Ω |
+
+> ⚠️ **Importante**: Conecta la masa (GND) de la fuente de alimentación externa con la masa (GND) de la Raspberry Pi para cerrar el circuito de referencia lógica.
+
+### Prerrequisitos en Raspberry Pi OS (64-bit)
+Instala las herramientas de compilación nativa necesarias para `rpi-ws281x-native`:
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential python3 make g++ docker.io docker-compose-v2
+```
+
+### Paso 1: Levantar PostgreSQL en la Raspberry Pi
+En la raíz del proyecto:
+```bash
+docker compose up -d postgres
+```
+
+### Paso 2: Configurar el Backend en la Raspberry Pi
+1. Ve a `backend/` y crea el archivo `.env`:
+   ```bash
+   cd backend
+   cp .env.example .env
+   ```
+2. Configura las variables para hardware real:
+   ```env
+   PORT=3000
+   NODE_ENV=production
+   SIMULATE_HARDWARE=false
+   LED_COUNT=5
+   LED_GPIO_PIN=18
+   DATABASE_URL="postgresql://geartrace:geartrace_secret@localhost:5432/geartrace_db?schema=public"
+   ```
+3. Instala las dependencias (incluyendo el módulo nativo de LEDs):
+   ```bash
+   npm install
+   npm run prisma:generate
+   npm run prisma:migrate:deploy
+   npm run prisma:seed
+   ```
+4. Compila el backend:
+   ```bash
+   npm run build
+   ```
+
+### Paso 3: Ejecución con Permisos de Hardware
+El módulo nativo `rpi-ws281x-native` requiere acceso a `/dev/mem` o DMA para generar la señal PWM a 800 kHz. Ejecútalo con privilegios de root:
+```bash
+sudo node dist/main.js
+```
+*(Opcional con PM2 para auto-arranque al encender la Raspberry Pi)*:
+```bash
+sudo npm install -g pm2
+sudo pm2 start dist/main.js --name geartrace-backend
+sudo pm2 save
+sudo pm2 startup
+```
+
+---
+
+## 🌐 3. Despliegue del Frontend en Vercel
+
+El frontend es una SPA en Vite + React con enrutamiento de cliente (`react-router-dom`). Para desplegarlo en Vercel:
+
+### Paso 1: Subir cambios a GitHub / GitLab
+Asegúrate de que tus cambios estén subidos a tu repositorio Git.
+
+### Paso 2: Importar el Proyecto en Vercel
+1. Inicia sesión en [Vercel](https://vercel.com) y selecciona **Add New... > Project**.
+2. Selecciona tu repositorio `GearTrace`.
+3. En **Root Directory**, haz clic en **Edit** y selecciona la carpeta **`frontend`**.
+4. Deja el Framework Preset como **Vite**.
+5. Build Command: `npm run build`
+6. Output Directory: `dist`
+
+### Paso 3: Configurar Variables de Entorno en Vercel
+En la sección **Environment Variables** del dashboard de Vercel agrega:
+- `VITE_API_URL`: La URL pública de tu backend (ej. `https://tu-taller.ngrok-free.app` o tu IP estática / dominio).
+- `VITE_SOCKET_URL`: La misma URL pública del backend para la conexión en tiempo real de Socket.io (ej. `https://tu-taller.ngrok-free.app`).
+
+### Paso 4: Desplegar
+Haz clic en **Deploy**. El archivo `frontend/vercel.json` se encargará automáticamente de reescribir todas las rutas hacia `index.html`, evitando errores 404 al recargar páginas.
+
+---
+
+## 🗣️ 4. Conectar Alexa con el Backend (Túnel HTTPS Ngrok)
+
+Para que la Skill de Alexa pueda comunicarse con el backend (ya sea corriendo en tu PC en CachyOS o en la Raspberry Pi):
+
+1. **Instala e inicia Ngrok**:
+   ```bash
+   ngrok http 3000
+   ```
+   Ngrok te proporcionará una URL pública segura como:
+   `https://a1b2-c3d4.ngrok-free.app`
+
+2. **Configura el Webhook en la Consola de Alexa**:
+   - Ingresa a la [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
+   - Selecciona tu Skill **GearTrace**.
+   - En la pestaña **Build**, entra en **Endpoint**.
+   - Selecciona **HTTPS**.
+   - En **Default Region**, ingresa tu URL completa:
+     ```
+     https://a1b2-c3d4.ngrok-free.app/api/webhook/alexa
+     ```
+   - En el menú desplegable del certificado SSL, selecciona:
+     `My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority`.
+   - Haz clic en **Save Endpoints**.
+
+3. **Prueba por Voz o Simulador**:
+   - En la pestaña **Test** de la consola de Alexa, escribe o di:
+     - *"Abre GearTrace"*
+     - *"Busca filtro de aceite"*
+     - *"Qué piezas tienen stock bajo"*
+   - Verás inmediatamente en tu terminal la respuesta y el LED correspondiente activándose (en la tira real o en el log de simulación), además de la notificación instantánea en el Dashboard Web de React.
+
+---
+
+## 🔑 Credenciales de Prueba (Seed Data)
+
+Tras ejecutar `npm run prisma:seed`, tienes a disposición los siguientes usuarios de prueba (contraseña para todos: `password123`):
+
+| Rol | Correo | Permisos |
+| :--- | :--- | :--- |
+| **Gerente** | `gerente@geartrace.com` | Acceso completo, edición de inventario y prueba de LEDs |
+| **Mecánico** | `mecanico@geartrace.com` | Búsqueda de piezas, control de LEDs |
+| **Cliente** | `cliente@geartrace.com` | Consulta básica de estado |
+
+---
+
+## 🛠️ Resumen de Comandos Frecuentes
+
+| Tarea | Backend | Frontend |
+| :--- | :--- | :--- |
+| **Instalar dependencias** | `npm install` | `npm install` |
+| **Desarrollo** | `npm run start:dev` | `npm run dev` |
+| **Compilar producción** | `npm run build` | `npm run build` |
+| **Prisma Generate** | `npm run prisma:generate` | N/A |
+| **Prisma Migraciones** | `npm run prisma:migrate` | N/A |
+| **Cargar Datos Demo** | `npm run prisma:seed` | N/A |
+
+================
+File: backend/package.json
+================
+{
+  "name": "geartrace-backend",
+  "version": "0.1.0",
+  "description": "GearTrace - Backend API para Sistema de Gestión Logística de Mecánica",
+  "author": "GearTrace Team",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "prebuild": "prisma generate",
+    "build": "nest build",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.3.0",
+    "@nestjs/config": "^3.1.0",
+    "@nestjs/core": "^10.3.0",
+    "@nestjs/jwt": "^10.2.0",
+    "@nestjs/mapped-types": "^2.0.4",
+    "@nestjs/passport": "^10.0.3",
+    "@nestjs/platform-express": "^10.3.0",
+    "@nestjs/platform-socket.io": "^10.3.0",
+    "@nestjs/serve-static": "^4.0.2",
+    "@nestjs/websockets": "^10.3.0",
+    "@prisma/client": "^5.9.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "multer": "^2.5.0",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "prisma": "^5.9.0",
+    "reflect-metadata": "^0.2.1",
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.7.4"
+  },
+  "optionalDependencies": {
+    "rpi-ws281x-native": "^1.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.3.0",
+    "@nestjs/schematics": "^10.1.0",
+    "@nestjs/testing": "^10.3.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^20.11.5",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/socket.io": "^3.0.2",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "bcryptjs": "^3.0.3",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.4",
+    "source-map-support": "^0.5.21",
+    "ts-jest": "^29.1.2",
+    "ts-loader": "^9.5.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.3.3"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  }
+}
+
+================
+File: frontend/src/components/Layout.tsx
+================
+import { NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
+
+export default function Layout() {
+  const { user, logout } = useAuth();
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
+      isActive
+        ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
+        : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+    }`;
+
+  return (
+    <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-64 bg-slate-800/80 backdrop-blur-md border-r border-slate-700 flex flex-col z-20">
+        <div className="h-16 flex items-center px-6 border-b border-slate-700 gap-3">
+          <div className="h-8 w-8 bg-brand-500/20 text-brand-500 rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.3)]">
+            <Wrench size={18} />
+          </div>
+          <span className="text-xl font-bold tracking-tight">GearTrace</span>
+        </div>
+
+        <div className="p-4 border-b border-slate-700/50">
+          <div className="font-medium truncate">{user?.name}</div>
+          <div className="text-xs text-brand-400 mt-1 uppercase tracking-wider font-semibold">
+            {user?.role}
+          </div>
+        </div>
+
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          <NavLink to="/dashboard" className={navLinkClass} end>
+            <LayoutDashboard size={20} /> Dashboard
+          </NavLink>
+          
+          {(user?.role === 'GERENTE' || user?.role === 'MECANICO') && (
+            <NavLink to="/inventory" className={navLinkClass}>
+              <Package size={20} /> Inventario
+            </NavLink>
+          )}
+          
+          {user?.role === 'GERENTE' && (
+            <NavLink to="/users" className={navLinkClass}>
+              <Users size={20} /> Usuarios
+            </NavLink>
+          )}
+        </nav>
+
+        <div className="p-4 border-t border-slate-700">
+          <button 
+            onClick={logout}
+            className="flex items-center gap-3 px-3 py-2.5 w-full text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-colors"
+          >
+            <LogOut size={20} /> Cerrar Sesión
+          </button>
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <main className="flex-1 flex flex-col relative overflow-hidden">
+        {/* Ambient background blur */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-900/30 rounded-full blur-[100px] pointer-events-none -translate-y-1/2 translate-x-1/2"></div>
+        
+        <header className="h-16 flex items-center px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10">
+          <h1 className="text-xl font-semibold">Panel de Control</h1>
+        </header>
+        
+        <div className="flex-1 overflow-auto p-8 z-10">
+          <Outlet />
+        </div>
+      </main>
+    </div>
+  );
+}
+
+
+
+================================================================
+End of Codebase
+================================================================

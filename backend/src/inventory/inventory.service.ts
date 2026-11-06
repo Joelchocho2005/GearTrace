@@ -136,6 +136,16 @@ export class InventoryService {
     }
   }
 
+  async updatePartPhoto(id: number, photoUrl: string) {
+    await this.findOnePart(id);
+
+    return this.prisma.part.update({
+      where: { id },
+      data: { photoUrl },
+      include: { box: true },
+    });
+  }
+
   async updatePart(id: number, dto: UpdatePartDto) {
     await this.findOnePart(id);
     if (dto.boxId !== undefined) {

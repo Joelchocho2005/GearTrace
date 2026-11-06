@@ -40,6 +40,7 @@ export const SOCKET_EVENTS = {
 export interface LedActivatedPayload {
   ledIndex : number;
   partName : string;
+  colorHex : string;
   timestamp: string;
   simulated: boolean;  // true si estamos en modo sin hardware
 }
@@ -117,6 +118,7 @@ export class LedGateway
     const payload: LedActivatedPayload = {
       ledIndex,
       partName : `[TEST] LED ${ledIndex}`,
+      colorHex: colorHex ?? '#FFFFFF',
       timestamp: new Date().toISOString(),
       simulated: this.ledService.getStatus().simulationMode,
     };
@@ -154,6 +156,7 @@ export class LedGateway
     const payload: LedActivatedPayload = {
       ledIndex,
       partName,
+      colorHex: colorHex ?? '#FFFFFF',
       timestamp: new Date().toISOString(),
       simulated: this.ledService.getStatus().simulationMode,
     };

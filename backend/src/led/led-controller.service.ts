@@ -34,6 +34,10 @@ const COLOR_OFF = 0x000000;
 
 /** Convierte un color hexadecimal CSS (#RRGGBB) al formato GRB que usa la librería */
 function hexToGrb(hex: string): number {
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+    throw new Error(`Color hexadecimal inválido: ${hex}`);
+  }
+
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
@@ -250,6 +254,9 @@ export class LedControllerService implements OnModuleInit, OnModuleDestroy {
    */
   async blink(ledIndex: number, times = 3, colorHex?: string): Promise<void> {
     this.validateIndex(ledIndex);
+    if (!Number.isInteger(times) || times < 1) {
+      throw new Error(`El número de parpadeos debe ser un entero positivo: ${times}`);
+    }
 
     for (let i = 0; i < times; i++) {
       this.turnOn(ledIndex, colorHex);

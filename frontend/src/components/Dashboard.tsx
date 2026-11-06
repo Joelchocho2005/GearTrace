@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axios';
-import { Lightbulb, Cpu, Package, Server, AlertCircle } from 'lucide-react';
+import { Cpu, Package, Server, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface HwStatus {
@@ -60,14 +60,14 @@ export default function Dashboard() {
       setLeds(Array.from({ length: status.ledCount }, (_, i) => ({ index: i, isActive: false })));
     });
 
-    newSocket.on('led:activated', (data: { ledIndex: number, partName: string, color?: string }) => {
+    newSocket.on('led:activated', (data: { ledIndex: number, partName: string, colorHex?: string }) => {
       toast.custom((t) => (
         <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-slate-800 shadow-[0_0_20px_rgba(249,115,22,0.3)] rounded-xl pointer-events-auto flex ring-1 ring-brand-500/50`}>
           <div className="flex-1 w-0 p-4">
             <div className="flex items-start">
               <div className="flex-shrink-0 pt-0.5">
-                <div className="h-10 w-10 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-500 animate-pulse-slow">
-                  <Lightbulb size={24} />
+                <div className="h-10 w-10 rounded-lg bg-brand-500/20 flex items-center justify-center text-brand-500 animate-pulse-slow">
+                <Cpu size={24} />
                 </div>
               </div>
               <div className="ml-3 flex-1">
@@ -84,7 +84,7 @@ export default function Dashboard() {
       ));
 
       setLeds(prev => prev.map(l => 
-        l.index === data.ledIndex ? { ...l, isActive: true, partName: data.partName, color: data.color || '#F97316' } : l
+        l.index === data.ledIndex ? { ...l, isActive: true, partName: data.partName, color: data.colorHex || '#F97316' } : l
       ));
     });
 
@@ -156,7 +156,7 @@ export default function Dashboard() {
         <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden flex flex-col">
           <div className="p-6 border-b border-slate-700 flex justify-between items-center">
             <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Lightbulb className="text-brand-500" /> Control de LEDs WS2812B
+              <span className="h-3 w-3 rounded-sm bg-brand-500 shadow-[0_0_12px_rgba(249,115,22,0.8)]" /> Control de Tira WS2812B
             </h2>
             {hwStatus?.simulationMode && (
               <span className="px-3 py-1 bg-amber-500/10 text-amber-500 text-xs font-semibold rounded-full border border-amber-500/20 flex items-center gap-1.5">
@@ -166,70 +166,48 @@ export default function Dashboard() {
           </div>
           
           <div className="p-8 flex-1 flex flex-col justify-center">
-            <div className="flex justify-center flex-wrap gap-8">
-              {leds.map((led) => (
-                <div key={led.index} className="flex flex-col items-center gap-4 group">
-                  {/* El foco del LED */}
-                  <div className="relative">
-                    {/* Resplandor (glow) de fondo cuando está activo */}
-                    {led.isActive && (
-                      <div 
-                        className="absolute inset-0 rounded-full blur-[20px] opacity-70 animate-pulse-slow"
-                        style={{ backgroundColor: led.color }}
-                      ></div>
-                    )}
-                    {/* Círculo físico del LED */}
-                    <div 
-                      className={`relative w-20 h-20 rounded-full border-4 flex items-center justify-center transition-all duration-300 z-10 ${
-                        led.isActive 
-                          ? 'border-white bg-white shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]' 
-                          : 'border-slate-700 bg-slate-800'
+            <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4 shadow-[inset_0_2px_12px_rgba(0,0,0,0.45)]">
+              <div className="flex items-stretch overflow-x-auto rounded-lg bg-slate-900 p-1">
+                {leds.map((led) => (
+                  <div key={led.index} className="group relative min-w-[92px] flex-1 border-r border-slate-800 last:border-r-0">
+                    <div
+                      className={`relative mx-1 h-20 rounded-sm border transition-all duration-300 ${
+                        led.isActive
+                          ? 'border-white/80'
+                          : 'border-slate-800 bg-slate-950'
                       }`}
-                      style={led.isActive ? { 
-                        boxShadow: `0 0 30px ${led.color}, inset 0 0 10px rgba(0,0,0,0.2)`
-                      } : {}}
+                      style={led.isActive ? {
+                        backgroundColor: led.color,
+                        boxShadow: `0 0 12px ${led.color}, 0 0 30px ${led.color}99, inset 0 0 12px rgba(255,255,255,0.7)`,
+                      } : undefined}
+                      title={led.isActive ? led.partName : `LED ${led.index} apagado`}
                     >
-                      <Lightbulb 
-                        size={32} 
-                        className={`transition-colors ${led.isActive ? 'text-slate-900' : 'text-slate-600'}`} 
-                      />
+                      <span className="absolute inset-x-2 top-2 h-px bg-white/40" />
+                      <span className="absolute bottom-2 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-slate-700" />
+                    </div>
+                    <div className="absolute inset-x-0 top-full z-10 mt-2 text-center opacity-0 transition-opacity group-hover:opacity-100">
+                      <div className="truncate px-1 text-xs font-semibold text-slate-300">
+                        LED {led.index}
+                      </div>
+                      <div className="truncate px-1 text-[11px] text-slate-500">
+                        {led.isActive ? led.partName : 'Apagado'}
+                      </div>
+                      {isOperative && (
+                        <button
+                          onClick={() => led.isActive ? handleTurnOffLed(led.index) : handleTestLed(led.index)}
+                          className={`mt-2 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                            led.isActive
+                              ? 'border border-red-500/30 bg-red-500/20 text-red-400 hover:bg-red-500/40'
+                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {led.isActive ? 'Apagar' : 'Test'}
+                        </button>
+                      )}
                     </div>
                   </div>
-
-                  {/* Info y Controles del LED */}
-                  <div className="text-center w-32">
-                    <div className="text-sm font-semibold text-slate-300">LED {led.index}</div>
-                    
-                    {led.isActive && led.partName ? (
-                      <div className="text-xs text-brand-400 truncate mt-1 animate-pulse" title={led.partName}>
-                        {led.partName}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-500 mt-1">Inactivo</div>
-                    )}
-
-                    {isOperative && (
-                      <div className="mt-3 flex justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {led.isActive ? (
-                          <button 
-                            onClick={() => handleTurnOffLed(led.index)}
-                            className="px-3 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/40 text-xs font-medium rounded-lg transition-colors border border-red-500/30"
-                          >
-                            Apagar
-                          </button>
-                        ) : (
-                          <button 
-                            onClick={() => handleTestLed(led.index)}
-                            className="px-3 py-1 bg-slate-700 text-slate-300 hover:bg-slate-600 text-xs font-medium rounded-lg transition-colors"
-                          >
-                            Test
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
         </div>

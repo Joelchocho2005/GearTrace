@@ -9,7 +9,16 @@ import {
   ParseIntPipe,
   HttpCode,
   HttpStatus,
+  ParseFilePipe,
+  FileTypeValidator,
+  MaxFileSizeValidator,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { randomUUID } from 'node:crypto';
+import { extname, join } from 'node:path';
 import { InventoryService } from './inventory.service';
 import { CreatePartDto } from './dto/create-part.dto';
 import { CreateBoxDto } from './dto/create-box.dto';
@@ -82,6 +91,35 @@ export class InventoryController {
   @HttpCode(HttpStatus.CREATED)
   createPart(@Body() dto: CreatePartDto) {
     return this.inventoryService.createPart(dto);
+  }
+
+  /** POST /api/inventory/parts/:id/image → Subir imagen de una pieza */
+  @Post('parts/:id/image')
+  @UseInterceptors(
+    FileInterceptor('image', {
+      storage: diskStorage({
+        destination: join(process.cwd(), 'uploads'),
+        filename: (_request, file, callback) => {
+          callback(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`);
+        },
+      }),
+    }),
+  )
+  uploadPartImage(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({
+            fileType: /^image\/(jpeg|png|gif|webp)$/,
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.inventoryService.updatePartPhoto(id, `/uploads/${file.filename}`);
   }
 
   /** PATCH /api/inventory/parts/:id → Actualizar una pieza */

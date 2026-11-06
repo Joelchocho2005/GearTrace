@@ -4,9 +4,11 @@ import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
 import InventoryList from './components/Inventory/InventoryList'
+import UsersManagement from './components/Users/UsersManagement'
+import AuditLogs from './components/AuditLogs'
 
 function App() {
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isAuthenticated, isLoading, user } = useAuth()
 
   if (isLoading) {
     return (
@@ -30,6 +32,17 @@ function App() {
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="inventory" element={<InventoryList />} />
+        <Route path="logs" element={<AuditLogs />} />
+        <Route
+          path="users"
+          element={
+            user?.role === 'GERENTE' ? (
+              <UsersManagement />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          }
+        />
       </Route>
 
       <Route path="*" element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} />} />
