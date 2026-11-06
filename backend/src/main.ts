@@ -68,7 +68,7 @@ async function bootstrap() {
       return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept','ngrok-skip-browser-warning'],
     credentials: true,
   });
 

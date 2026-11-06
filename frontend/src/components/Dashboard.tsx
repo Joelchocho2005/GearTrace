@@ -46,8 +46,13 @@ export default function Dashboard() {
     loadStats();
 
     // 2. Conectar a Socket.io usando VITE_SOCKET_URL con fallback a http://localhost:3000
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
-    const newSocket = io(socketUrl);
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000'||'https://bronzing-easel-gone.ngrok-free.dev';
+    const newSocket = io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      extraHeaders: {
+        "ngrok-skip-browser-warning": "69420"
+      }
+    });
     setSocket(newSocket);
 
     newSocket.on('connect', () => {

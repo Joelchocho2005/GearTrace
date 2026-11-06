@@ -145,385 +145,6 @@ Files
 ================================================================
 
 ================
-File: backend/src/logs/search-log.controller.ts
-================
-import { Controller, Get } from '@nestjs/common';
-import { SearchLogService } from './search-log.service';
-
-@Controller('logs')
-export class SearchLogController {
-  constructor(private readonly searchLogService: SearchLogService) {}
-
-  @Get()
-  findRecent() {
-    return this.searchLogService.findRecent();
-  }
-}
-
-================
-File: backend/src/logs/search-log.module.ts
-================
-import { Module } from '@nestjs/common';
-import { SearchLogController } from './search-log.controller';
-import { SearchLogService } from './search-log.service';
-
-@Module({
-  controllers: [SearchLogController],
-  providers: [SearchLogService],
-})
-export class SearchLogModule {}
-
-================
-File: backend/src/logs/search-log.service.ts
-================
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-
-@Injectable()
-export class SearchLogService {
-  constructor(private readonly prisma: PrismaService) {}
-
-  findRecent() {
-    return this.prisma.searchLog.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-      select: {
-        id: true,
-        query: true,
-        found: true,
-        alexaResponse: true,
-        createdAt: true,
-      },
-    });
-  }
-}
-
-================
-File: frontend/src/components/Users/UsersManagement.tsx
-================
-import { useEffect, useState } from 'react';
-import { Navigate } from 'react-router-dom';
-import { ShieldCheck, Users, Loader2 } from 'lucide-react';
-import toast from 'react-hot-toast';
-import api from '../../api/axios';
-import { Role, useAuth } from '../../contexts/AuthContext';
-
-interface ManagedUser {
-  id: number;
-  name: string;
-  email: string;
-  role: Role;
-  isActive: boolean;
-}
-
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
-
-export default function UsersManagement() {
-  const { user } = useAuth();
-  const [users, setUsers] = useState<ManagedUser[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [updatingUserId, setUpdatingUserId] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (user?.role !== 'GERENTE') {
-      return;
-    }
-
-    const loadUsers = async () => {
-      try {
-        const response = await api.get<ManagedUser[]>('/auth/users');
-        setUsers(response.data);
-      } catch (error) {
-        console.error('Error al cargar los usuarios', error);
-        toast.error('No se pudieron cargar los usuarios.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void loadUsers();
-  }, [user?.role]);
-
-  if (user?.role !== 'GERENTE') {
-    return <Navigate to="/dashboard" replace />;
-  }
-
-  const updateRole = async (id: number, role: Role) => {
-    const previousUser = users.find((managedUser) => managedUser.id === id);
-    if (!previousUser) {
-      return;
-    }
-
-    setUpdatingUserId(id);
-    setUsers((currentUsers) =>
-      currentUsers.map((managedUser) =>
-        managedUser.id === id ? { ...managedUser, role } : managedUser,
-      ),
-    );
-
-    try {
-      await api.patch(`/auth/users/${id}/role`, { role });
-      toast.success('Rol actualizado correctamente.');
-    } catch (error) {
-      console.error('Error al actualizar el rol', error);
-      setUsers((currentUsers) =>
-        currentUsers.map((managedUser) =>
-          managedUser.id === id ? previousUser : managedUser,
-        ),
-      );
-      toast.error('No se pudo actualizar el rol.');
-    } finally {
-      setUpdatingUserId(null);
-    }
-  };
-
-  const toggleActive = async (managedUser: ManagedUser) => {
-    setUpdatingUserId(managedUser.id);
-    setUsers((currentUsers) =>
-      currentUsers.map((currentUser) =>
-        currentUser.id === managedUser.id
-          ? { ...currentUser, isActive: !managedUser.isActive }
-          : currentUser,
-      ),
-    );
-
-    try {
-      await api.patch(`/auth/users/${managedUser.id}/toggle`, {
-        isActive: !managedUser.isActive,
-      });
-      toast.success(
-        managedUser.isActive
-          ? 'Usuario desactivado correctamente.'
-          : 'Usuario activado correctamente.',
-      );
-    } catch (error) {
-      console.error('Error al actualizar el estado del usuario', error);
-      setUsers((currentUsers) =>
-        currentUsers.map((currentUser) =>
-          currentUser.id === managedUser.id ? managedUser : currentUser,
-        ),
-      );
-      toast.error('No se pudo actualizar el estado del usuario.');
-    } finally {
-      setUpdatingUserId(null);
-    }
-  };
-
-  return (
-    <section className="space-y-6">
-      <header className="flex items-center gap-3">
-        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
-          <Users size={24} />
-        </div>
-        <div>
-          <h2 className="text-2xl font-bold text-white">Gestión de usuarios</h2>
-          <p className="text-sm text-slate-400">
-            Administra el acceso y los roles de los usuarios registrados.
-          </p>
-        </div>
-      </header>
-
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
-        {isLoading ? (
-          <div className="flex justify-center py-16">
-            <Loader2 className="animate-spin text-brand-400" size={28} />
-          </div>
-        ) : users.length === 0 ? (
-          <p className="px-6 py-12 text-center text-slate-400">
-            No hay usuarios registrados.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-700">
-              <thead className="bg-slate-800">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Usuario
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Rol
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Estado
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-700/80">
-                {users.map((managedUser) => {
-                  const isUpdating = updatingUserId === managedUser.id;
-
-                  return (
-                    <tr key={managedUser.id} className="hover:bg-slate-700/20">
-                      <td className="whitespace-nowrap px-6 py-4">
-                        <div className="font-medium text-white">{managedUser.name}</div>
-                        <div className="text-sm text-slate-400">{managedUser.email}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <label className="sr-only" htmlFor={`role-${managedUser.id}`}>
-                          Rol de {managedUser.name}
-                        </label>
-                        <select
-                          id={`role-${managedUser.id}`}
-                          value={managedUser.role}
-                          disabled={isUpdating}
-                          onChange={(event) =>
-                            void updateRole(managedUser.id, event.target.value as Role)
-                          }
-                          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {roles.map((role) => (
-                            <option key={role} value={role}>
-                              {role}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={managedUser.isActive}
-                          aria-label={`${managedUser.isActive ? 'Desactivar' : 'Activar'} a ${managedUser.name}`}
-                          disabled={isUpdating}
-                          onClick={() => void toggleActive(managedUser)}
-                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                            managedUser.isActive ? 'bg-brand-500' : 'bg-slate-600'
-                          }`}
-                        >
-                          <span
-                            className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
-                              managedUser.isActive ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                          />
-                        </button>
-                        <span
-                          className={`ml-3 inline-flex items-center gap-1 text-sm ${
-                            managedUser.isActive ? 'text-emerald-400' : 'text-slate-400'
-                          }`}
-                        >
-                          <ShieldCheck size={15} />
-                          {managedUser.isActive ? 'Activo' : 'Inactivo'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-================
-File: frontend/src/components/AuditLogs.tsx
-================
-import { useEffect, useState } from 'react';
-import { ClipboardList, Loader2 } from 'lucide-react';
-import toast from 'react-hot-toast';
-import api from '../api/axios';
-
-interface AuditLog {
-  id: number;
-  query: string;
-  found: boolean;
-  alexaResponse: string | null;
-  createdAt: string;
-}
-
-export default function AuditLogs() {
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const loadLogs = async () => {
-      try {
-        const response = await api.get<AuditLog[]>('/logs');
-        setLogs(response.data);
-      } catch (error) {
-        console.error('Error al cargar los logs de auditoría', error);
-        toast.error('No se pudieron cargar los registros de auditoría.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void loadLogs();
-  }, []);
-
-  return (
-    <section className="space-y-6">
-      <header className="flex items-center gap-3">
-        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
-          <ClipboardList size={24} />
-        </div>
-        <div>
-          <h2 className="text-2xl font-bold text-white">Auditoría de búsquedas</h2>
-          <p className="text-sm text-slate-400">
-            Últimas búsquedas realizadas mediante Alexa.
-          </p>
-        </div>
-      </header>
-
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
-        {isLoading ? (
-          <div className="flex justify-center p-8">
-            <Loader2 className="animate-spin text-brand-400" size={28} />
-          </div>
-        ) : logs.length === 0 ? (
-          <div className="p-8 text-center text-slate-400">
-            No hay registros de búsquedas.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="border-b border-slate-700 bg-slate-800">
-                <tr>
-                  <th className="px-6 py-4 font-semibold text-slate-300">Fecha</th>
-                  <th className="px-6 py-4 font-semibold text-slate-300">
-                    Query pronunciado
-                  </th>
-                  <th className="px-6 py-4 font-semibold text-slate-300">Estado</th>
-                  <th className="px-6 py-4 font-semibold text-slate-300">
-                    Respuesta de Alexa
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-700/70">
-                {logs.map((log) => (
-                  <tr key={log.id} className="transition-colors hover:bg-slate-700/30">
-                    <td className="whitespace-nowrap px-6 py-4 text-slate-400">
-                      {new Date(log.createdAt).toLocaleString('es-ES')}
-                    </td>
-                    <td className="px-6 py-4 font-medium text-white">{log.query}</td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          log.found
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : 'bg-red-500/10 text-red-400'
-                        }`}
-                      >
-                        {log.found ? 'Encontrado' : 'No Encontrado'}
-                      </span>
-                    </td>
-                    <td className="max-w-md px-6 py-4 text-slate-400">
-                      {log.alexaResponse ?? 'Sin respuesta registrada'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-================
 File: backend/prisma/migrations/20260930141834_init/migration.sql
 ================
 -- CreateEnum
@@ -1462,206 +1083,6 @@ import { InventoryController } from './inventory.controller';
 export class InventoryModule {}
 
 ================
-File: backend/src/led/led.gateway.ts
-================
-import {
-  WebSocketGateway,
-  WebSocketServer,
-  OnGatewayInit,
-  OnGatewayConnection,
-  OnGatewayDisconnect,
-  SubscribeMessage,
-  MessageBody,
-  ConnectedSocket,
-} from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
-import { Logger } from '@nestjs/common';
-import { LedControllerService } from './led-controller.service';
-
-// ══════════════════════════════════════════════════════════════════════════
-// Eventos Socket.io — GearTrace
-//
-// SERVIDOR → CLIENTE (emitidos por NestJS al Dashboard de React):
-//   led:activated   Alexa encontró una pieza y encendió el LED
-//   led:off         El LED fue apagado (timeout o manual)
-//   led:status      Estado inicial al conectarse un cliente nuevo
-//   hw:status       Info del modo hardware (real vs simulado)
-//
-// CLIENTE → SERVIDOR (recibidos desde el Dashboard):
-//   led:turnOff     El operador apaga el LED manualmente desde el dashboard
-//   led:test        El operador prueba un LED específico
-// ══════════════════════════════════════════════════════════════════════════
-export const SOCKET_EVENTS = {
-  // Server → Client
-  LED_ACTIVATED : 'led:activated',
-  LED_OFF       : 'led:off',
-  LED_STATUS    : 'led:status',
-  HW_STATUS     : 'hw:status',
-  // Client → Server
-  LED_TURN_OFF  : 'led:turnOff',
-  LED_TEST      : 'led:test',
-} as const;
-
-/** Payload que el servidor emite cuando un LED se activa */
-export interface LedActivatedPayload {
-  ledIndex : number;
-  partName : string;
-  colorHex : string;
-  timestamp: string;
-  simulated: boolean;  // true si estamos en modo sin hardware
-}
-
-@WebSocketGateway({
-  cors: { origin: '*' },
-  namespace: '/',
-  transports: ['websocket', 'polling'],
-})
-export class LedGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
-{
-  @WebSocketServer()
-  server: Server;
-
-  private readonly logger = new Logger(LedGateway.name);
-
-  /** Mapa de timeouts activos por ledIndex → para poder cancelarlos */
-  private activeTimeouts = new Map<number, NodeJS.Timeout>();
-
-  constructor(private readonly ledService: LedControllerService) {}
-
-  // ──────────────────────────────────────────────────────────
-  // Ciclo de vida del Gateway
-  // ──────────────────────────────────────────────────────────
-
-  afterInit(): void {
-    this.logger.log('🔌 Socket.io Gateway inicializado y escuchando');
-  }
-
-  handleConnection(client: Socket): void {
-    this.logger.log(`📲 Cliente conectado: ${client.id}`);
-
-    // Al conectar, enviar al cliente el estado del hardware
-    const hwStatus = this.ledService.getStatus();
-    client.emit(SOCKET_EVENTS.HW_STATUS, hwStatus);
-  }
-
-  handleDisconnect(client: Socket): void {
-    this.logger.log(`🔴 Cliente desconectado: ${client.id}`);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // Mensajes recibidos DESDE el cliente (Dashboard React)
-  // ──────────────────────────────────────────────────────────
-
-  /** El operador apaga un LED manualmente desde el Dashboard */
-  @SubscribeMessage(SOCKET_EVENTS.LED_TURN_OFF)
-  handleManualOff(
-    @MessageBody() data: { ledIndex: number },
-    @ConnectedSocket() client: Socket,
-  ): void {
-    const { ledIndex } = data;
-    this.logger.log(`🖱️  Apagado manual solicitado por cliente ${client.id} → LED ${ledIndex}`);
-
-    // Cancelar el timeout automático si existe
-    this.cancelAutoOff(ledIndex);
-
-    this.ledService.turnOff(ledIndex);
-    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, manual: true });
-  }
-
-  /** El operador prueba un LED específico desde el Dashboard */
-  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
-  async handleLedTest(
-    @MessageBody() data: { ledIndex: number; colorHex?: string },
-    @ConnectedSocket() client: Socket,
-  ): Promise<void> {
-    const { ledIndex, colorHex } = data;
-    this.logger.log(`🧪 Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
-
-    // Efecto de parpadeo para testeo visual
-    await this.ledService.blink(ledIndex, 3, colorHex);
-
-    const payload: LedActivatedPayload = {
-      ledIndex,
-      partName : `[TEST] LED ${ledIndex}`,
-      colorHex: colorHex ?? '#FFFFFF',
-      timestamp: new Date().toISOString(),
-      simulated: this.ledService.getStatus().simulationMode,
-    };
-    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
-
-    // Auto-apagar tras 5s en modo test
-    this.scheduleAutoOff(ledIndex, 5_000);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // API pública — llamada desde AlexaController
-  // ──────────────────────────────────────────────────────────
-
-  /**
-   * Enciende el LED correspondiente a la pieza encontrada por Alexa,
-   * emite el evento a todos los clientes del Dashboard y programa
-   * el apagado automático tras 10 segundos.
-   *
-   * @param ledIndex  Índice del LED en la tira (0-4)
-   * @param partName  Nombre de la pieza encontrada (para el dashboard)
-   * @param colorHex  Color del LED (viene de Box.colorHex en la BD)
-   */
-  async triggerLed(
-    ledIndex: number,
-    partName: string,
-    colorHex?: string,
-  ): Promise<void> {
-    // Cancelar timeout previo si el mismo LED ya estaba encendido
-    this.cancelAutoOff(ledIndex);
-
-    // Parpadeo inicial para llamar la atención y luego dejarlo encendido
-    await this.ledService.blink(ledIndex, 2, colorHex);
-
-    // Construir y emitir el payload al Dashboard
-    const payload: LedActivatedPayload = {
-      ledIndex,
-      partName,
-      colorHex: colorHex ?? '#FFFFFF',
-      timestamp: new Date().toISOString(),
-      simulated: this.ledService.getStatus().simulationMode,
-    };
-
-    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
-
-    this.logger.log(
-      `📡 Evento "${SOCKET_EVENTS.LED_ACTIVATED}" emitido → LED ${ledIndex} | "${partName}"`,
-    );
-
-    // Programar apagado automático a los 10 segundos
-    this.scheduleAutoOff(ledIndex, 10_000);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // Helpers privados
-  // ──────────────────────────────────────────────────────────
-
-  private scheduleAutoOff(ledIndex: number, delayMs: number): void {
-    const timeout = setTimeout(() => {
-      this.ledService.turnOff(ledIndex);
-      this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, auto: true });
-      this.activeTimeouts.delete(ledIndex);
-      this.logger.log(`💤 LED ${ledIndex} apagado automáticamente (${delayMs / 1000}s)`);
-    }, delayMs);
-
-    this.activeTimeouts.set(ledIndex, timeout);
-  }
-
-  private cancelAutoOff(ledIndex: number): void {
-    const existing = this.activeTimeouts.get(ledIndex);
-    if (existing) {
-      clearTimeout(existing);
-      this.activeTimeouts.delete(ledIndex);
-    }
-  }
-}
-
-================
 File: backend/src/led/led.module.ts
 ================
 import { Module, forwardRef } from '@nestjs/common';
@@ -1675,6 +1096,60 @@ import { AlexaModule } from '../alexa/alexa.module';
   exports: [LedGateway, LedControllerService],
 })
 export class LedModule {}
+
+================
+File: backend/src/logs/search-log.controller.ts
+================
+import { Controller, Get } from '@nestjs/common';
+import { SearchLogService } from './search-log.service';
+
+@Controller('logs')
+export class SearchLogController {
+  constructor(private readonly searchLogService: SearchLogService) {}
+
+  @Get()
+  findRecent() {
+    return this.searchLogService.findRecent();
+  }
+}
+
+================
+File: backend/src/logs/search-log.module.ts
+================
+import { Module } from '@nestjs/common';
+import { SearchLogController } from './search-log.controller';
+import { SearchLogService } from './search-log.service';
+
+@Module({
+  controllers: [SearchLogController],
+  providers: [SearchLogService],
+})
+export class SearchLogModule {}
+
+================
+File: backend/src/logs/search-log.service.ts
+================
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class SearchLogService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findRecent() {
+    return this.prisma.searchLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        query: true,
+        found: true,
+        alexaResponse: true,
+        createdAt: true,
+      },
+    });
+  }
+}
 
 ================
 File: backend/src/prisma/prisma.module.ts
@@ -1722,43 +1197,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     this.logger.log('🔌 Conexión a PostgreSQL cerrada');
   }
 }
-
-================
-File: backend/src/app.module.ts
-================
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'node:path';
-import { PrismaModule } from './prisma/prisma.module';
-import { InventoryModule } from './inventory/inventory.module';
-import { AlexaModule } from './alexa/alexa.module';
-import { LedModule } from './led/led.module';
-import { AuthModule } from './auth/auth.module';
-import { SearchLogModule } from './logs/search-log.module';
-
-@Module({
-  imports: [
-    // Carga variables de entorno desde .env de forma global
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
-    }),
-    ServeStaticModule.forRoot({
-      rootPath: join(process.cwd(), 'uploads'),
-      serveRoot: '/uploads',
-    }),
-
-    // Módulos de la aplicación
-    PrismaModule,
-    AuthModule,
-    InventoryModule,
-    AlexaModule,
-    LedModule,
-    SearchLogModule,
-  ],
-})
-export class AppModule {}
 
 ================
 File: backend/clinerules.md
@@ -2264,6 +1702,331 @@ export default function PartFormModal({
         </form>
       </div>
     </div>
+  );
+}
+
+================
+File: frontend/src/components/Users/UsersManagement.tsx
+================
+import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { ShieldCheck, Users, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../../api/axios';
+import { Role, useAuth } from '../../contexts/AuthContext';
+
+interface ManagedUser {
+  id: number;
+  name: string;
+  email: string;
+  role: Role;
+  isActive: boolean;
+}
+
+const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+
+export default function UsersManagement() {
+  const { user } = useAuth();
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [updatingUserId, setUpdatingUserId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (user?.role !== 'GERENTE') {
+      return;
+    }
+
+    const loadUsers = async () => {
+      try {
+        const response = await api.get<ManagedUser[]>('/auth/users');
+        setUsers(response.data);
+      } catch (error) {
+        console.error('Error al cargar los usuarios', error);
+        toast.error('No se pudieron cargar los usuarios.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadUsers();
+  }, [user?.role]);
+
+  if (user?.role !== 'GERENTE') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  const updateRole = async (id: number, role: Role) => {
+    const previousUser = users.find((managedUser) => managedUser.id === id);
+    if (!previousUser) {
+      return;
+    }
+
+    setUpdatingUserId(id);
+    setUsers((currentUsers) =>
+      currentUsers.map((managedUser) =>
+        managedUser.id === id ? { ...managedUser, role } : managedUser,
+      ),
+    );
+
+    try {
+      await api.patch(`/auth/users/${id}/role`, { role });
+      toast.success('Rol actualizado correctamente.');
+    } catch (error) {
+      console.error('Error al actualizar el rol', error);
+      setUsers((currentUsers) =>
+        currentUsers.map((managedUser) =>
+          managedUser.id === id ? previousUser : managedUser,
+        ),
+      );
+      toast.error('No se pudo actualizar el rol.');
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
+  const toggleActive = async (managedUser: ManagedUser) => {
+    setUpdatingUserId(managedUser.id);
+    setUsers((currentUsers) =>
+      currentUsers.map((currentUser) =>
+        currentUser.id === managedUser.id
+          ? { ...currentUser, isActive: !managedUser.isActive }
+          : currentUser,
+      ),
+    );
+
+    try {
+      await api.patch(`/auth/users/${managedUser.id}/toggle`, {
+        isActive: !managedUser.isActive,
+      });
+      toast.success(
+        managedUser.isActive
+          ? 'Usuario desactivado correctamente.'
+          : 'Usuario activado correctamente.',
+      );
+    } catch (error) {
+      console.error('Error al actualizar el estado del usuario', error);
+      setUsers((currentUsers) =>
+        currentUsers.map((currentUser) =>
+          currentUser.id === managedUser.id ? managedUser : currentUser,
+        ),
+      );
+      toast.error('No se pudo actualizar el estado del usuario.');
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <header className="flex items-center gap-3">
+        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <Users size={24} />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-white">Gestión de usuarios</h2>
+          <p className="text-sm text-slate-400">
+            Administra el acceso y los roles de los usuarios registrados.
+          </p>
+        </div>
+      </header>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+        {isLoading ? (
+          <div className="flex justify-center py-16">
+            <Loader2 className="animate-spin text-brand-400" size={28} />
+          </div>
+        ) : users.length === 0 ? (
+          <p className="px-6 py-12 text-center text-slate-400">
+            No hay usuarios registrados.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-700">
+              <thead className="bg-slate-800">
+                <tr>
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Usuario
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Rol
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Estado
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/80">
+                {users.map((managedUser) => {
+                  const isUpdating = updatingUserId === managedUser.id;
+
+                  return (
+                    <tr key={managedUser.id} className="hover:bg-slate-700/20">
+                      <td className="whitespace-nowrap px-6 py-4">
+                        <div className="font-medium text-white">{managedUser.name}</div>
+                        <div className="text-sm text-slate-400">{managedUser.email}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <label className="sr-only" htmlFor={`role-${managedUser.id}`}>
+                          Rol de {managedUser.name}
+                        </label>
+                        <select
+                          id={`role-${managedUser.id}`}
+                          value={managedUser.role}
+                          disabled={isUpdating}
+                          onChange={(event) =>
+                            void updateRole(managedUser.id, event.target.value as Role)
+                          }
+                          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {roles.map((role) => (
+                            <option key={role} value={role}>
+                              {role}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-6 py-4">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={managedUser.isActive}
+                          aria-label={`${managedUser.isActive ? 'Desactivar' : 'Activar'} a ${managedUser.name}`}
+                          disabled={isUpdating}
+                          onClick={() => void toggleActive(managedUser)}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                            managedUser.isActive ? 'bg-brand-500' : 'bg-slate-600'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                              managedUser.isActive ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                        <span
+                          className={`ml-3 inline-flex items-center gap-1 text-sm ${
+                            managedUser.isActive ? 'text-emerald-400' : 'text-slate-400'
+                          }`}
+                        >
+                          <ShieldCheck size={15} />
+                          {managedUser.isActive ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/AuditLogs.tsx
+================
+import { useEffect, useState } from 'react';
+import { ClipboardList, Loader2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../api/axios';
+
+interface AuditLog {
+  id: number;
+  query: string;
+  found: boolean;
+  alexaResponse: string | null;
+  createdAt: string;
+}
+
+export default function AuditLogs() {
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadLogs = async () => {
+      try {
+        const response = await api.get<AuditLog[]>('/logs');
+        setLogs(response.data);
+      } catch (error) {
+        console.error('Error al cargar los logs de auditoría', error);
+        toast.error('No se pudieron cargar los registros de auditoría.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadLogs();
+  }, []);
+
+  return (
+    <section className="space-y-6">
+      <header className="flex items-center gap-3">
+        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <ClipboardList size={24} />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-white">Auditoría de búsquedas</h2>
+          <p className="text-sm text-slate-400">
+            Últimas búsquedas realizadas mediante Alexa.
+          </p>
+        </div>
+      </header>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+        {isLoading ? (
+          <div className="flex justify-center p-8">
+            <Loader2 className="animate-spin text-brand-400" size={28} />
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="p-8 text-center text-slate-400">
+            No hay registros de búsquedas.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="border-b border-slate-700 bg-slate-800">
+                <tr>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Fecha</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">
+                    Query pronunciado
+                  </th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">Estado</th>
+                  <th className="px-6 py-4 font-semibold text-slate-300">
+                    Respuesta de Alexa
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/70">
+                {logs.map((log) => (
+                  <tr key={log.id} className="transition-colors hover:bg-slate-700/30">
+                    <td className="whitespace-nowrap px-6 py-4 text-slate-400">
+                      {new Date(log.createdAt).toLocaleString('es-ES')}
+                    </td>
+                    <td className="px-6 py-4 font-medium text-white">{log.query}</td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          log.found
+                            ? 'bg-emerald-500/10 text-emerald-400'
+                            : 'bg-red-500/10 text-red-400'
+                        }`}
+                      >
+                        {log.found ? 'Encontrado' : 'No Encontrado'}
+                      </span>
+                    </td>
+                    <td className="max-w-md px-6 py-4 text-slate-400">
+                      {log.alexaResponse ?? 'Sin respuesta registrada'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -3543,6 +3306,720 @@ export class AuthService {
 }
 
 ================
+File: backend/src/led/led.gateway.ts
+================
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  OnGatewayInit,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { Logger } from '@nestjs/common';
+import { LedControllerService } from './led-controller.service';
+
+// ══════════════════════════════════════════════════════════════════════════
+// Eventos Socket.io — GearTrace
+//
+// SERVIDOR → CLIENTE (emitidos por NestJS al Dashboard de React):
+//   led:activated   Alexa encontró una pieza y encendió el LED
+//   led:off         El LED fue apagado (timeout o manual)
+//   led:status      Estado inicial al conectarse un cliente nuevo
+//   hw:status       Info del modo hardware (real vs simulado)
+//
+// CLIENTE → SERVIDOR (recibidos desde el Dashboard):
+//   led:turnOff     El operador apaga el LED manualmente desde el dashboard
+//   led:test        El operador prueba un LED específico
+// ══════════════════════════════════════════════════════════════════════════
+export const SOCKET_EVENTS = {
+  // Server → Client
+  LED_ACTIVATED : 'led:activated',
+  LED_OFF       : 'led:off',
+  LED_STATUS    : 'led:status',
+  HW_STATUS     : 'hw:status',
+  // Client → Server
+  LED_TURN_OFF  : 'led:turnOff',
+  LED_TEST      : 'led:test',
+} as const;
+
+/** Payload que el servidor emite cuando un LED se activa */
+export interface LedActivatedPayload {
+  ledIndex : number;
+  partName : string;
+  colorHex : string;
+  timestamp: string;
+  simulated: boolean;  // true si estamos en modo sin hardware
+}
+
+@WebSocketGateway({
+  cors: { origin: '*' },
+  namespace: '/',
+  transports: ['websocket', 'polling'],
+})
+export class LedGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  @WebSocketServer()
+  server: Server;
+
+  private readonly logger = new Logger(LedGateway.name);
+
+  /** Mapa de timeouts activos por ledIndex → para poder cancelarlos */
+  private activeTimeouts = new Map<number, NodeJS.Timeout>();
+
+  constructor(private readonly ledService: LedControllerService) {}
+
+  // ──────────────────────────────────────────────────────────
+  // Ciclo de vida del Gateway
+  // ──────────────────────────────────────────────────────────
+
+  afterInit(): void {
+    this.logger.log('🔌 Socket.io Gateway inicializado y escuchando');
+  }
+
+  handleConnection(client: Socket): void {
+    this.logger.log(`📲 Cliente conectado: ${client.id}`);
+
+    // Al conectar, enviar al cliente el estado del hardware
+    const hwStatus = this.ledService.getStatus();
+    client.emit(SOCKET_EVENTS.HW_STATUS, hwStatus);
+  }
+
+  handleDisconnect(client: Socket): void {
+    this.logger.log(`🔴 Cliente desconectado: ${client.id}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Mensajes recibidos DESDE el cliente (Dashboard React)
+  // ──────────────────────────────────────────────────────────
+
+  /** El operador apaga un LED manualmente desde el Dashboard */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TURN_OFF)
+  handleManualOff(
+    @MessageBody() data: { ledIndex: number },
+    @ConnectedSocket() client: Socket,
+  ): void {
+    const { ledIndex } = data;
+    this.logger.log(`🖱️  Apagado manual solicitado por cliente ${client.id} → LED ${ledIndex}`);
+
+    // Cancelar el timeout automático si existe
+    this.cancelAutoOff(ledIndex);
+
+    this.ledService.turnOff(ledIndex);
+    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, manual: true });
+  }
+
+  /** El operador prueba un LED específico desde el Dashboard */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
+  async handleLedTest(
+    @MessageBody() data: { ledIndex: number; colorHex?: string },
+    @ConnectedSocket() client: Socket,
+  ): Promise<void> {
+    const { ledIndex, colorHex } = data;
+    this.logger.log(`🧪 Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
+
+    // Efecto de parpadeo para testeo visual
+    await this.ledService.blink(ledIndex, 3, colorHex);
+
+    const payload: LedActivatedPayload = {
+      ledIndex,
+      partName : `[TEST] LED ${ledIndex}`,
+      colorHex: colorHex ?? '#FFFFFF',
+      timestamp: new Date().toISOString(),
+      simulated: this.ledService.getStatus().simulationMode,
+    };
+    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
+
+    // Auto-apagar tras 5s en modo test
+    this.scheduleAutoOff(ledIndex, 5_000);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // API pública — llamada desde AlexaController
+  // ──────────────────────────────────────────────────────────
+
+  /**
+   * Enciende el LED correspondiente a la pieza encontrada por Alexa,
+   * emite el evento a todos los clientes del Dashboard y programa
+   * el apagado automático tras 10 segundos.
+   *
+   * @param ledIndex  Índice del LED en la tira (0-4)
+   * @param partName  Nombre de la pieza encontrada (para el dashboard)
+   * @param colorHex  Color del LED (viene de Box.colorHex en la BD)
+   */
+  async triggerLed(
+    ledIndex: number,
+    partName: string,
+    colorHex?: string,
+  ): Promise<void> {
+    // Cancelar timeout previo si el mismo LED ya estaba encendido
+    this.cancelAutoOff(ledIndex);
+
+    // Parpadeo inicial para llamar la atención y luego dejarlo encendido
+    await this.ledService.blink(ledIndex, 2, colorHex);
+
+    // Construir y emitir el payload al Dashboard
+    const payload: LedActivatedPayload = {
+      ledIndex,
+      partName,
+      colorHex: colorHex ?? '#FFFFFF',
+      timestamp: new Date().toISOString(),
+      simulated: this.ledService.getStatus().simulationMode,
+    };
+
+    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
+
+    this.logger.log(
+      `📡 Evento "${SOCKET_EVENTS.LED_ACTIVATED}" emitido → LED ${ledIndex} | "${partName}"`,
+    );
+
+    // Programar apagado automático a los 10 segundos
+    this.scheduleAutoOff(ledIndex, 10_000);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Helpers privados
+  // ──────────────────────────────────────────────────────────
+
+  private scheduleAutoOff(ledIndex: number, delayMs: number): void {
+    const timeout = setTimeout(() => {
+      this.ledService.turnOff(ledIndex);
+      this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, auto: true });
+      this.activeTimeouts.delete(ledIndex);
+      this.logger.log(`💤 LED ${ledIndex} apagado automáticamente (${delayMs / 1000}s)`);
+    }, delayMs);
+
+    this.activeTimeouts.set(ledIndex, timeout);
+  }
+
+  private cancelAutoOff(ledIndex: number): void {
+    const existing = this.activeTimeouts.get(ledIndex);
+    if (existing) {
+      clearTimeout(existing);
+      this.activeTimeouts.delete(ledIndex);
+    }
+  }
+}
+
+================
+File: backend/src/app.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'node:path';
+import { PrismaModule } from './prisma/prisma.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { AlexaModule } from './alexa/alexa.module';
+import { LedModule } from './led/led.module';
+import { AuthModule } from './auth/auth.module';
+import { SearchLogModule } from './logs/search-log.module';
+
+@Module({
+  imports: [
+    // Carga variables de entorno desde .env de forma global
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
+
+    // Módulos de la aplicación
+    PrismaModule,
+    AuthModule,
+    InventoryModule,
+    AlexaModule,
+    LedModule,
+    SearchLogModule,
+  ],
+})
+export class AppModule {}
+
+================
+File: backend/src/main.ts
+================
+import { NestFactory } from '@nestjs/core';
+import { ValidationPipe, Logger } from '@nestjs/common';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const logger = new Logger('GearTrace');
+  const app = await NestFactory.create(AppModule);
+
+  // Prefijo global de la API REST
+  app.setGlobalPrefix('api');
+
+  // Validación automática de DTOs con class-validator
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,       // Elimina campos no declarados en el DTO
+      forbidNonWhitelisted: true,
+      transform: true,       // Transforma payloads al tipo del DTO
+    }),
+  );
+
+  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
+  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+    'http://geartrace.local',
+    ...configuredOrigins,
+  ];
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
+      if (defaultAllowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // 3. Despliegues en Vercel (*.vercel.app y subdominios)
+      if (/^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/.test(origin)) {
+        return callback(null, true);
+      }
+
+      // 4. Dominios de túnel Ngrok (*.ngrok-free.app, *.ngrok.app)
+      if (/^https:\/\/([a-zA-Z0-9-]+\.)*ngrok(-free)?\.app$/.test(origin)) {
+        return callback(null, true);
+      }
+
+      // 5. Red local (Raspberry Pi y clientes LAN: 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+      if (
+        /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
+          origin,
+        )
+      ) {
+        return callback(null, true);
+      }
+
+      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
+      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+  });
+
+  const port = process.env.PORT ?? 3000;
+  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
+  await app.listen(port, '0.0.0.0');
+
+  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
+  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
+  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
+}
+
+bootstrap();
+
+================
+File: backend/.env.example
+================
+# ─── Base de Datos ──────────────────────────────────────────────────────────
+# Debe coincidir con los valores del docker-compose.yml en la raíz
+POSTGRES_USER=geartrace
+POSTGRES_PASSWORD=geartrace_secret
+POSTGRES_DB=geartrace_db
+POSTGRES_PORT=5432
+POSTGRES_HOST=localhost
+
+# URL de conexión para Prisma ORM
+DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?schema=public"
+
+# ─── Aplicación NestJS ──────────────────────────────────────────────────────
+PORT=3000
+NODE_ENV=development
+
+# ─── CORS Origins ────────────────────────────────────────────────────────────
+# Orígenes adicionales separados por coma (ej. https://tu-app.vercel.app)
+# Ya se permiten por defecto: localhost:5173, localhost:3000, *.vercel.app, *.ngrok-free.app y la LAN 192.168.x.x
+CORS_ORIGIN=https://geartrace.vercel.app
+
+# ─── JWT Auth ───────────────────────────────────────────────────────────────
+# Cambia este secret en producción (mínimo 32 caracteres aleatorios)
+JWT_SECRET=geartrace-super-secret-key-change-in-production-2024
+JWT_EXPIRES_IN=8h
+
+# ─── Hardware IoT ───────────────────────────────────────────────────────────
+# Número total de LEDs en la tira WS2812B
+LED_COUNT=5
+# Pin GPIO en la Raspberry Pi (pin 18 = PWM0)
+LED_GPIO_PIN=18
+# Modo Simulación:
+# - CachyOS / PC Desarrollo: SIMULATE_HARDWARE=true (logs en consola, sin librerías nativas)
+# - Raspberry Pi (Hardware Real): SIMULATE_HARDWARE=false (controla pines GPIO reales vía rpi-ws281x-native)
+SIMULATE_HARDWARE=true
+
+# ─── Alexa Webhook ──────────────────────────────────────────────────────────
+# Skill ID de tu Alexa Custom Skill (opcional para desarrollo, validado en prod si es un ID real)
+ALEXA_SKILL_ID=amzn1.ask.skill.XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+
+================
+File: frontend/src/api/axios.ts
+================
+import axios from 'axios';
+
+// Obtener la URL base desde la variable de entorno o usar fallback por defecto
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
+const baseURL = rawApiUrl.endsWith('/api')
+  ? rawApiUrl
+  : `${rawApiUrl.replace(/\/$/, '')}/api`;
+
+// Instancia de axios preconfigurada
+const api = axios.create({
+  baseURL,
+});
+
+// Interceptor para inyectar el token JWT en cada request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('geartrace_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Interceptor para manejar errores globalmente (ej. 401 Unauthorized)
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Si el token expira, limpiamos localstorage y forzamos login
+      localStorage.removeItem('geartrace_token');
+      localStorage.removeItem('geartrace_user');
+      window.dispatchEvent(new Event('auth:unauthorized'));
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+
+================
+File: frontend/tsconfig.json
+================
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
+
+================
+File: README.md
+================
+# ⚙️ GearTrace — Sistema Inteligente de Gestión de Inventario para Taller Mecánico
+
+GearTrace es una plataforma de logística y gestión visual de herramientas y repuestos diseñada para talleres mecánicos. Integra un dashboard interactivo en tiempo real con una guía luminosa IoT (tira de LEDs direccionables WS2812B) y control por voz mediante Amazon Alexa, permitiendo a mecánicos y gerentes localizar piezas al instante en estanterías físicas.
+
+---
+
+## 🏗️ Arquitectura del Sistema
+
+```
+                         ┌────────────────────────────────────────┐
+                         │           Amazon Alexa Echo            │
+                         └──────────────────┬─────────────────────┘
+                                            │ (Voz: "Busca filtro...")
+                                            ▼
+┌───────────────────────┐        ┌───────────────────────┐        ┌───────────────────────┐
+│   Frontend en Vercel  │        │     Túnel HTTPS       │        │   Red Local (LAN)     │
+│   (React + Vite SPA)  │        │   (Ngrok / Cloudflare)│        │   (PC / Móvil Taller) │
+└───────────┬───────────┘        └──────────┬────────────┘        └───────────┬───────────┘
+            │ HTTPS / WSS                   │ POST /api/webhook/alexa         │ HTTP / WS
+            ▼                               ▼                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                             GearTrace Backend (NestJS 10)                               │
+│  ┌─────────────────────────┐   ┌──────────────────────────┐   ┌──────────────────────┐  │
+│  │   Auth & Inventory API  │   │  LedControllerService    │   │  Socket.io Gateway   │  │
+│  │   (Prisma ORM + JWT)    │   │  (Detección dinámica HW) │   │  (Eventos en vivo)   │  │
+│  └───────────┬─────────────┘   └─────────────┬────────────┘   └──────────┬───────────┘  │
+└──────────────┼───────────────────────────────┼───────────────────────────┼──────────────┘
+               │                               │                           │
+               ▼                               ▼                           ▼
+     ┌──────────────────┐            ┌───────────────────┐       ┌───────────────────┐
+     │  PostgreSQL 15   │            │ Hardware Físico   │       │ Dashboard Web     │
+     │  (Docker Compose)│            │ Tira LED WS2812B  │       │ Actualización     │
+     │                  │            │ (GPIO 18 / PWM0)  │       │ en tiempo real    │
+     └──────────────────┘            └───────────────────┘       └───────────────────┘
+```
+
+El monorepo se compone de:
+- **`frontend/`**: Single Page Application construida con **React 18**, **Vite**, **TailwindCSS** y **Socket.io Client**. Listo para desplegar en **Vercel**.
+- **`backend/`**: Servidor **NestJS**, **Prisma ORM**, autenticación **JWT**, **Socket.io Gateway** y Webhook compatible con **Alexa Skills Kit**.
+- **`docker-compose.yml`**: Contenedor de **PostgreSQL 15 Alpine** y opcionalmente **pgAdmin4**.
+
+---
+
+## 🚀 Entornos de Ejecución
+
+GearTrace está preparado para funcionar sin cambios en el código en dos entornos principales:
+1. **CachyOS / Linux x86_64 / macOS / Windows** (Entorno de Desarrollo Local)
+2. **Raspberry Pi 4 / Raspberry Pi OS ARM64** (Entorno de Producción con Hardware Físico)
+
+---
+
+## 💻 1. Ejecución en Entorno Local (CachyOS / Linux x86_64)
+
+En este entorno no hay pines GPIO de Raspberry Pi. El backend detecta la arquitectura y/o la variable de entorno y activa de forma automática el **modo simulación**, imprimiendo los cambios de los LEDs por consola.
+
+### Prerrequisitos
+- Node.js 18+ (recomendado Node.js 20 LTS o superior)
+- Docker y Docker Compose
+- Git
+
+### Paso 1: Clonar el repositorio
+```bash
+git clone https://github.com/tu-usuario/GearTrace.git
+cd GearTrace
+```
+
+### Paso 2: Levantar la Base de Datos
+Inicia el contenedor de PostgreSQL:
+```bash
+docker compose up -d postgres
+```
+
+### Paso 3: Configurar y Ejecutar el Backend
+1. Ingresa a la carpeta del backend y crea el archivo `.env`:
+   ```bash
+   cd backend
+   cp .env.example .env
+   ```
+2. Asegúrate de que `.env` tenga:
+   ```env
+   SIMULATE_HARDWARE=true
+   PORT=3000
+   DATABASE_URL="postgresql://geartrace:geartrace_secret@localhost:5432/geartrace_db?schema=public"
+   ```
+3. Instala dependencias y genera el cliente Prisma:
+   ```bash
+   npm install
+   npx prisma generate
+   ```
+4. Aplica las migraciones e inserta los datos iniciales (Seed):
+   ```bash
+   npm run prisma:migrate
+   npm run prisma:seed
+   ```
+5. Inicia el servidor en modo desarrollo:
+   ```bash
+   npm run start:dev
+   ```
+   > Verás en la consola:
+   > `⚠️  Hardware GPIO no disponible. Modo simulación activado.`
+   > `🚀 GearTrace Backend corriendo en: http://localhost:3000/api`
+
+### Paso 4: Configurar y Ejecutar el Frontend
+1. En otra terminal, ingresa a la carpeta del frontend y crea el archivo `.env`:
+   ```bash
+   cd frontend
+   cp .env.example .env
+   ```
+2. Contenido de `frontend/.env`:
+   ```env
+   VITE_API_URL=http://localhost:3000
+   VITE_SOCKET_URL=http://localhost:3000
+   ```
+3. Instala dependencias y arranca el servidor de desarrollo Vite:
+   ```bash
+   npm install
+   npm run dev
+   ```
+4. Abre tu navegador en [http://localhost:5173](http://localhost:5173).
+
+---
+
+## 🍓 2. Despliegue en Raspberry Pi 4 (Entorno Físico con Hardware)
+
+En la Raspberry Pi, el backend se conecta directamente a los pines físicos para controlar la tira de LEDs WS2812B.
+
+### Conexión del Circuito (Tira LED WS2812B)
+| Pin Tira LED | Conexión en Raspberry Pi / Fuente |
+| :--- | :--- |
+| **5V (VCC)** | Fuente externa de 5V (2A o superior) |
+| **GND** | GND de la fuente externa **Y** Pin 6/9/14/20/25/30/34/39 (GND) de la Raspberry Pi |
+| **DIN (Data)** | Pin Físico 12 (**GPIO 18 / PWM0**) vía resistencia de 330Ω - 470Ω |
+
+> ⚠️ **Importante**: Conecta la masa (GND) de la fuente de alimentación externa con la masa (GND) de la Raspberry Pi para cerrar el circuito de referencia lógica.
+
+### Prerrequisitos en Raspberry Pi OS (64-bit)
+Instala las herramientas de compilación nativa necesarias para `rpi-ws281x-native`:
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential python3 make g++ docker.io docker-compose-v2
+```
+
+### Paso 1: Levantar PostgreSQL en la Raspberry Pi
+En la raíz del proyecto:
+```bash
+docker compose up -d postgres
+```
+
+### Paso 2: Configurar el Backend en la Raspberry Pi
+1. Ve a `backend/` y crea el archivo `.env`:
+   ```bash
+   cd backend
+   cp .env.example .env
+   ```
+2. Configura las variables para hardware real:
+   ```env
+   PORT=3000
+   NODE_ENV=production
+   SIMULATE_HARDWARE=false
+   LED_COUNT=5
+   LED_GPIO_PIN=18
+   DATABASE_URL="postgresql://geartrace:geartrace_secret@localhost:5432/geartrace_db?schema=public"
+   ```
+3. Instala las dependencias (incluyendo el módulo nativo de LEDs):
+   ```bash
+   npm install
+   npm run prisma:generate
+   npm run prisma:migrate:deploy
+   npm run prisma:seed
+   ```
+4. Compila el backend:
+   ```bash
+   npm run build
+   ```
+
+### Paso 3: Ejecución con Permisos de Hardware
+El módulo nativo `rpi-ws281x-native` requiere acceso a `/dev/mem` o DMA para generar la señal PWM a 800 kHz. Ejecútalo con privilegios de root:
+```bash
+sudo node dist/main.js
+```
+*(Opcional con PM2 para auto-arranque al encender la Raspberry Pi)*:
+```bash
+sudo npm install -g pm2
+sudo pm2 start dist/main.js --name geartrace-backend
+sudo pm2 save
+sudo pm2 startup
+```
+
+---
+
+## 🌐 3. Despliegue del Frontend en Vercel
+
+El frontend es una SPA en Vite + React con enrutamiento de cliente (`react-router-dom`). Para desplegarlo en Vercel:
+
+### Paso 1: Subir cambios a GitHub / GitLab
+Asegúrate de que tus cambios estén subidos a tu repositorio Git.
+
+### Paso 2: Importar el Proyecto en Vercel
+1. Inicia sesión en [Vercel](https://vercel.com) y selecciona **Add New... > Project**.
+2. Selecciona tu repositorio `GearTrace`.
+3. En **Root Directory**, haz clic en **Edit** y selecciona la carpeta **`frontend`**.
+4. Deja el Framework Preset como **Vite**.
+5. Build Command: `npm run build`
+6. Output Directory: `dist`
+
+### Paso 3: Configurar Variables de Entorno en Vercel
+En la sección **Environment Variables** del dashboard de Vercel agrega:
+- `VITE_API_URL`: La URL pública de tu backend (ej. `https://tu-taller.ngrok-free.app` o tu IP estática / dominio).
+- `VITE_SOCKET_URL`: La misma URL pública del backend para la conexión en tiempo real de Socket.io (ej. `https://tu-taller.ngrok-free.app`).
+
+### Paso 4: Desplegar
+Haz clic en **Deploy**. El archivo `frontend/vercel.json` se encargará automáticamente de reescribir todas las rutas hacia `index.html`, evitando errores 404 al recargar páginas.
+
+---
+
+## 🗣️ 4. Conectar Alexa con el Backend (Túnel HTTPS Ngrok)
+
+Para que la Skill de Alexa pueda comunicarse con el backend (ya sea corriendo en tu PC en CachyOS o en la Raspberry Pi):
+
+1. **Instala e inicia Ngrok**:
+   ```bash
+   ngrok http 3000
+   ```
+   Ngrok te proporcionará una URL pública segura como:
+   `https://a1b2-c3d4.ngrok-free.app`
+
+2. **Configura el Webhook en la Consola de Alexa**:
+   - Ingresa a la [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
+   - Selecciona tu Skill **GearTrace**.
+   - En la pestaña **Build**, entra en **Endpoint**.
+   - Selecciona **HTTPS**.
+   - En **Default Region**, ingresa tu URL completa:
+     ```
+     https://a1b2-c3d4.ngrok-free.app/api/webhook/alexa
+     ```
+   - En el menú desplegable del certificado SSL, selecciona:
+     `My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority`.
+   - Haz clic en **Save Endpoints**.
+
+3. **Prueba por Voz o Simulador**:
+   - En la pestaña **Test** de la consola de Alexa, escribe o di:
+     - *"Abre GearTrace"*
+     - *"Busca filtro de aceite"*
+     - *"Qué piezas tienen stock bajo"*
+   - Verás inmediatamente en tu terminal la respuesta y el LED correspondiente activándose (en la tira real o en el log de simulación), además de la notificación instantánea en el Dashboard Web de React.
+
+---
+
+## 🔑 Credenciales de Prueba (Seed Data)
+
+Tras ejecutar `npm run prisma:seed`, tienes a disposición los siguientes usuarios de prueba (contraseña para todos: `password123`):
+
+| Rol | Correo | Permisos |
+| :--- | :--- | :--- |
+| **Gerente** | `gerente@geartrace.com` | Acceso completo, edición de inventario y prueba de LEDs |
+| **Mecánico** | `mecanico@geartrace.com` | Búsqueda de piezas, control de LEDs |
+| **Cliente** | `cliente@geartrace.com` | Consulta básica de estado |
+
+---
+
+## 🛠️ Resumen de Comandos Frecuentes
+
+| Tarea | Backend | Frontend |
+| :--- | :--- | :--- |
+| **Instalar dependencias** | `npm install` | `npm install` |
+| **Desarrollo** | `npm run start:dev` | `npm run dev` |
+| **Compilar producción** | `npm run build` | `npm run build` |
+| **Prisma Generate** | `npm run prisma:generate` | N/A |
+| **Prisma Migraciones** | `npm run prisma:migrate` | N/A |
+| **Cargar Datos Demo** | `npm run prisma:seed` | N/A |
+
+================
 File: backend/src/inventory/inventory.controller.ts
 ================
 import {
@@ -4262,179 +4739,6 @@ export class LedControllerService implements OnModuleInit, OnModuleDestroy {
 }
 
 ================
-File: backend/src/main.ts
-================
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
-import { AppModule } from './app.module';
-
-async function bootstrap() {
-  const logger = new Logger('GearTrace');
-  const app = await NestFactory.create(AppModule);
-
-  // Prefijo global de la API REST
-  app.setGlobalPrefix('api');
-
-  // Validación automática de DTOs con class-validator
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,       // Elimina campos no declarados en el DTO
-      forbidNonWhitelisted: true,
-      transform: true,       // Transforma payloads al tipo del DTO
-    }),
-  );
-
-  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
-  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const defaultAllowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3000',
-    'http://geartrace.local',
-    ...configuredOrigins,
-  ];
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
-      if (defaultAllowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // 3. Despliegues en Vercel (*.vercel.app y subdominios)
-      if (/^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // 4. Dominios de túnel Ngrok (*.ngrok-free.app, *.ngrok.app)
-      if (/^https:\/\/([a-zA-Z0-9-]+\.)*ngrok(-free)?\.app$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // 5. Red local (Raspberry Pi y clientes LAN: 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-      if (
-        /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
-          origin,
-        )
-      ) {
-        return callback(null, true);
-      }
-
-      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
-      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-    credentials: true,
-  });
-
-  const port = process.env.PORT ?? 3000;
-  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
-  await app.listen(port, '0.0.0.0');
-
-  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
-  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
-  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
-}
-
-bootstrap();
-
-================
-File: backend/.env.example
-================
-# ─── Base de Datos ──────────────────────────────────────────────────────────
-# Debe coincidir con los valores del docker-compose.yml en la raíz
-POSTGRES_USER=geartrace
-POSTGRES_PASSWORD=geartrace_secret
-POSTGRES_DB=geartrace_db
-POSTGRES_PORT=5432
-POSTGRES_HOST=localhost
-
-# URL de conexión para Prisma ORM
-DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?schema=public"
-
-# ─── Aplicación NestJS ──────────────────────────────────────────────────────
-PORT=3000
-NODE_ENV=development
-
-# ─── CORS Origins ────────────────────────────────────────────────────────────
-# Orígenes adicionales separados por coma (ej. https://tu-app.vercel.app)
-# Ya se permiten por defecto: localhost:5173, localhost:3000, *.vercel.app, *.ngrok-free.app y la LAN 192.168.x.x
-CORS_ORIGIN=https://geartrace.vercel.app
-
-# ─── JWT Auth ───────────────────────────────────────────────────────────────
-# Cambia este secret en producción (mínimo 32 caracteres aleatorios)
-JWT_SECRET=geartrace-super-secret-key-change-in-production-2024
-JWT_EXPIRES_IN=8h
-
-# ─── Hardware IoT ───────────────────────────────────────────────────────────
-# Número total de LEDs en la tira WS2812B
-LED_COUNT=5
-# Pin GPIO en la Raspberry Pi (pin 18 = PWM0)
-LED_GPIO_PIN=18
-# Modo Simulación:
-# - CachyOS / PC Desarrollo: SIMULATE_HARDWARE=true (logs en consola, sin librerías nativas)
-# - Raspberry Pi (Hardware Real): SIMULATE_HARDWARE=false (controla pines GPIO reales vía rpi-ws281x-native)
-SIMULATE_HARDWARE=true
-
-# ─── Alexa Webhook ──────────────────────────────────────────────────────────
-# Skill ID de tu Alexa Custom Skill (opcional para desarrollo, validado en prod si es un ID real)
-ALEXA_SKILL_ID=amzn1.ask.skill.XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-
-================
-File: frontend/src/api/axios.ts
-================
-import axios from 'axios';
-
-// Obtener la URL base desde la variable de entorno o usar fallback por defecto
-const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-
-// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
-const baseURL = rawApiUrl.endsWith('/api')
-  ? rawApiUrl
-  : `${rawApiUrl.replace(/\/$/, '')}/api`;
-
-// Instancia de axios preconfigurada
-const api = axios.create({
-  baseURL,
-});
-
-// Interceptor para inyectar el token JWT en cada request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('geartrace_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Interceptor para manejar errores globalmente (ej. 401 Unauthorized)
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      // Si el token expira, limpiamos localstorage y forzamos login
-      localStorage.removeItem('geartrace_token');
-      localStorage.removeItem('geartrace_user');
-      window.dispatchEvent(new Event('auth:unauthorized'));
-    }
-    return Promise.reject(error);
-  }
-);
-
-export default api;
-
-================
 File: frontend/src/components/Dashboard.tsx
 ================
 import { useEffect, useState } from 'react';
@@ -4697,6 +5001,85 @@ export default function Dashboard() {
 }
 
 ================
+File: frontend/src/components/Layout.tsx
+================
+import { NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
+
+export default function Layout() {
+  const { user, logout } = useAuth();
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
+      isActive
+        ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
+        : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+    }`;
+
+  return (
+    <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-64 bg-slate-800/80 backdrop-blur-md border-r border-slate-700 flex flex-col z-20">
+        <div className="h-16 flex items-center px-6 border-b border-slate-700 gap-3">
+          <div className="h-8 w-8 bg-brand-500/20 text-brand-500 rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.3)]">
+            <Wrench size={18} />
+          </div>
+          <span className="text-xl font-bold tracking-tight">GearTrace</span>
+        </div>
+
+        <div className="p-4 border-b border-slate-700/50">
+          <div className="font-medium truncate">{user?.name}</div>
+          <div className="text-xs text-brand-400 mt-1 uppercase tracking-wider font-semibold">
+            {user?.role}
+          </div>
+        </div>
+
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          <NavLink to="/dashboard" className={navLinkClass} end>
+            <LayoutDashboard size={20} /> Dashboard
+          </NavLink>
+          
+          {(user?.role === 'GERENTE' || user?.role === 'MECANICO') && (
+            <NavLink to="/inventory" className={navLinkClass}>
+              <Package size={20} /> Inventario
+            </NavLink>
+          )}
+          
+          {user?.role === 'GERENTE' && (
+            <NavLink to="/users" className={navLinkClass}>
+              <Users size={20} /> Usuarios
+            </NavLink>
+          )}
+        </nav>
+
+        <div className="p-4 border-t border-slate-700">
+          <button 
+            onClick={logout}
+            className="flex items-center gap-3 px-3 py-2.5 w-full text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-colors"
+          >
+            <LogOut size={20} /> Cerrar Sesión
+          </button>
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <main className="flex-1 flex flex-col relative overflow-hidden">
+        {/* Ambient background blur */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-900/30 rounded-full blur-[100px] pointer-events-none -translate-y-1/2 translate-x-1/2"></div>
+        
+        <header className="h-16 flex items-center px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10">
+          <h1 className="text-xl font-semibold">Panel de Control</h1>
+        </header>
+        
+        <div className="flex-1 overflow-auto p-8 z-10">
+          <Outlet />
+        </div>
+      </main>
+    </div>
+  );
+}
+
+================
 File: frontend/src/App.tsx
 ================
 import { Routes, Route, Navigate } from 'react-router-dom'
@@ -4752,310 +5135,6 @@ function App() {
 }
 
 export default App
-
-================
-File: frontend/tsconfig.json
-================
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-
-    /* Bundler mode */
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "types": ["vite/client"],
-
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
-  },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
-}
-
-================
-File: README.md
-================
-# ⚙️ GearTrace — Sistema Inteligente de Gestión de Inventario para Taller Mecánico
-
-GearTrace es una plataforma de logística y gestión visual de herramientas y repuestos diseñada para talleres mecánicos. Integra un dashboard interactivo en tiempo real con una guía luminosa IoT (tira de LEDs direccionables WS2812B) y control por voz mediante Amazon Alexa, permitiendo a mecánicos y gerentes localizar piezas al instante en estanterías físicas.
-
----
-
-## 🏗️ Arquitectura del Sistema
-
-```
-                         ┌────────────────────────────────────────┐
-                         │           Amazon Alexa Echo            │
-                         └──────────────────┬─────────────────────┘
-                                            │ (Voz: "Busca filtro...")
-                                            ▼
-┌───────────────────────┐        ┌───────────────────────┐        ┌───────────────────────┐
-│   Frontend en Vercel  │        │     Túnel HTTPS       │        │   Red Local (LAN)     │
-│   (React + Vite SPA)  │        │   (Ngrok / Cloudflare)│        │   (PC / Móvil Taller) │
-└───────────┬───────────┘        └──────────┬────────────┘        └───────────┬───────────┘
-            │ HTTPS / WSS                   │ POST /api/webhook/alexa         │ HTTP / WS
-            ▼                               ▼                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                             GearTrace Backend (NestJS 10)                               │
-│  ┌─────────────────────────┐   ┌──────────────────────────┐   ┌──────────────────────┐  │
-│  │   Auth & Inventory API  │   │  LedControllerService    │   │  Socket.io Gateway   │  │
-│  │   (Prisma ORM + JWT)    │   │  (Detección dinámica HW) │   │  (Eventos en vivo)   │  │
-│  └───────────┬─────────────┘   └─────────────┬────────────┘   └──────────┬───────────┘  │
-└──────────────┼───────────────────────────────┼───────────────────────────┼──────────────┘
-               │                               │                           │
-               ▼                               ▼                           ▼
-     ┌──────────────────┐            ┌───────────────────┐       ┌───────────────────┐
-     │  PostgreSQL 15   │            │ Hardware Físico   │       │ Dashboard Web     │
-     │  (Docker Compose)│            │ Tira LED WS2812B  │       │ Actualización     │
-     │                  │            │ (GPIO 18 / PWM0)  │       │ en tiempo real    │
-     └──────────────────┘            └───────────────────┘       └───────────────────┘
-```
-
-El monorepo se compone de:
-- **`frontend/`**: Single Page Application construida con **React 18**, **Vite**, **TailwindCSS** y **Socket.io Client**. Listo para desplegar en **Vercel**.
-- **`backend/`**: Servidor **NestJS**, **Prisma ORM**, autenticación **JWT**, **Socket.io Gateway** y Webhook compatible con **Alexa Skills Kit**.
-- **`docker-compose.yml`**: Contenedor de **PostgreSQL 15 Alpine** y opcionalmente **pgAdmin4**.
-
----
-
-## 🚀 Entornos de Ejecución
-
-GearTrace está preparado para funcionar sin cambios en el código en dos entornos principales:
-1. **CachyOS / Linux x86_64 / macOS / Windows** (Entorno de Desarrollo Local)
-2. **Raspberry Pi 4 / Raspberry Pi OS ARM64** (Entorno de Producción con Hardware Físico)
-
----
-
-## 💻 1. Ejecución en Entorno Local (CachyOS / Linux x86_64)
-
-En este entorno no hay pines GPIO de Raspberry Pi. El backend detecta la arquitectura y/o la variable de entorno y activa de forma automática el **modo simulación**, imprimiendo los cambios de los LEDs por consola.
-
-### Prerrequisitos
-- Node.js 18+ (recomendado Node.js 20 LTS o superior)
-- Docker y Docker Compose
-- Git
-
-### Paso 1: Clonar el repositorio
-```bash
-git clone https://github.com/tu-usuario/GearTrace.git
-cd GearTrace
-```
-
-### Paso 2: Levantar la Base de Datos
-Inicia el contenedor de PostgreSQL:
-```bash
-docker compose up -d postgres
-```
-
-### Paso 3: Configurar y Ejecutar el Backend
-1. Ingresa a la carpeta del backend y crea el archivo `.env`:
-   ```bash
-   cd backend
-   cp .env.example .env
-   ```
-2. Asegúrate de que `.env` tenga:
-   ```env
-   SIMULATE_HARDWARE=true
-   PORT=3000
-   DATABASE_URL="postgresql://geartrace:geartrace_secret@localhost:5432/geartrace_db?schema=public"
-   ```
-3. Instala dependencias y genera el cliente Prisma:
-   ```bash
-   npm install
-   npx prisma generate
-   ```
-4. Aplica las migraciones e inserta los datos iniciales (Seed):
-   ```bash
-   npm run prisma:migrate
-   npm run prisma:seed
-   ```
-5. Inicia el servidor en modo desarrollo:
-   ```bash
-   npm run start:dev
-   ```
-   > Verás en la consola:
-   > `⚠️  Hardware GPIO no disponible. Modo simulación activado.`
-   > `🚀 GearTrace Backend corriendo en: http://localhost:3000/api`
-
-### Paso 4: Configurar y Ejecutar el Frontend
-1. En otra terminal, ingresa a la carpeta del frontend y crea el archivo `.env`:
-   ```bash
-   cd frontend
-   cp .env.example .env
-   ```
-2. Contenido de `frontend/.env`:
-   ```env
-   VITE_API_URL=http://localhost:3000
-   VITE_SOCKET_URL=http://localhost:3000
-   ```
-3. Instala dependencias y arranca el servidor de desarrollo Vite:
-   ```bash
-   npm install
-   npm run dev
-   ```
-4. Abre tu navegador en [http://localhost:5173](http://localhost:5173).
-
----
-
-## 🍓 2. Despliegue en Raspberry Pi 4 (Entorno Físico con Hardware)
-
-En la Raspberry Pi, el backend se conecta directamente a los pines físicos para controlar la tira de LEDs WS2812B.
-
-### Conexión del Circuito (Tira LED WS2812B)
-| Pin Tira LED | Conexión en Raspberry Pi / Fuente |
-| :--- | :--- |
-| **5V (VCC)** | Fuente externa de 5V (2A o superior) |
-| **GND** | GND de la fuente externa **Y** Pin 6/9/14/20/25/30/34/39 (GND) de la Raspberry Pi |
-| **DIN (Data)** | Pin Físico 12 (**GPIO 18 / PWM0**) vía resistencia de 330Ω - 470Ω |
-
-> ⚠️ **Importante**: Conecta la masa (GND) de la fuente de alimentación externa con la masa (GND) de la Raspberry Pi para cerrar el circuito de referencia lógica.
-
-### Prerrequisitos en Raspberry Pi OS (64-bit)
-Instala las herramientas de compilación nativa necesarias para `rpi-ws281x-native`:
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential python3 make g++ docker.io docker-compose-v2
-```
-
-### Paso 1: Levantar PostgreSQL en la Raspberry Pi
-En la raíz del proyecto:
-```bash
-docker compose up -d postgres
-```
-
-### Paso 2: Configurar el Backend en la Raspberry Pi
-1. Ve a `backend/` y crea el archivo `.env`:
-   ```bash
-   cd backend
-   cp .env.example .env
-   ```
-2. Configura las variables para hardware real:
-   ```env
-   PORT=3000
-   NODE_ENV=production
-   SIMULATE_HARDWARE=false
-   LED_COUNT=5
-   LED_GPIO_PIN=18
-   DATABASE_URL="postgresql://geartrace:geartrace_secret@localhost:5432/geartrace_db?schema=public"
-   ```
-3. Instala las dependencias (incluyendo el módulo nativo de LEDs):
-   ```bash
-   npm install
-   npm run prisma:generate
-   npm run prisma:migrate:deploy
-   npm run prisma:seed
-   ```
-4. Compila el backend:
-   ```bash
-   npm run build
-   ```
-
-### Paso 3: Ejecución con Permisos de Hardware
-El módulo nativo `rpi-ws281x-native` requiere acceso a `/dev/mem` o DMA para generar la señal PWM a 800 kHz. Ejecútalo con privilegios de root:
-```bash
-sudo node dist/main.js
-```
-*(Opcional con PM2 para auto-arranque al encender la Raspberry Pi)*:
-```bash
-sudo npm install -g pm2
-sudo pm2 start dist/main.js --name geartrace-backend
-sudo pm2 save
-sudo pm2 startup
-```
-
----
-
-## 🌐 3. Despliegue del Frontend en Vercel
-
-El frontend es una SPA en Vite + React con enrutamiento de cliente (`react-router-dom`). Para desplegarlo en Vercel:
-
-### Paso 1: Subir cambios a GitHub / GitLab
-Asegúrate de que tus cambios estén subidos a tu repositorio Git.
-
-### Paso 2: Importar el Proyecto en Vercel
-1. Inicia sesión en [Vercel](https://vercel.com) y selecciona **Add New... > Project**.
-2. Selecciona tu repositorio `GearTrace`.
-3. En **Root Directory**, haz clic en **Edit** y selecciona la carpeta **`frontend`**.
-4. Deja el Framework Preset como **Vite**.
-5. Build Command: `npm run build`
-6. Output Directory: `dist`
-
-### Paso 3: Configurar Variables de Entorno en Vercel
-En la sección **Environment Variables** del dashboard de Vercel agrega:
-- `VITE_API_URL`: La URL pública de tu backend (ej. `https://tu-taller.ngrok-free.app` o tu IP estática / dominio).
-- `VITE_SOCKET_URL`: La misma URL pública del backend para la conexión en tiempo real de Socket.io (ej. `https://tu-taller.ngrok-free.app`).
-
-### Paso 4: Desplegar
-Haz clic en **Deploy**. El archivo `frontend/vercel.json` se encargará automáticamente de reescribir todas las rutas hacia `index.html`, evitando errores 404 al recargar páginas.
-
----
-
-## 🗣️ 4. Conectar Alexa con el Backend (Túnel HTTPS Ngrok)
-
-Para que la Skill de Alexa pueda comunicarse con el backend (ya sea corriendo en tu PC en CachyOS o en la Raspberry Pi):
-
-1. **Instala e inicia Ngrok**:
-   ```bash
-   ngrok http 3000
-   ```
-   Ngrok te proporcionará una URL pública segura como:
-   `https://a1b2-c3d4.ngrok-free.app`
-
-2. **Configura el Webhook en la Consola de Alexa**:
-   - Ingresa a la [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
-   - Selecciona tu Skill **GearTrace**.
-   - En la pestaña **Build**, entra en **Endpoint**.
-   - Selecciona **HTTPS**.
-   - En **Default Region**, ingresa tu URL completa:
-     ```
-     https://a1b2-c3d4.ngrok-free.app/api/webhook/alexa
-     ```
-   - En el menú desplegable del certificado SSL, selecciona:
-     `My development endpoint is a sub-domain of a domain that has a wildcard certificate from a certificate authority`.
-   - Haz clic en **Save Endpoints**.
-
-3. **Prueba por Voz o Simulador**:
-   - En la pestaña **Test** de la consola de Alexa, escribe o di:
-     - *"Abre GearTrace"*
-     - *"Busca filtro de aceite"*
-     - *"Qué piezas tienen stock bajo"*
-   - Verás inmediatamente en tu terminal la respuesta y el LED correspondiente activándose (en la tira real o en el log de simulación), además de la notificación instantánea en el Dashboard Web de React.
-
----
-
-## 🔑 Credenciales de Prueba (Seed Data)
-
-Tras ejecutar `npm run prisma:seed`, tienes a disposición los siguientes usuarios de prueba (contraseña para todos: `password123`):
-
-| Rol | Correo | Permisos |
-| :--- | :--- | :--- |
-| **Gerente** | `gerente@geartrace.com` | Acceso completo, edición de inventario y prueba de LEDs |
-| **Mecánico** | `mecanico@geartrace.com` | Búsqueda de piezas, control de LEDs |
-| **Cliente** | `cliente@geartrace.com` | Consulta básica de estado |
-
----
-
-## 🛠️ Resumen de Comandos Frecuentes
-
-| Tarea | Backend | Frontend |
-| :--- | :--- | :--- |
-| **Instalar dependencias** | `npm install` | `npm install` |
-| **Desarrollo** | `npm run start:dev` | `npm run dev` |
-| **Compilar producción** | `npm run build` | `npm run build` |
-| **Prisma Generate** | `npm run prisma:generate` | N/A |
-| **Prisma Migraciones** | `npm run prisma:migrate` | N/A |
-| **Cargar Datos Demo** | `npm run prisma:seed` | N/A |
 
 ================
 File: backend/package.json
@@ -5157,85 +5236,6 @@ File: backend/package.json
   "prisma": {
     "schema": "prisma/schema.prisma"
   }
-}
-
-================
-File: frontend/src/components/Layout.tsx
-================
-import { NavLink, Outlet } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
-
-export default function Layout() {
-  const { user, logout } = useAuth();
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
-      isActive
-        ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
-        : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
-    }`;
-
-  return (
-    <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-800/80 backdrop-blur-md border-r border-slate-700 flex flex-col z-20">
-        <div className="h-16 flex items-center px-6 border-b border-slate-700 gap-3">
-          <div className="h-8 w-8 bg-brand-500/20 text-brand-500 rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.3)]">
-            <Wrench size={18} />
-          </div>
-          <span className="text-xl font-bold tracking-tight">GearTrace</span>
-        </div>
-
-        <div className="p-4 border-b border-slate-700/50">
-          <div className="font-medium truncate">{user?.name}</div>
-          <div className="text-xs text-brand-400 mt-1 uppercase tracking-wider font-semibold">
-            {user?.role}
-          </div>
-        </div>
-
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <NavLink to="/dashboard" className={navLinkClass} end>
-            <LayoutDashboard size={20} /> Dashboard
-          </NavLink>
-          
-          {(user?.role === 'GERENTE' || user?.role === 'MECANICO') && (
-            <NavLink to="/inventory" className={navLinkClass}>
-              <Package size={20} /> Inventario
-            </NavLink>
-          )}
-          
-          {user?.role === 'GERENTE' && (
-            <NavLink to="/users" className={navLinkClass}>
-              <Users size={20} /> Usuarios
-            </NavLink>
-          )}
-        </nav>
-
-        <div className="p-4 border-t border-slate-700">
-          <button 
-            onClick={logout}
-            className="flex items-center gap-3 px-3 py-2.5 w-full text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-colors"
-          >
-            <LogOut size={20} /> Cerrar Sesión
-          </button>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 flex flex-col relative overflow-hidden">
-        {/* Ambient background blur */}
-        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-900/30 rounded-full blur-[100px] pointer-events-none -translate-y-1/2 translate-x-1/2"></div>
-        
-        <header className="h-16 flex items-center px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10">
-          <h1 className="text-xl font-semibold">Panel de Control</h1>
-        </header>
-        
-        <div className="flex-1 overflow-auto p-8 z-10">
-          <Outlet />
-        </div>
-      </main>
-    </div>
-  );
 }
 
 

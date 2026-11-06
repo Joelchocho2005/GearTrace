@@ -46,7 +46,8 @@ export interface LedActivatedPayload {
 }
 
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: { origin: ['https://gear-trace.vercel.app', 'http://localhost:5173'],
+    credentials: true,},
   namespace: '/',
   transports: ['websocket', 'polling'],
 })

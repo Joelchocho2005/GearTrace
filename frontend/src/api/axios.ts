@@ -1,5 +1,5 @@
 import axios from 'axios';
-
+axios.defaults.headers.common['ngrok-skip-browser-warning'] = '69420';
 // Obtener la URL base desde la variable de entorno o usar fallback por defecto
 const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
