@@ -116,7 +116,8 @@ Fuente: `backend/clinerules.md`.
 ### Backend: autorización
 
 - `GERENTE`: acceso administrativo y operativo completo.
-- `MECANICO`: inventario, órdenes, proveedores y hardware.
+- `MECANICO`: inventario, proveedores, hardware y **solo las órdenes de
+  trabajo asignadas a él** (lectura y operación; ver `workOrderScope`).
 - `CLIENTE`: únicamente sus vehículos, sus citas y sus órdenes.
 - El registro público fuerza el rol `CLIENTE`.
 - La ruta administrativa para crear usuarios es:
@@ -157,8 +158,24 @@ Fuente: `backend/clinerules.md`.
 - `PATCH /api/service/work-orders/:id/diagnosis`
 - `PATCH /api/service/work-orders/:id/close`
 
-Cerrar una orden descuenta sus `WorkOrderItem` del inventario dentro de una
-transacción. La operación falla si no hay stock suficiente.
+**RF-INV-13 — el stock se descuenta al registrar el repuesto, no al cerrar:**
+
+- `POST /api/work-orders/:id/parts` (`{ partId, quantity }`) y los `parts`
+  iniciales de `POST /api/work-orders` descuentan `Part.quantity` y registran
+  el `UsedPart` en la misma `prisma.$transaction` (helper privado
+  `consumePart`). Stock insuficiente → `409 ConflictException` con disponible y
+  solicitado; no se registra nada. Si la pieza ya está en la orden, suma la
+  cantidad.
+- El descuento es un `updateMany` condicionado a `quantity >= cantidad`
+  (atómico: el stock nunca queda negativo con peticiones simultáneas) y la
+  orden se bloquea con `SELECT ... FOR UPDATE` mientras se agrega.
+- `PATCH /api/service/work-orders/:id/close` solo pasa la orden a `CONCLUIDO`
+  (`finalCost`, `completedAt`); **no toca inventario**. A una orden concluida
+  no se le agregan repuestos.
+- Eliminar una orden no concluida devuelve sus repuestos al inventario en la
+  misma transacción.
+- `PATCH .../status` no acepta `CONCLUIDO`; al pasar por primera vez a
+  `EN_PROCESO` se registra `startedAt` (reanudar no lo reinicia).
 
 #### Proveedores (reposición)
 
@@ -179,29 +196,44 @@ comparten prefijo (p. ej. `/api/suppliers/low-stock`).
 | Ruta | Roles | `DELETE` | Reglas |
 | --- | --- | --- | --- |
 | `/api/users` | `GERENTE` | `GERENTE` | Hashea con bcrypt, nunca devuelve `password`, no permite borrarse a sí mismo; con FK → 409 (usar desactivar). |
-| `/api/vehicles` | `GERENTE`, `MECANICO` | `GERENTE` | Placa/VIN únicos; 409 si tiene órdenes o citas. |
+| `/api/vehicles` | `GERENTE`, `MECANICO` | `GERENTE` | RF-SER-01: placa normalizada (trim + mayúsculas) y única sin distinguir mayúsculas; dueño debe ser `CLIENTE` activo; 409 si tiene órdenes o citas. |
 | `/api/appointments` | `GERENTE`, `MECANICO` | `GERENTE` | Fecha futura; citas `COMPLETADA`/`CANCELADA` no se editan. |
-| `/api/work-orders` | `GERENTE`, `MECANICO` | `GERENTE` | `PATCH` no acepta `CERRADA` (usar `/api/service/work-orders/:id/close`); órdenes cerradas no se editan ni borran. |
+| `/api/work-orders` (+ `POST /:id/parts`) | `GERENTE`, `MECANICO` | `GERENTE` | RF-INV-13: `POST /:id/parts` descuenta stock (ver arriba). RF-SER-05: `number` lo genera el servidor (`OT-YYYY-NNN`, no se acepta en el body). MECANICO solo ve/opera sus órdenes (ajenas → 404), se autoasigna al crear y no puede asignar a otro (403). Acepta `mileage`. `PATCH` no acepta `CONCLUIDO` (usar `/api/service/work-orders/:id/close`); órdenes concluidas no se editan ni borran. |
 | `/api/suppliers` | `GERENTE`, `MECANICO` | `GERENTE` | `GET` conserva `_count.purchaseOrders`; 409 si tiene pedidos. |
 | `/api/purchases` | `GERENTE`, `MECANICO` | `GERENTE` | `POST` delega en `SupplierService.createPurchaseOrder`; solo pedidos `PENDIENTE` se editan; `RECIBIDA` solo vía `/receive`; recibidos no se borran. |
-| `/api/invoices` | `GERENTE` | `GERENTE` | Solo órdenes `CERRADA`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost`, `total = subtotal + tax`; pagadas no se editan ni borran. |
+| `/api/invoices` | `GERENTE` | `GERENTE` | Solo órdenes `CONCLUIDO`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost`, `total = subtotal + tax`; pagadas no se editan ni borran. |
 
 Las rutas legadas `/api/service/vehicles*` y `/api/service/work-orders*`
-siguen activas porque las usa el frontend.
+siguen activas porque las usa el frontend, pero **delegan** en
+`VehiclesService` y `WorkOrdersService` (misma validación de placa, mismo
+generador de código y mismo alcance por mecánico). `ServiceService` solo
+conserva las transiciones estado/diagnóstico/cierre, también con
+`workOrderScope`.
+
+#### Órdenes de trabajo: código y alcance
+
+- `src/work-orders/work-order-number.ts`: `nextWorkOrderNumber(tx)` calcula
+  `OT-YYYY-NNN` (correlativo por año, MAX numérico) bajo
+  `pg_advisory_xact_lock`; debe llamarse dentro de la transacción que crea la
+  orden.
+- `src/work-orders/work-order-scope.ts`: `workOrderScope(user)` → GERENTE
+  `{}`, MECANICO `{ mechanicId }`, CLIENTE `{ vehicle.ownerId }`. Toda
+  consulta o mutación de órdenes por id usa `findFirst({ id, ...scope })`.
 
 ### Backend: Prisma
 
 Modelos principales:
 
 - `User`, `Box`, `Part`, `SearchLog`
-- `Vehicle`, `WorkOrder`, `WorkOrderItem`, `Appointment`
+- `Vehicle`, `WorkOrder` (incluye `mileage`), `UsedPart` (tabla `used_parts`), `Appointment`
 - `Supplier`, `PurchaseOrder`, `PurchaseOrderItem`
 - `Invoice` (facturación: 1 factura por `WorkOrder`, `clientId` → `User`)
 
 Enums:
 
 - `Role`
-- `WorkOrderStatus`: `PENDIENTE`, `EN_DIAGNOSTICO`, `EN_PROGRESO`, `CERRADA`
+- `WorkOrderStatus`: `EN_DIAGNOSTICO` (inicial) → `EN_PROCESO` ⇄
+  `ESPERA_REPUESTOS` → `CONCLUIDO` (solo vía `/close`)
 - `AppointmentStatus`
 - `PurchaseOrderStatus`
 - `InvoiceStatus`: `PENDIENTE`, `PAGADA`
@@ -220,18 +252,51 @@ npm run prisma:studio
 Después de cambiar `prisma/schema.prisma`, usar una migración con nombre
 descriptivo y verificar el cliente generado.
 
+#### Convención y estabilidad de nombres (Prisma)
+
+- Modelos en inglés, `PascalCase` y singular; tablas con `@@map` en
+  `snake_case` plural (`UsedPart` → `used_parts`); campos en `camelCase` con
+  `@map` a `snake_case` cuando tienen más de una palabra. Valores de enums en
+  español y MAYÚSCULAS.
+- **Renombrar solo por un cambio fuerte**: el significado del dominio cambió
+  o el ERS exige otro término (ej.: `WorkOrderItem` → `UsedPart`). No se
+  renombra por estética, sinónimos o preferencia personal (ej.: `UsedPart` →
+  `ConsumedPart` no se hace).
+- Todo renombrado o cambio de valores de enum lleva una migración escrita a
+  mano que conserve datos: `ALTER TABLE ... RENAME` (más secuencia, PK, FKs e
+  índices) y `CASE` para mapear valores de enums. Nunca aceptar el
+  `DROP TABLE`/`CREATE TABLE` que genera Prisma para un renombrado.
+- Verificar con
+  `npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script`
+  (debe salir vacío) y aplicar con `npx prisma migrate deploy`. En entornos no
+  interactivos (agentes) `migrate dev` falla: crear la carpeta de migración a
+  mano.
+- Un renombrado actualiza en el mismo cambio: backend, `seed.ts`, tipos del
+  frontend (`src/api/types.ts`, `src/utils/status.ts`) y este archivo.
+
 ## 5. CORS, Ngrok y WebSockets
 
-`backend/src/main.ts` acepta:
+Política única en `backend/src/common/cors.ts` (`isAllowedOrigin`), usada por
+`main.ts` (HTTP) y `led/led.gateway.ts` (Socket.io). Acepta:
 
-- Dominios `*.vercel.app`.
-- Hostnames que contengan `ngrok`.
-- `localhost`, `127.0.0.1`, `::1`.
-- Direcciones privadas de red local.
+- Orígenes exactos de `CORS_ORIGIN` (coma), p. ej. el dominio de producción
+  de Vercel. **El dominio de Vercel debe estar aquí explícitamente.**
+- Túneles ngrok solo por HTTPS y por sufijo: `*.ngrok-free.app`,
+  `*.ngrok-free.dev`, `*.ngrok.app`, `*.ngrok.dev`, `*.ngrok.io`.
+- `localhost`, `127.0.0.1`, `::1`, `geartrace.local` y red privada
+  (`10.x`, `192.168.x`, `172.16-31.x`).
+- `*.vercel.app` (previews) solo con `CORS_ALLOW_VERCEL_PREVIEWS=true`.
+- Peticiones sin `Origin` (Alexa, curl).
 
-El header `ngrok-skip-browser-warning` debe permanecer en `allowedHeaders`.
+No volver a usar coincidencias tipo `includes('ngrok')` ni `*.vercel.app`
+abierto: aceptan dominios de terceros. `credentials: true`, preflight cacheado
+(`maxAge: 600`) y un origen rechazado responde sin cabeceras CORS (no 500).
+El header `ngrok-skip-browser-warning` debe permanecer en
+`CORS_ALLOWED_HEADERS`.
 
-`backend/src/led/led.gateway.ts` usa una política equivalente para Socket.io.
+Socket.io: el servidor solo acepta `transports: ['websocket']` (el polling por
+XHR recibe la página de advertencia de ngrok). Como CORS no aplica al upgrade
+WebSocket, `allowRequest` valida el `Origin` con la misma política.
 El gateway soporta los eventos:
 
 - Servidor a cliente: `hw:status`, `led:activated`, `led:off`,
@@ -249,8 +314,10 @@ Fuente: `frontend/clinerules.md`.
   `frontend/src/api/axios.ts`.
 - Axios agrega automáticamente el JWT desde `localStorage` usando la clave
   `geartrace_token`.
-- Axios agrega globalmente:
-  `ngrok-skip-browser-warning: 69420`.
+- La instancia `api` envía `ngrok-skip-browser-warning: true` (en la
+  instancia, no en `axios.defaults`). Si una respuesta llega como
+  `text/html` (advertencia de ngrok o túnel caído) se rechaza como error
+  `ERR_UNEXPECTED_HTML` en lugar de romper las vistas que esperan JSON.
 - Los errores HTTP 401 limpian la sesión y disparan `auth:unauthorized`.
 
 ### Frontend: capa API
@@ -262,8 +329,10 @@ Fuente: `frontend/clinerules.md`.
   `remove`.
 - `src/api/resources.ts`: `usersApi`, `vehiclesApi`, `appointmentsApi`,
   `workOrdersApi`, `suppliersApi`, `purchasesApi`, `invoicesApi`, más
-  `clientApi` (endpoints `/client/*`) e `inventoryFlowsApi` (cerrar orden,
-  recibir pedido).
+  `clientApi` (endpoints `/client/*`), `inventoryApi.searchParts`
+  (`/inventory/search/:query`, máx. 5), `workOrderActionsApi` (`addUsedPart`
+  → `POST /work-orders/:id/parts`; `conclude` → `/service/.../close`) e
+  `inventoryFlowsApi` (recibir pedido).
 - Las vistas nuevas deben consumir estos servicios en lugar de llamar
   `api.get(...)` con rutas sueltas.
 
@@ -291,7 +360,7 @@ en otro lugar.
 | `/inventory` | `GERENTE`, `MECANICO` | `InventoryList` |
 | `/usuarios` | `GERENTE` | `UsuariosPage` (pestañas Listado / Gestión de accesos = `UsersList`) |
 | `/vehiculos` | `GERENTE`, `MECANICO` | `VehiculosPage` |
-| `/ordenes-trabajo` | `GERENTE`, `MECANICO` | `OrdenesTrabajoPage` (pestañas Listado / Tablero = `WorkOrdersBoard`) |
+| `/ordenes-trabajo` | `GERENTE`, `MECANICO` | `OrdenesTrabajoPage` (pestañas Tablero = `WorkOrdersList` por defecto / Listado) |
 | `/citas` | `GERENTE`, `MECANICO`, `CLIENTE` | `CitasPage` (el CLIENTE usa `/api/client/appointments`) |
 | `/proveedores` | `GERENTE` | `ProveedoresPage` (pestañas Listado / Reposición = `SuppliersList`) |
 | `/compras` | `GERENTE` | `ComprasPage` |
@@ -317,6 +386,26 @@ redirigen a su equivalente en español (`legacyRedirects`).
 `Layout.tsx` renderiza `Sidebar.tsx`, que en móvil (< `md`) es un panel
 deslizable abierto desde el botón de menú del header.
 
+### Frontend: tablero de órdenes de trabajo
+
+`src/components/WorkOrders/`:
+
+- `WorkOrdersList.tsx`: Kanban por `WorkOrderStatus` (columnas de
+  `workOrderFlow.ts`), filtro local (OT, placa, cliente, mecánico), botón
+  "Nueva Orden" y apertura del detalle al hacer clic en una tarjeta. Las
+  respuestas reemplazan la orden en el estado local (`upsertOrder`).
+- `NewWorkOrderModal.tsx`: vehículo, motivo, kilometraje, costo estimado y,
+  solo para `GERENTE`, mecánico asignado (el MECANICO se autoasigna). No envía
+  `number`: lo genera el backend.
+- `WorkOrderDetailPanel.tsx`: panel lateral con vehículo/propietario,
+  transición de estado (`WORK_ORDER_TRANSITIONS`), diagnóstico, "Concluir"
+  (con costo final; tras `/close` recarga con `workOrdersApi.get` porque esa
+  respuesta no incluye mecánico ni factura) y "Repuestos utilizados".
+- `PartAutocomplete.tsx`: combobox accesible (teclado, `aria-*`) con debounce
+  de 250 ms y descarte de respuestas obsoletas; piezas sin stock no se pueden
+  elegir. Agregar descuenta stock en el backend (RF-INV-13); el 409 de stock
+  insuficiente se muestra con toast y se conserva la selección.
+
 ### Frontend: dashboards por rol
 
 `Dashboard.tsx` es únicamente un orquestador:
@@ -341,16 +430,21 @@ general del hardware y órdenes activas. Mantiene una conexión Socket.io
 - Ver sus órdenes asignadas.
 - Buscar repuestos por nombre o código.
 
-La conexión usa:
+La conexión se crea siempre con `createHardwareSocket()` de
+`src/api/socket.ts`:
 
 ```ts
-{
-  transports: ['websocket', 'polling'],
-  extraHeaders: {
-    'ngrok-skip-browser-warning': '69420',
-  },
-}
+io(VITE_SOCKET_URL, {
+  transports: ['websocket'], // sin polling (ngrok)
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 10000,
+  timeout: 10000,
+});
 ```
+
+No usar `extraHeaders`: el navegador no envía headers propios en el
+handshake WebSocket.
 
 #### Cliente
 
@@ -371,7 +465,8 @@ Usar `backend/.env.example` como referencia. Las variables principales son:
 - `DATABASE_URL`
 - `PORT`
 - `NODE_ENV`
-- `CORS_ORIGIN`
+- `CORS_ORIGIN` (incluye el dominio exacto de Vercel)
+- `CORS_ALLOW_VERCEL_PREVIEWS` (`false` por defecto)
 - `JWT_SECRET`
 - `JWT_EXPIRES_IN`
 - `LED_COUNT`

@@ -1,7 +1,9 @@
 import api from './axios';
 import { createCrudApi } from './crud';
 import type {
+  AddUsedPartPayload,
   AppUser,
+  InventoryPart,
   Appointment,
   CreateAppointmentPayload,
   CreateInvoicePayload,
@@ -72,10 +74,24 @@ export const clientApi = {
     (await api.post<Appointment>('/client/appointments', payload)).data,
 };
 
+/** Búsqueda de piezas para autocompletar (nombre, código o palabra clave). */
+export const inventoryApi = {
+  searchParts: async (query: string) =>
+    (await api.get<InventoryPart[]>(`/inventory/search/${encodeURIComponent(query)}`)).data,
+};
+
+/** Acciones operativas de una orden que no son CRUD. */
+export const workOrderActionsApi = {
+  /** RF-INV-13: registra el repuesto y descuenta stock en una transacción (409 si no alcanza). */
+  addUsedPart: async (id: number, payload: AddUsedPartPayload) =>
+    (await api.post<WorkOrder>(`/work-orders/${id}/parts`, payload)).data,
+  /** Pasa la orden a CONCLUIDO; no toca inventario. Responde sin mecánico/factura: recargar con workOrdersApi.get. */
+  conclude: async (id: number, finalCost?: number) =>
+    (await api.patch<WorkOrder>(`/service/work-orders/${id}/close`, { finalCost })).data,
+};
+
 /** Transiciones que mueven inventario; viven en endpoints transaccionales dedicados. */
 export const inventoryFlowsApi = {
-  closeWorkOrder: async (id: number, finalCost?: number) =>
-    (await api.patch<WorkOrder>(`/service/work-orders/${id}/close`, { finalCost })).data,
   receivePurchase: async (id: number) =>
     (await api.post<PurchaseOrder>(`/suppliers/purchase-orders/${id}/receive`)).data,
 };

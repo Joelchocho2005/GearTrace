@@ -42,8 +42,8 @@ export class InvoicesService {
     if (!order) {
       throw new NotFoundException(`Orden de trabajo con id ${dto.workOrderId} no encontrada`);
     }
-    if (order.status !== WorkOrderStatus.CERRADA) {
-      throw new ConflictException('Solo se pueden facturar órdenes de trabajo cerradas');
+    if (order.status !== WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('Solo se pueden facturar órdenes de trabajo concluidas');
     }
     if (order.invoice) {
       throw new ConflictException('La orden de trabajo ya tiene una factura');

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { Cpu, Search, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { createHardwareSocket } from '../api/socket';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Led { index: number; isActive: boolean; color?: string; partName?: string }
@@ -31,11 +32,7 @@ export default function MecanicoDashboard() {
     };
     void loadOrders();
 
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
-    const nextSocket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      extraHeaders: { 'ngrok-skip-browser-warning': '69420' },
-    });
+    const nextSocket = createHardwareSocket();
     setSocket(nextSocket);
     nextSocket.on('hw:status', (status: HwStatus) => {
       setHwStatus(status);

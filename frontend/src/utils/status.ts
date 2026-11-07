@@ -19,10 +19,10 @@ export const ROLE_META: Record<Role, StatusMeta> = {
 };
 
 export const WORK_ORDER_STATUS: Record<WorkOrderStatus, StatusMeta> = {
-  PENDIENTE: { label: 'Pendiente', tone: 'neutral' },
   EN_DIAGNOSTICO: { label: 'En diagnóstico', tone: 'info' },
-  EN_PROGRESO: { label: 'En progreso', tone: 'warning' },
-  CERRADA: { label: 'Cerrada', tone: 'success' },
+  EN_PROCESO: { label: 'En proceso', tone: 'brand' },
+  ESPERA_REPUESTOS: { label: 'Espera de repuestos', tone: 'warning' },
+  CONCLUIDO: { label: 'Concluido', tone: 'success' },
 };
 
 export const APPOINTMENT_STATUS: Record<AppointmentStatus, StatusMeta> = {

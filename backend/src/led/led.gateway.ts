@@ -10,6 +10,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { CORS_ALLOWED_HEADERS, corsOriginCallback, isAllowedOrigin } from '../common/cors';
 import { LedControllerService } from './led-controller.service';
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -47,46 +48,19 @@ export interface LedActivatedPayload {
 
 @WebSocketGateway({
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      try {
-        const { hostname, protocol } = new URL(origin);
-        const normalizedHostname = hostname.toLowerCase();
-        const isVercel = normalizedHostname.endsWith('.vercel.app');
-        const isNgrok = normalizedHostname.includes('ngrok');
-        const isLocalhost =
-          normalizedHostname === 'localhost' ||
-          normalizedHostname === '127.0.0.1' ||
-          normalizedHostname === '::1';
-        const isPrivateNetwork =
-          /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
-          /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
-
-        if (
-          (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
-          (protocol === 'http:' || protocol === 'https:')
-        ) {
-          return callback(null, true);
-        }
-      } catch {
-        // Socket.io rechazará el origen con formato inválido.
-      }
-
-      return callback(new Error(`Origen WebSocket no permitido: ${origin}`), false);
-    },
+    origin: corsOriginCallback,
     credentials: true,
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'ngrok-skip-browser-warning',
-    ],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
   },
   namespace: '/',
-  transports: ['websocket', 'polling'],
+  // Solo WebSocket: el long-polling (XHR) a través de ngrok recibe la página
+  // HTML de advertencia y rompe el handshake de Socket.io.
+  transports: ['websocket'],
+  // CORS no aplica al upgrade WebSocket: se valida el Origin explícitamente.
+  allowRequest: (request, callback) => {
+    const allowed = isAllowedOrigin(request.headers.origin);
+    callback(allowed ? null : 'Origen WebSocket no permitido', allowed);
+  },
 })
 export class LedGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect

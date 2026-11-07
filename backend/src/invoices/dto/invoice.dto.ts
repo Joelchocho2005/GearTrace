@@ -14,7 +14,7 @@ export class CreateInvoiceDto {
   @MaxLength(30)
   number: string;
 
-  /** La orden debe estar CERRADA y no tener factura previa */
+  /** La orden debe estar CONCLUIDO y no tener factura previa */
   @IsInt()
   @Min(1)
   workOrderId: number;

@@ -50,17 +50,31 @@ Directory Structure
 src/
   api/
     axios.ts
+    crud.ts
+    errors.ts
+    resources.ts
+    socket.ts
+    types.ts
   components/
     Inventory/
       InventoryList.tsx
       PartFormModal.tsx
     Suppliers/
       SuppliersList.tsx
+    ui/
+      DataTable.tsx
+      ResourceListPage.tsx
+      StatusBadge.tsx
+      ViewTabs.tsx
     Users/
       UsersList.tsx
       UsersManagement.tsx
     WorkOrders/
-      WorkOrdersBoard.tsx
+      NewWorkOrderModal.tsx
+      PartAutocomplete.tsx
+      WorkOrderDetailPanel.tsx
+      workOrderFlow.ts
+      WorkOrdersList.tsx
     AuditLogs.tsx
     ClienteDashboard.tsx
     Dashboard.tsx
@@ -69,8 +83,22 @@ src/
     Login.tsx
     MecanicoDashboard.tsx
     RoleProtectedRoute.tsx
+    Sidebar.tsx
   contexts/
     AuthContext.tsx
+  pages/
+    CitasPage.tsx
+    ComprasPage.tsx
+    FacturacionPage.tsx
+    OrdenesTrabajoPage.tsx
+    ProveedoresPage.tsx
+    UsuariosPage.tsx
+    VehiculosPage.tsx
+  routes/
+    routeRoles.ts
+  utils/
+    format.ts
+    status.ts
   App.tsx
   index.css
   main.tsx
@@ -94,19 +122,23 @@ Files
 ================
 File: src/api/axios.ts
 ================
-import axios from 'axios';
-axios.defaults.headers.common['ngrok-skip-browser-warning'] = '69420';
+import axios, { AxiosError } from 'axios';
+
 // Obtener la URL base desde la variable de entorno o usar fallback por defecto
-const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/+$/, '');
 
 // Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
-const baseURL = rawApiUrl.endsWith('/api')
-  ? rawApiUrl
-  : `${rawApiUrl.replace(/\/$/, '')}/api`;
+const baseURL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl}/api`;
 
-// Instancia de axios preconfigurada
+// Instancia de axios preconfigurada.
+// `ngrok-skip-browser-warning` (cualquier valor) evita que ngrok responda su
+// página HTML de advertencia en lugar del JSON. Se fija en la instancia, no en
+// axios.defaults, para no afectar a otras peticiones fuera de la API.
 const api = axios.create({
   baseURL,
+  headers: {
+    'ngrok-skip-browser-warning': 'true',
+  },
 });
 
 // Interceptor para inyectar el token JWT en cada request
@@ -118,9 +150,25 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Interceptor para manejar errores globalmente (ej. 401 Unauthorized)
+// Interceptor de respuesta:
+//  - HTML con status 200 = el túnel (ngrok) respondió una página en vez de la API.
+//    Se convierte en error explícito para no romper vistas que esperan JSON.
+//  - 401 = sesión expirada: limpia la sesión y avisa a AuthContext.
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const contentType = String(response.headers['content-type'] ?? '');
+    if (contentType.includes('text/html')) {
+      const message =
+        'El servidor respondió HTML en lugar de JSON (posible página de advertencia de ngrok o túnel caído). Revisa VITE_API_URL.';
+      return Promise.reject(
+        new AxiosError(message, 'ERR_UNEXPECTED_HTML', response.config, response.request, {
+          ...response,
+          data: { message },
+        }),
+      );
+    }
+    return response;
+  },
   (error) => {
     if (error.response?.status === 401) {
       // Si el token expira, limpiamos localstorage y forzamos login
@@ -133,6 +181,429 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+================
+File: src/api/crud.ts
+================
+import api from './axios';
+
+/**
+ * Cliente CRUD genérico para los recursos REST del backend.
+ * El backend actualiza con PATCH (no PUT): `update` envía solo los campos modificados.
+ */
+export interface CrudApi<TEntity, TCreate, TUpdate> {
+  list: () => Promise<TEntity[]>;
+  get: (id: number) => Promise<TEntity>;
+  create: (payload: TCreate) => Promise<TEntity>;
+  update: (id: number, payload: TUpdate) => Promise<TEntity>;
+  remove: (id: number) => Promise<void>;
+}
+
+/** @param resource Ruta relativa a /api, por ejemplo `/users`. */
+export function createCrudApi<TEntity, TCreate, TUpdate = Partial<TCreate>>(
+  resource: string,
+): CrudApi<TEntity, TCreate, TUpdate> {
+  return {
+    list: async () => (await api.get<TEntity[]>(resource)).data,
+    get: async (id) => (await api.get<TEntity>(`${resource}/${id}`)).data,
+    create: async (payload) => (await api.post<TEntity>(resource, payload)).data,
+    update: async (id, payload) =>
+      (await api.patch<TEntity>(`${resource}/${id}`, payload)).data,
+    remove: async (id) => {
+      await api.delete(`${resource}/${id}`);
+    },
+  };
+}
+
+================
+File: src/api/errors.ts
+================
+import { isAxiosError } from 'axios';
+
+/** Extrae el mensaje de error de NestJS (string o arreglo de class-validator). */
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (isAxiosError<{ message?: string | string[] }>(error)) {
+    const message = error.response?.data?.message;
+    if (Array.isArray(message)) return message.join('. ');
+    if (message) return message;
+  }
+  return fallback;
+}
+
+================
+File: src/api/resources.ts
+================
+import api from './axios';
+import { createCrudApi } from './crud';
+import type {
+  AddUsedPartPayload,
+  AppUser,
+  InventoryPart,
+  Appointment,
+  CreateAppointmentPayload,
+  CreateInvoicePayload,
+  CreatePurchasePayload,
+  CreateSupplierPayload,
+  CreateUserPayload,
+  CreateVehiclePayload,
+  CreateWorkOrderPayload,
+  Invoice,
+  PurchaseOrder,
+  Supplier,
+  UpdateAppointmentPayload,
+  UpdateInvoicePayload,
+  UpdatePurchasePayload,
+  UpdateSupplierPayload,
+  UpdateUserPayload,
+  UpdateVehiclePayload,
+  UpdateWorkOrderPayload,
+  Vehicle,
+  WorkOrder,
+} from './types';
+
+/**
+ * Servicios por dominio. Roles exigidos por el backend:
+ *  - users, invoices: GERENTE
+ *  - vehicles, appointments, work-orders, suppliers, purchases: GERENTE, MECANICO
+ *  - DELETE en todos: GERENTE
+ */
+
+export const usersApi = createCrudApi<AppUser, CreateUserPayload, UpdateUserPayload>('/users');
+
+export const vehiclesApi = createCrudApi<Vehicle, CreateVehiclePayload, UpdateVehiclePayload>(
+  '/vehicles',
+);
+
+export const appointmentsApi = createCrudApi<
+  Appointment,
+  CreateAppointmentPayload,
+  UpdateAppointmentPayload
+>('/appointments');
+
+export const workOrdersApi = createCrudApi<
+  WorkOrder,
+  CreateWorkOrderPayload,
+  UpdateWorkOrderPayload
+>('/work-orders');
+
+export const suppliersApi = createCrudApi<Supplier, CreateSupplierPayload, UpdateSupplierPayload>(
+  '/suppliers',
+);
+
+export const purchasesApi = createCrudApi<
+  PurchaseOrder,
+  CreatePurchasePayload,
+  UpdatePurchasePayload
+>('/purchases');
+
+export const invoicesApi = createCrudApi<Invoice, CreateInvoicePayload, UpdateInvoicePayload>(
+  '/invoices',
+);
+
+/** Endpoints del CLIENTE autenticado (solo sus propios datos). */
+export const clientApi = {
+  myVehicles: async () => (await api.get<Vehicle[]>('/client/vehicles')).data,
+  myWorkOrders: async () => (await api.get<WorkOrder[]>('/client/work-orders')).data,
+  myAppointments: async () => (await api.get<Appointment[]>('/client/appointments')).data,
+  createAppointment: async (payload: CreateAppointmentPayload) =>
+    (await api.post<Appointment>('/client/appointments', payload)).data,
+};
+
+/** Búsqueda de piezas para autocompletar (nombre, código o palabra clave). */
+export const inventoryApi = {
+  searchParts: async (query: string) =>
+    (await api.get<InventoryPart[]>(`/inventory/search/${encodeURIComponent(query)}`)).data,
+};
+
+/** Acciones operativas de una orden que no son CRUD. */
+export const workOrderActionsApi = {
+  /** RF-INV-13: registra el repuesto y descuenta stock en una transacción (409 si no alcanza). */
+  addUsedPart: async (id: number, payload: AddUsedPartPayload) =>
+    (await api.post<WorkOrder>(`/work-orders/${id}/parts`, payload)).data,
+  /** Pasa la orden a CONCLUIDO; no toca inventario. Responde sin mecánico/factura: recargar con workOrdersApi.get. */
+  conclude: async (id: number, finalCost?: number) =>
+    (await api.patch<WorkOrder>(`/service/work-orders/${id}/close`, { finalCost })).data,
+};
+
+/** Transiciones que mueven inventario; viven en endpoints transaccionales dedicados. */
+export const inventoryFlowsApi = {
+  receivePurchase: async (id: number) =>
+    (await api.post<PurchaseOrder>(`/suppliers/purchase-orders/${id}/receive`)).data,
+};
+
+================
+File: src/api/socket.ts
+================
+import { io, Socket } from 'socket.io-client';
+
+const SOCKET_URL = (import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000').replace(/\/+$/, '');
+
+/**
+ * Conexión Socket.io al gateway de hardware (LEDs), apta para ngrok.
+ *
+ * - `transports: ['websocket']`: sin long-polling. Las peticiones XHR del
+ *   polling pasan por la página de advertencia de ngrok y rompen el handshake.
+ * - Sin `extraHeaders`: el navegador NO permite headers propios en el
+ *   handshake WebSocket (solo se enviaban en polling), por eso no se usan.
+ * - Reconexión con backoff acotado para sobrevivir reinicios del túnel o de la Pi.
+ *
+ * Quien la crea debe llamar a `socket.disconnect()` al desmontar.
+ */
+export function createHardwareSocket(): Socket {
+  return io(SOCKET_URL, {
+    transports: ['websocket'],
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 10000,
+    timeout: 10000,
+  });
+}
+
+================
+File: src/api/types.ts
+================
+import type { Role } from '../contexts/AuthContext';
+
+/**
+ * Tipos de las entidades que devuelve el backend (/api/*).
+ * Los campos Decimal de Prisma llegan serializados como string.
+ */
+
+export type DecimalString = string;
+export type ISODateString = string;
+
+export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
+export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
+export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
+export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
+
+export interface UserSummary {
+  id: number;
+  name: string;
+  email: string;
+}
+
+// ── Usuarios ────────────────────────────────────────────────
+export interface AppUser extends UserSummary {
+  role: Role;
+  isActive: boolean;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CreateUserPayload {
+  name: string;
+  email: string;
+  password: string;
+  role?: Role;
+  isActive?: boolean;
+}
+export type UpdateUserPayload = Partial<CreateUserPayload>;
+
+// ── Vehículos ───────────────────────────────────────────────
+export interface Vehicle {
+  id: number;
+  plate: string;
+  make: string;
+  model: string;
+  year: number | null;
+  vin: string | null;
+  color: string | null;
+  ownerId: number;
+  owner?: UserSummary;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CreateVehiclePayload {
+  plate: string;
+  make: string;
+  model: string;
+  year?: number;
+  vin?: string;
+  color?: string;
+  ownerId: number;
+}
+export type UpdateVehiclePayload = Partial<CreateVehiclePayload>;
+
+// ── Citas ───────────────────────────────────────────────────
+export interface Appointment {
+  id: number;
+  scheduledAt: ISODateString;
+  reason: string | null;
+  status: AppointmentStatus;
+  vehicleId: number;
+  vehicle?: Vehicle;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CreateAppointmentPayload {
+  scheduledAt: ISODateString;
+  reason?: string;
+  vehicleId: number;
+}
+export interface UpdateAppointmentPayload extends Partial<CreateAppointmentPayload> {
+  status?: AppointmentStatus;
+}
+
+// ── Inventario ──────────────────────────────────────────────
+/** Pieza devuelta por /inventory/search/:query (máx. 5 coincidencias). */
+export interface InventoryPart {
+  id: number;
+  name: string;
+  code: string;
+  quantity: number;
+  minStock: number;
+  photoUrl: string | null;
+  box?: { id: number; name: string; ledIndex: number; location?: string | null };
+}
+
+export interface AddUsedPartPayload {
+  partId: number;
+  quantity: number;
+}
+
+// ── Órdenes de trabajo ──────────────────────────────────────
+/** Repuesto consumido en una orden (modelo UsedPart). */
+export interface UsedPart {
+  id: number;
+  quantity: number;
+  partId: number;
+  part?: { id: number; name: string; code: string; quantity: number };
+}
+
+export interface WorkOrder {
+  id: number;
+  number: string;
+  description: string;
+  diagnosis: string | null;
+  mileage: number | null;
+  status: WorkOrderStatus;
+  estimatedCost: DecimalString | null;
+  finalCost: DecimalString | null;
+  vehicleId: number;
+  mechanicId: number | null;
+  vehicle?: Vehicle;
+  mechanic?: UserSummary | null;
+  parts?: UsedPart[];
+  invoice?: Invoice | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+  startedAt: ISODateString | null;
+  completedAt: ISODateString | null;
+}
+
+/** `number` (OT-YYYY-NNN) lo genera el backend. */
+export interface CreateWorkOrderPayload {
+  description: string;
+  estimatedCost?: number;
+  mileage?: number;
+  vehicleId: number;
+  mechanicId?: number;
+  parts?: { partId: number; quantity: number }[];
+}
+
+/** `CONCLUIDO` no se acepta aquí: el cierre usa /service/work-orders/:id/close. */
+export interface UpdateWorkOrderPayload {
+  description?: string;
+  diagnosis?: string;
+  estimatedCost?: number;
+  mileage?: number;
+  mechanicId?: number;
+  status?: Exclude<WorkOrderStatus, 'CONCLUIDO'>;
+}
+
+// ── Proveedores ─────────────────────────────────────────────
+export interface Supplier {
+  id: number;
+  name: string;
+  taxId: string | null;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  _count?: { purchaseOrders: number };
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CreateSupplierPayload {
+  name: string;
+  taxId?: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+}
+export type UpdateSupplierPayload = Partial<CreateSupplierPayload>;
+
+// ── Compras ─────────────────────────────────────────────────
+export interface PurchaseOrderItem {
+  id: number;
+  quantity: number;
+  unitPrice: DecimalString | null;
+  partId: number;
+  part?: { id: number; name: string; code: string; quantity: number };
+}
+
+export interface PurchaseOrder {
+  id: number;
+  number: string;
+  status: PurchaseOrderStatus;
+  orderedAt: ISODateString;
+  receivedAt: ISODateString | null;
+  supplierId: number;
+  supplier?: Supplier;
+  items?: PurchaseOrderItem[];
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CreatePurchasePayload {
+  number: string;
+  supplierId: number;
+  items: { partId: number; quantity: number; unitPrice?: number }[];
+}
+
+/** `RECIBIDA` no se acepta aquí: la recepción usa /suppliers/purchase-orders/:id/receive. */
+export interface UpdatePurchasePayload {
+  number?: string;
+  supplierId?: number;
+  status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
+}
+
+// ── Facturas ────────────────────────────────────────────────
+export interface Invoice {
+  id: number;
+  number: string;
+  subtotal: DecimalString;
+  tax: DecimalString;
+  total: DecimalString;
+  status: InvoiceStatus;
+  issuedAt: ISODateString;
+  paidAt: ISODateString | null;
+  workOrderId: number;
+  clientId: number;
+  client?: UserSummary;
+  workOrder?: WorkOrder;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CreateInvoicePayload {
+  number: string;
+  workOrderId: number;
+  clientId?: number;
+  subtotal?: number;
+  tax?: number;
+}
+
+export interface UpdateInvoicePayload {
+  subtotal?: number;
+  tax?: number;
+  status?: InvoiceStatus;
+}
 
 ================
 File: src/components/Inventory/InventoryList.tsx
@@ -639,6 +1110,379 @@ export default function SuppliersList() {
 }
 
 ================
+File: src/components/ui/DataTable.tsx
+================
+import { ReactNode } from 'react';
+import { AlertCircle, Eye, Inbox, Pencil, RotateCw, Trash2 } from 'lucide-react';
+
+export interface Column<T> {
+  key: string;
+  header: string;
+  render: (row: T) => ReactNode;
+  /** Oculta la columna en pantallas pequeñas (< md). */
+  hideOnMobile?: boolean;
+  align?: 'left' | 'right';
+}
+
+interface DataTableProps<T extends { id: number }> {
+  columns: Column<T>[];
+  rows: T[];
+  isLoading: boolean;
+  error: string | null;
+  emptyMessage: string;
+  onRetry: () => void;
+  onView?: (row: T) => void;
+  onEdit?: (row: T) => void;
+  onDelete?: (row: T) => void;
+}
+
+const SKELETON_ROWS = 5;
+
+function cellClass(column: { hideOnMobile?: boolean; align?: 'left' | 'right' }): string {
+  return [
+    'px-4 py-3 sm:px-6',
+    column.hideOnMobile ? 'hidden md:table-cell' : '',
+    column.align === 'right' ? 'text-right' : 'text-left',
+  ].join(' ');
+}
+
+const actionButton =
+  'rounded-lg p-2 text-slate-400 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500';
+
+export default function DataTable<T extends { id: number }>({
+  columns,
+  rows,
+  isLoading,
+  error,
+  emptyMessage,
+  onRetry,
+  onView,
+  onEdit,
+  onDelete,
+}: DataTableProps<T>) {
+  const hasActions = Boolean(onView || onEdit || onDelete);
+
+  if (error && !isLoading) {
+    return (
+      <div className="flex flex-col items-center gap-3 p-10 text-center">
+        <AlertCircle className="text-red-400" size={28} />
+        <p className="text-slate-300">{error}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/50"
+        >
+          <RotateCw size={16} /> Reintentar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-slate-700 text-sm">
+        <thead className="bg-slate-800 text-xs uppercase tracking-wider text-slate-400">
+          <tr>
+            {columns.map((column) => (
+              <th key={column.key} scope="col" className={`${cellClass(column)} font-semibold`}>
+                {column.header}
+              </th>
+            ))}
+            {hasActions && (
+              <th scope="col" className="px-4 py-3 text-right font-semibold sm:px-6">
+                <span className="sr-only">Acciones</span>
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-700/80" aria-busy={isLoading}>
+          {isLoading &&
+            Array.from({ length: SKELETON_ROWS }, (_, index) => (
+              <tr key={index} className="animate-pulse">
+                {columns.map((column) => (
+                  <td key={column.key} className={cellClass(column)}>
+                    <div className="h-4 w-3/4 rounded bg-slate-700/60" />
+                  </td>
+                ))}
+                {hasActions && (
+                  <td className="px-4 py-3 sm:px-6">
+                    <div className="ml-auto h-4 w-16 rounded bg-slate-700/60" />
+                  </td>
+                )}
+              </tr>
+            ))}
+
+          {!isLoading && rows.length === 0 && (
+            <tr>
+              <td colSpan={columns.length + (hasActions ? 1 : 0)} className="px-6 py-12">
+                <div className="flex flex-col items-center gap-2 text-slate-400">
+                  <Inbox size={28} />
+                  <p>{emptyMessage}</p>
+                </div>
+              </td>
+            </tr>
+          )}
+
+          {!isLoading &&
+            rows.map((row) => (
+              <tr key={row.id} className="text-slate-300 hover:bg-slate-700/20">
+                {columns.map((column) => (
+                  <td key={column.key} className={cellClass(column)}>
+                    {column.render(row)}
+                  </td>
+                ))}
+                {hasActions && (
+                  <td className="whitespace-nowrap px-4 py-2 text-right sm:px-6">
+                    {onView && (
+                      <button
+                        type="button"
+                        title="Ver detalles"
+                        aria-label="Ver detalles"
+                        onClick={() => onView(row)}
+                        className={`${actionButton} hover:bg-slate-700/60 hover:text-white`}
+                      >
+                        <Eye size={17} />
+                      </button>
+                    )}
+                    {onEdit && (
+                      <button
+                        type="button"
+                        title="Editar"
+                        aria-label="Editar"
+                        onClick={() => onEdit(row)}
+                        className={`${actionButton} hover:bg-brand-500/10 hover:text-brand-400`}
+                      >
+                        <Pencil size={17} />
+                      </button>
+                    )}
+                    {onDelete && (
+                      <button
+                        type="button"
+                        title="Eliminar"
+                        aria-label="Eliminar"
+                        onClick={() => onDelete(row)}
+                        className={`${actionButton} hover:bg-red-500/10 hover:text-red-400`}
+                      >
+                        <Trash2 size={17} />
+                      </button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+================
+File: src/components/ui/ResourceListPage.tsx
+================
+import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { Plus, type LucideIcon } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../../api/errors';
+import DataTable, { Column } from './DataTable';
+
+interface ResourceListPageProps<T extends { id: number }> {
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  /** Nombre singular del registro, usado en mensajes ("vehículo"). */
+  entityLabel: string;
+  /** Debe ser una referencia estable (p. ej. `vehiclesApi.list`). */
+  fetchAll: () => Promise<T[]>;
+  columns: Column<T>[];
+  emptyMessage: string;
+  getRowLabel: (row: T) => string;
+  /** Solo se pasa si el rol actual puede eliminar (el backend exige GERENTE). */
+  onDelete?: (id: number) => Promise<void>;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  /** Contenido extra sobre el encabezado (p. ej. pestañas de vista). */
+  toolbar?: ReactNode;
+}
+
+/**
+ * Página de listado CRUD: encabezado + "Nuevo Registro" + tabla con carga,
+ * error, vacío y acciones. Los formularios de creación/edición llegarán en la
+ * siguiente fase; por ahora esas acciones solo registran en consola.
+ */
+export default function ResourceListPage<T extends { id: number }>({
+  title,
+  description,
+  icon: Icon,
+  entityLabel,
+  fetchAll,
+  columns,
+  emptyMessage,
+  getRowLabel,
+  onDelete,
+  canCreate = true,
+  canEdit = true,
+  toolbar,
+}: ResourceListPageProps<T>) {
+  const [rows, setRows] = useState<T[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const latestRequest = useRef(0);
+
+  const load = useCallback(async () => {
+    const requestId = ++latestRequest.current;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await fetchAll();
+      if (requestId === latestRequest.current) setRows(data);
+    } catch (loadError) {
+      if (requestId === latestRequest.current) {
+        setError(getApiErrorMessage(loadError, `No se pudo cargar el listado de ${title.toLowerCase()}.`));
+      }
+    } finally {
+      if (requestId === latestRequest.current) setIsLoading(false);
+    }
+  }, [fetchAll, title]);
+
+  useEffect(() => {
+    void load();
+    // Invalida respuestas en vuelo al desmontar.
+    return () => {
+      latestRequest.current += 1;
+    };
+  }, [load]);
+
+  const handleDelete = async (row: T) => {
+    if (!onDelete) return;
+    const confirmed = window.confirm(
+      `¿Eliminar ${entityLabel} "${getRowLabel(row)}"? Esta acción no se puede deshacer.`,
+    );
+    if (!confirmed) return;
+    try {
+      await onDelete(row.id);
+      setRows((current) => current.filter((item) => item.id !== row.id));
+      toast.success(`Se eliminó ${entityLabel} "${getRowLabel(row)}".`);
+    } catch (deleteError) {
+      toast.error(getApiErrorMessage(deleteError, `No se pudo eliminar ${entityLabel}.`));
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      {toolbar}
+
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+            <Icon size={24} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-white">{title}</h2>
+            <p className="text-sm text-slate-400">
+              {description}
+              {!isLoading && !error && (
+                <span className="text-slate-500"> · {rows.length} registros</span>
+              )}
+            </p>
+          </div>
+        </div>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={() => console.log('Abrir modal de creación')}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white hover:bg-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+          >
+            <Plus size={18} /> Nuevo Registro
+          </button>
+        )}
+      </header>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          isLoading={isLoading}
+          error={error}
+          emptyMessage={emptyMessage}
+          onRetry={() => void load()}
+          onView={(row) => console.log('Ver detalles', row)}
+          onEdit={canEdit ? (row) => console.log('Abrir modal de edición', row) : undefined}
+          onDelete={onDelete ? (row) => void handleDelete(row) : undefined}
+        />
+      </div>
+    </section>
+  );
+}
+
+================
+File: src/components/ui/StatusBadge.tsx
+================
+export type BadgeTone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'brand';
+
+const toneClasses: Record<BadgeTone, string> = {
+  neutral: 'bg-slate-700/50 text-slate-300 border-slate-600',
+  info: 'bg-sky-500/10 text-sky-300 border-sky-500/30',
+  warning: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+  success: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  danger: 'bg-red-500/10 text-red-300 border-red-500/30',
+  brand: 'bg-brand-500/10 text-brand-300 border-brand-500/30',
+};
+
+interface StatusBadgeProps {
+  label: string;
+  tone?: BadgeTone;
+}
+
+export default function StatusBadge({ label, tone = 'neutral' }: StatusBadgeProps) {
+  return (
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ${toneClasses[tone]}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+================
+File: src/components/ui/ViewTabs.tsx
+================
+import type { LucideIcon } from 'lucide-react';
+
+export interface ViewTab<TKey extends string> {
+  key: TKey;
+  label: string;
+  icon: LucideIcon;
+}
+
+interface ViewTabsProps<TKey extends string> {
+  tabs: ViewTab<TKey>[];
+  active: TKey;
+  onChange: (key: TKey) => void;
+}
+
+/** Alterna entre el listado CRUD y una vista operativa existente del módulo. */
+export default function ViewTabs<TKey extends string>({ tabs, active, onChange }: ViewTabsProps<TKey>) {
+  return (
+    <div role="tablist" className="inline-flex rounded-xl border border-slate-700 bg-slate-800/60 p-1">
+      {tabs.map(({ key, label, icon: Icon }) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={active === key}
+          onClick={() => onChange(key)}
+          className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+            active === key ? 'bg-brand-500 text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Icon size={16} /> {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+================
 File: src/components/Users/UsersList.tsx
 ================
 import { FormEvent, useEffect, useState } from 'react';
@@ -987,56 +1831,1091 @@ export default function UsersManagement() {
 }
 
 ================
-File: src/components/WorkOrders/WorkOrdersBoard.tsx
+File: src/components/WorkOrders/NewWorkOrderModal.tsx
 ================
-import { useEffect, useState } from 'react';
-import { ClipboardList, Loader2, Play, Stethoscope } from 'lucide-react';
+import { FormEvent, useEffect, useState } from 'react';
+import { ClipboardPlus, Loader2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
+import { getApiErrorMessage } from '../../api/errors';
+import { usersApi, vehiclesApi, workOrdersApi } from '../../api/resources';
+import type { AppUser, CreateWorkOrderPayload, Vehicle, WorkOrder } from '../../api/types';
+import { useAuth } from '../../contexts/AuthContext';
 
-type Status = 'PENDIENTE' | 'EN_DIAGNOSTICO' | 'EN_PROGRESO' | 'CERRADA';
-interface WorkOrder { id: number; number: string; description: string; diagnosis?: string; status: Status; vehicle: { plate: string; make: string; model: string }; parts: { quantity: number; part: { name: string; code: string } }[] }
+interface NewWorkOrderModalProps {
+  onClose: () => void;
+  onCreated: (order: WorkOrder) => void;
+}
 
-const labels: Record<Status, string> = { PENDIENTE: 'Pendiente', EN_DIAGNOSTICO: 'En diagnóstico', EN_PROGRESO: 'En progreso', CERRADA: 'Cerrada' };
+interface FormState {
+  vehicleId: string;
+  description: string;
+  mileage: string;
+  estimatedCost: string;
+  mechanicId: string;
+}
 
-export default function WorkOrdersBoard() {
+const EMPTY_FORM: FormState = { vehicleId: '', description: '', mileage: '', estimatedCost: '', mechanicId: '' };
+
+const fieldClass =
+  'w-full rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2.5 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 disabled:opacity-50';
+
+/** Formulario de nueva OT. El código OT-YYYY-NNN lo asigna el backend. */
+export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderModalProps) {
+  const { user } = useAuth();
+  const isManager = user?.role === 'GERENTE';
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [mechanics, setMechanics] = useState<AppUser[]>([]);
+  const [isLoadingOptions, setIsLoadingOptions] = useState(true);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [vehicleList, userList] = await Promise.all([
+          vehiclesApi.list(),
+          // Solo el GERENTE puede listar usuarios y asignar a otro mecánico.
+          isManager ? usersApi.list() : Promise.resolve<AppUser[]>([]),
+        ]);
+        if (!active) return;
+        setVehicles(vehicleList);
+        setMechanics(userList.filter((item) => item.role === 'MECANICO' && item.isActive));
+      } catch (error) {
+        if (active) setOptionsError(getApiErrorMessage(error, 'No se pudieron cargar vehículos y mecánicos.'));
+      } finally {
+        if (active) setIsLoadingOptions(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [isManager]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isSaving) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isSaving, onClose]);
+
+  const update = (field: keyof FormState, value: string) => setForm((current) => ({ ...current, [field]: value }));
+
+  const validate = (): string | null => {
+    if (!form.vehicleId) return 'Selecciona un vehículo.';
+    if (!form.description.trim()) return 'Describe el motivo de ingreso.';
+    if (form.mileage && (!Number.isInteger(Number(form.mileage)) || Number(form.mileage) < 0)) {
+      return 'El kilometraje debe ser un número entero positivo.';
+    }
+    if (form.estimatedCost && (Number.isNaN(Number(form.estimatedCost)) || Number(form.estimatedCost) < 0)) {
+      return 'El costo estimado debe ser un monto positivo.';
+    }
+    return null;
+  };
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const validationError = validate();
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
+    const payload: CreateWorkOrderPayload = {
+      vehicleId: Number(form.vehicleId),
+      description: form.description.trim(),
+      ...(form.mileage && { mileage: Number(form.mileage) }),
+      ...(form.estimatedCost && { estimatedCost: Number(form.estimatedCost) }),
+      ...(form.mechanicId && { mechanicId: Number(form.mechanicId) }),
+    };
+
+    setIsSaving(true);
+    try {
+      const order = await workOrdersApi.create(payload);
+      toast.success(`Orden ${order.number} creada.`);
+      onCreated(order);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo crear la orden.'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      onMouseDown={(event) => event.target === event.currentTarget && !isSaving && onClose()}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-work-order-title"
+        onSubmit={handleSubmit}
+        className="w-full max-w-lg space-y-5 rounded-2xl border border-slate-700 bg-slate-800/90 p-6 shadow-2xl backdrop-blur-xl"
+      >
+        <header className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-brand-500/10 p-2.5 text-brand-400">
+              <ClipboardPlus size={20} />
+            </div>
+            <div>
+              <h3 id="new-work-order-title" className="text-lg font-bold text-white">Nueva orden de trabajo</h3>
+              <p className="text-xs text-slate-400">El código OT-AAAA-NNN se asigna automáticamente.</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="rounded-lg p-1.5 text-slate-400 hover:text-white">
+            <X size={20} />
+          </button>
+        </header>
+
+        {optionsError && <p className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{optionsError}</p>}
+
+        <label className="block space-y-1.5 text-sm text-slate-300">
+          Vehículo *
+          <select
+            autoFocus
+            required
+            disabled={isLoadingOptions}
+            value={form.vehicleId}
+            onChange={(event) => update('vehicleId', event.target.value)}
+            className={fieldClass}
+          >
+            <option value="">{isLoadingOptions ? 'Cargando vehículos…' : 'Selecciona un vehículo'}</option>
+            {vehicles.map((vehicle) => (
+              <option key={vehicle.id} value={vehicle.id}>
+                {vehicle.plate} · {vehicle.make} {vehicle.model}
+                {vehicle.owner ? ` — ${vehicle.owner.name}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block space-y-1.5 text-sm text-slate-300">
+          Motivo de ingreso *
+          <textarea
+            required
+            rows={3}
+            maxLength={2000}
+            value={form.description}
+            onChange={(event) => update('description', event.target.value)}
+            placeholder="Ej.: ruido al frenar, revisión de 10.000 km…"
+            className={fieldClass}
+          />
+        </label>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block space-y-1.5 text-sm text-slate-300">
+            Kilometraje
+            <input
+              type="number"
+              min={0}
+              step={1}
+              inputMode="numeric"
+              value={form.mileage}
+              onChange={(event) => update('mileage', event.target.value)}
+              placeholder="85400"
+              className={fieldClass}
+            />
+          </label>
+          <label className="block space-y-1.5 text-sm text-slate-300">
+            Costo estimado
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              inputMode="decimal"
+              value={form.estimatedCost}
+              onChange={(event) => update('estimatedCost', event.target.value)}
+              placeholder="0.00"
+              className={fieldClass}
+            />
+          </label>
+        </div>
+
+        {isManager ? (
+          <label className="block space-y-1.5 text-sm text-slate-300">
+            Mecánico asignado
+            <select
+              disabled={isLoadingOptions}
+              value={form.mechanicId}
+              onChange={(event) => update('mechanicId', event.target.value)}
+              className={fieldClass}
+            >
+              <option value="">Sin asignar</option>
+              {mechanics.map((mechanic) => (
+                <option key={mechanic.id} value={mechanic.id}>{mechanic.name}</option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <p className="text-xs text-slate-500">La orden quedará asignada a ti.</p>
+        )}
+
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSaving}
+            className="rounded-xl border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-700/50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={isSaving || isLoadingOptions}
+            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+          >
+            {isSaving && <Loader2 size={16} className="animate-spin" />}
+            Crear orden
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+================
+File: src/components/WorkOrders/PartAutocomplete.tsx
+================
+import { FormEvent, KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
+import { Loader2, PackagePlus, Search, X } from 'lucide-react';
+import { getApiErrorMessage } from '../../api/errors';
+import { inventoryApi } from '../../api/resources';
+import type { InventoryPart } from '../../api/types';
+
+const MIN_QUERY_LENGTH = 2;
+const DEBOUNCE_MS = 250;
+
+interface PartAutocompleteProps {
+  disabled?: boolean;
+  /** Debe lanzar si falla, para conservar la selección y mostrar el error. */
+  onAdd: (part: InventoryPart, quantity: number) => Promise<void>;
+}
+
+/** Buscador de piezas del inventario + cantidad para agregarlas a una OT. */
+export default function PartAutocomplete({ disabled = false, onAdd }: PartAutocompleteProps) {
+  const listboxId = useId();
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<InventoryPart[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [selected, setSelected] = useState<InventoryPart | null>(null);
+  const [quantity, setQuantity] = useState('1');
+  const [isAdding, setIsAdding] = useState(false);
+  const latestRequest = useRef(0);
+
+  useEffect(() => {
+    const term = query.trim();
+    if (selected || term.length < MIN_QUERY_LENGTH) {
+      latestRequest.current += 1;
+      setResults([]);
+      setIsSearching(false);
+      setSearchError(null);
+      return;
+    }
+
+    const requestId = ++latestRequest.current;
+    setIsSearching(true);
+    setSearchError(null);
+    const timer = window.setTimeout(async () => {
+      try {
+        const parts = await inventoryApi.searchParts(term);
+        if (requestId !== latestRequest.current) return; // respuesta obsoleta
+        setResults(parts);
+        setActiveIndex(parts.findIndex((part) => part.quantity > 0));
+        setIsOpen(true);
+      } catch (error) {
+        if (requestId === latestRequest.current) {
+          setSearchError(getApiErrorMessage(error, 'No se pudo buscar en el inventario.'));
+        }
+      } finally {
+        if (requestId === latestRequest.current) setIsSearching(false);
+      }
+    }, DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [query, selected]);
+
+  const choose = (part: InventoryPart) => {
+    if (part.quantity <= 0) return;
+    setSelected(part);
+    setQuery(`${part.name} (${part.code})`);
+    setQuantity('1');
+    setIsOpen(false);
+  };
+
+  const clearSelection = () => {
+    setSelected(null);
+    setQuery('');
+    setQuantity('1');
+  };
+
+  const moveActive = (step: 1 | -1) => {
+    if (results.length === 0) return;
+    let next = activeIndex;
+    for (let i = 0; i < results.length; i += 1) {
+      next = (next + step + results.length) % results.length;
+      if (results[next].quantity > 0) break;
+    }
+    setActiveIndex(next);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!isOpen) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActive(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActive(-1);
+    } else if (event.key === 'Enter' && activeIndex >= 0) {
+      event.preventDefault();
+      choose(results[activeIndex]);
+    } else if (event.key === 'Escape') {
+      event.stopPropagation(); // cierra solo la lista, no el panel que la contiene
+      setIsOpen(false);
+    }
+  };
+
+  const parsedQuantity = Number(quantity);
+  const quantityError =
+    selected && (!Number.isInteger(parsedQuantity) || parsedQuantity < 1)
+      ? 'Ingresa una cantidad entera mayor a 0.'
+      : selected && parsedQuantity > selected.quantity
+        ? `Solo hay ${selected.quantity} en stock.`
+        : null;
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected || quantityError) return;
+    setIsAdding(true);
+    try {
+      await onAdd(selected, parsedQuantity);
+      clearSelection();
+    } catch {
+      // El padre ya notificó el error; se conserva la selección para corregir.
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const showList = isOpen && !selected && query.trim().length >= MIN_QUERY_LENGTH;
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="relative">
+        <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+        <input
+          type="text"
+          role="combobox"
+          aria-expanded={showList}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          aria-activedescendant={showList && activeIndex >= 0 ? `${listboxId}-${activeIndex}` : undefined}
+          aria-label="Buscar repuesto por nombre o código"
+          disabled={disabled || isAdding}
+          value={query}
+          onChange={(event) => {
+            if (selected) setSelected(null);
+            setQuery(event.target.value);
+          }}
+          onFocus={() => results.length > 0 && setIsOpen(true)}
+          onBlur={() => setIsOpen(false)}
+          onKeyDown={handleKeyDown}
+          placeholder="Buscar repuesto por nombre o código…"
+          className="w-full rounded-xl border border-slate-600 bg-slate-900/80 py-2.5 pl-9 pr-9 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 disabled:opacity-50"
+        />
+        {isSearching ? (
+          <Loader2 size={16} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-400" />
+        ) : (
+          (query || selected) && (
+            <button
+              type="button"
+              onClick={clearSelection}
+              aria-label="Limpiar búsqueda"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:text-white"
+            >
+              <X size={15} />
+            </button>
+          )
+        )}
+
+        {showList && (
+          <ul
+            id={listboxId}
+            role="listbox"
+            className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-700 bg-slate-800/95 p-1 shadow-2xl backdrop-blur-xl"
+          >
+            {results.length === 0 ? (
+              <li className="px-3 py-3 text-sm text-slate-400">Sin coincidencias en el inventario.</li>
+            ) : (
+              results.map((part, index) => {
+                const outOfStock = part.quantity <= 0;
+                return (
+                  <li
+                    key={part.id}
+                    id={`${listboxId}-${index}`}
+                    role="option"
+                    aria-selected={index === activeIndex}
+                    aria-disabled={outOfStock}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => !outOfStock && setActiveIndex(index)}
+                    onClick={() => choose(part)}
+                    className={`flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm ${
+                      outOfStock
+                        ? 'cursor-not-allowed opacity-50'
+                        : index === activeIndex
+                          ? 'cursor-pointer bg-brand-500/15 text-white'
+                          : 'cursor-pointer text-slate-200 hover:bg-slate-700/50'
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{part.name}</span>
+                      <span className="block truncate text-xs text-slate-500">
+                        {part.code}
+                        {part.box && ` · ${part.box.name}`}
+                      </span>
+                    </span>
+                    <span
+                      className={`shrink-0 text-xs font-medium ${
+                        outOfStock ? 'text-red-400' : part.quantity <= part.minStock ? 'text-amber-400' : 'text-emerald-400'
+                      }`}
+                    >
+                      {outOfStock ? 'Sin stock' : `${part.quantity} disp.`}
+                    </span>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        )}
+      </div>
+
+      {searchError && <p className="text-xs text-red-400">{searchError}</p>}
+
+      {selected && (
+        <div className="flex flex-wrap items-end gap-3 rounded-xl border border-brand-500/30 bg-brand-500/5 p-3">
+          <label className="flex flex-col gap-1 text-xs text-slate-400">
+            Cantidad
+            <input
+              type="number"
+              min={1}
+              max={selected.quantity}
+              step={1}
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+              className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={isAdding || quantityError !== null}
+            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isAdding ? <Loader2 size={16} className="animate-spin" /> : <PackagePlus size={16} />}
+            Agregar a la OT
+          </button>
+          <p className={`w-full text-xs ${quantityError ? 'text-amber-400' : 'text-slate-500'}`}>
+            {quantityError ?? `Se descontará del inventario al agregar (stock actual: ${selected.quantity}).`}
+          </p>
+        </div>
+      )}
+    </form>
+  );
+}
+
+================
+File: src/components/WorkOrders/WorkOrderDetailPanel.tsx
+================
+import { ReactNode, useEffect, useState } from 'react';
+import {
+  Car,
+  CheckCircle2,
+  ClipboardList,
+  Gauge,
+  Loader2,
+  Package,
+  Play,
+  Save,
+  Stethoscope,
+  User,
+  Wrench,
+  X,
+} from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../../api/errors';
+import { workOrderActionsApi, workOrdersApi } from '../../api/resources';
+import type { InventoryPart, WorkOrder } from '../../api/types';
+import { EMPTY, formatCurrency, formatDateTime } from '../../utils/format';
+import { WORK_ORDER_STATUS } from '../../utils/status';
+import StatusBadge from '../ui/StatusBadge';
+import PartAutocomplete from './PartAutocomplete';
+import { WORK_ORDER_TRANSITIONS } from './workOrderFlow';
+
+interface WorkOrderDetailPanelProps {
+  order: WorkOrder;
+  onClose: () => void;
+  onUpdated: (order: WorkOrder) => void;
+}
+
+const kmFormatter = new Intl.NumberFormat('es');
+
+function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-md">
+      <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-slate-400">
+        <span className="text-brand-400">{icon}</span>
+        {title}
+      </h4>
+      {children}
+    </section>
+  );
+}
+
+function Field({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div>
+      <dt className="text-xs text-slate-500">{label}</dt>
+      <dd className="text-sm text-slate-200">{value}</dd>
+    </div>
+  );
+}
+
+/** Panel lateral con el detalle de una OT, su flujo de estados y los repuestos utilizados. */
+export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: WorkOrderDetailPanelProps) {
+  const [diagnosis, setDiagnosis] = useState(order.diagnosis ?? '');
+  const [finalCost, setFinalCost] = useState(order.estimatedCost ?? '');
+  const [busyAction, setBusyAction] = useState<'status' | 'diagnosis' | 'conclude' | null>(null);
+
+  const isConcluded = order.status === 'CONCLUIDO';
+  const transition = WORK_ORDER_TRANSITIONS[order.status];
+  const parts = order.parts ?? [];
+  const totalUnits = parts.reduce((sum, item) => sum + item.quantity, 0);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const runAction = async (action: NonNullable<typeof busyAction>, task: () => Promise<WorkOrder>, success: string) => {
+    setBusyAction(action);
+    try {
+      onUpdated(await task());
+      toast.success(success);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo actualizar la orden.'));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const changeStatus = () => {
+    if (!transition) return;
+    void runAction(
+      'status',
+      () => workOrdersApi.update(order.id, { status: transition.to }),
+      `Orden en "${WORK_ORDER_STATUS[transition.to].label}".`,
+    );
+  };
+
+  const saveDiagnosis = () =>
+    void runAction('diagnosis', () => workOrdersApi.update(order.id, { diagnosis: diagnosis.trim() }), 'Diagnóstico guardado.');
+
+  const conclude = () => {
+    const cost = finalCost === '' ? undefined : Number(finalCost);
+    if (cost !== undefined && (Number.isNaN(cost) || cost < 0)) {
+      toast.error('El costo final debe ser un monto positivo.');
+      return;
+    }
+    if (!window.confirm(`¿Concluir la orden ${order.number}? Ya no podrá modificarse.`)) return;
+    void runAction(
+      'conclude',
+      async () => {
+        await workOrderActionsApi.conclude(order.id, cost);
+        // /close responde sin mecánico ni factura: se recarga el detalle completo.
+        return workOrdersApi.get(order.id);
+      },
+      `Orden ${order.number} concluida.`,
+    );
+  };
+
+  /** Lanza en error para que el buscador conserve la selección. */
+  const addPart = async (part: InventoryPart, quantity: number) => {
+    try {
+      onUpdated(await workOrderActionsApi.addUsedPart(order.id, { partId: part.id, quantity }));
+      toast.success(`${quantity} × ${part.name} agregado(s); stock descontado.`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo agregar el repuesto.'));
+      throw error;
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end">
+      <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="work-order-detail-title"
+        className="relative flex h-full w-full max-w-xl flex-col border-l border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-slate-700 p-5">
+          <div>
+            <p className="text-xs uppercase tracking-wider text-slate-500">Orden de trabajo</p>
+            <h3 id="work-order-detail-title" className="mt-1 text-2xl font-bold text-white">{order.number}</h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <StatusBadge {...WORK_ORDER_STATUS[order.status]} />
+              <span className="text-xs text-slate-500">Creada {formatDateTime(order.createdAt)}</span>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar detalle" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white">
+            <X size={22} />
+          </button>
+        </header>
+
+        <div className="flex-1 space-y-4 overflow-y-auto p-5">
+          {!isConcluded && (
+            <div className="flex flex-wrap items-end gap-2 rounded-2xl border border-brand-500/20 bg-brand-500/5 p-4">
+              {transition && (
+                <button
+                  type="button"
+                  onClick={changeStatus}
+                  disabled={busyAction !== null}
+                  className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+                >
+                  {busyAction === 'status' ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                  {transition.label}
+                </button>
+              )}
+              <div className="ml-auto flex items-end gap-2">
+                <label className="flex flex-col gap-1 text-xs text-slate-400">
+                  Costo final
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={finalCost}
+                    onChange={(event) => setFinalCost(event.target.value)}
+                    placeholder="0.00"
+                    className="w-28 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={conclude}
+                  disabled={busyAction !== null}
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2 text-sm font-semibold text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+                >
+                  {busyAction === 'conclude' ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                  Concluir
+                </button>
+              </div>
+            </div>
+          )}
+
+          <Section icon={<Car size={16} />} title="Vehículo">
+            {order.vehicle ? (
+              <dl className="grid grid-cols-2 gap-3">
+                <Field label="Placa" value={<span className="font-mono font-semibold text-white">{order.vehicle.plate}</span>} />
+                <Field label="Marca / modelo" value={`${order.vehicle.make} ${order.vehicle.model}`} />
+                <Field label="Año" value={order.vehicle.year ?? EMPTY} />
+                <Field label="Color" value={order.vehicle.color ?? EMPTY} />
+                <Field
+                  label="Kilometraje de ingreso"
+                  value={
+                    <span className="inline-flex items-center gap-1">
+                      <Gauge size={14} className="text-slate-500" />
+                      {order.mileage === null ? EMPTY : `${kmFormatter.format(order.mileage)} km`}
+                    </span>
+                  }
+                />
+                <Field label="VIN" value={order.vehicle.vin ?? EMPTY} />
+                <div className="col-span-2 flex items-center gap-2 rounded-xl bg-slate-900/60 p-3">
+                  <User size={16} className="text-slate-500" />
+                  <div>
+                    <p className="text-sm text-slate-200">{order.vehicle.owner?.name ?? EMPTY}</p>
+                    <p className="text-xs text-slate-500">{order.vehicle.owner?.email}</p>
+                  </div>
+                </div>
+              </dl>
+            ) : (
+              <p className="text-sm text-slate-400">Sin datos del vehículo.</p>
+            )}
+          </Section>
+
+          <Section icon={<ClipboardList size={16} />} title="Servicio">
+            <p className="mb-3 whitespace-pre-line text-sm text-slate-200">{order.description}</p>
+            <dl className="grid grid-cols-2 gap-3">
+              <Field
+                label="Mecánico"
+                value={
+                  <span className="inline-flex items-center gap-1">
+                    <Wrench size={14} className="text-slate-500" />
+                    {order.mechanic?.name ?? 'Sin asignar'}
+                  </span>
+                }
+              />
+              <Field label="Iniciada" value={formatDateTime(order.startedAt)} />
+              <Field label="Costo estimado" value={formatCurrency(order.estimatedCost)} />
+              <Field label="Costo final" value={formatCurrency(order.finalCost)} />
+              {isConcluded && <Field label="Concluida" value={formatDateTime(order.completedAt)} />}
+            </dl>
+          </Section>
+
+          <Section icon={<Stethoscope size={16} />} title="Diagnóstico">
+            {isConcluded ? (
+              <p className="whitespace-pre-line text-sm text-slate-200">{order.diagnosis || 'Sin diagnóstico registrado.'}</p>
+            ) : (
+              <div className="space-y-2">
+                <textarea
+                  rows={3}
+                  value={diagnosis}
+                  onChange={(event) => setDiagnosis(event.target.value)}
+                  placeholder="Hallazgos técnicos de la revisión…"
+                  className="w-full rounded-xl border border-slate-600 bg-slate-900/80 px-3 py-2 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500"
+                />
+                <button
+                  type="button"
+                  onClick={saveDiagnosis}
+                  disabled={busyAction !== null || diagnosis.trim() === (order.diagnosis ?? '').trim()}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700/50 disabled:opacity-40"
+                >
+                  {busyAction === 'diagnosis' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                  Guardar diagnóstico
+                </button>
+              </div>
+            )}
+          </Section>
+
+          <Section icon={<Package size={16} />} title="Repuestos utilizados">
+            {parts.length === 0 ? (
+              <p className="mb-4 text-sm text-slate-400">Aún no se registran repuestos.</p>
+            ) : (
+              <div className="mb-4 overflow-hidden rounded-xl border border-slate-700">
+                <table className="min-w-full divide-y divide-slate-700 text-sm">
+                  <thead className="bg-slate-800 text-xs uppercase text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Repuesto</th>
+                      <th className="px-3 py-2 text-right font-semibold">Cant.</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-700/70">
+                    {parts.map((item) => (
+                      <tr key={item.id} className="text-slate-300">
+                        <td className="px-3 py-2">
+                          <div className="text-slate-100">{item.part?.name ?? `Pieza #${item.partId}`}</div>
+                          <div className="text-xs text-slate-500">{item.part?.code}</div>
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-white">{item.quantity}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-slate-800/60 text-xs text-slate-400">
+                    <tr>
+                      <td className="px-3 py-2">{parts.length} repuesto(s)</td>
+                      <td className="px-3 py-2 text-right">{totalUnits} u.</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+
+            {isConcluded ? (
+              <p className="text-xs text-slate-500">La orden está concluida: no admite más repuestos.</p>
+            ) : (
+              <PartAutocomplete onAdd={addPart} />
+            )}
+          </Section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+================
+File: src/components/WorkOrders/workOrderFlow.ts
+================
+import type { WorkOrderStatus } from '../../api/types';
+
+/** Columnas del tablero en el orden del flujo SER. */
+export const WORK_ORDER_COLUMNS: WorkOrderStatus[] = [
+  'EN_DIAGNOSTICO',
+  'EN_PROCESO',
+  'ESPERA_REPUESTOS',
+  'CONCLUIDO',
+];
+
+/**
+ * Siguiente paso manual de cada estado. CONCLUIDO no aparece: solo se alcanza
+ * con la acción "Concluir" (PATCH /service/work-orders/:id/close).
+ */
+export const WORK_ORDER_TRANSITIONS: Partial<
+  Record<WorkOrderStatus, { to: Exclude<WorkOrderStatus, 'CONCLUIDO'>; label: string }>
+> = {
+  EN_DIAGNOSTICO: { to: 'EN_PROCESO', label: 'Iniciar trabajo' },
+  EN_PROCESO: { to: 'ESPERA_REPUESTOS', label: 'Esperar repuestos' },
+  ESPERA_REPUESTOS: { to: 'EN_PROCESO', label: 'Reanudar trabajo' },
+};
+
+================
+File: src/components/WorkOrders/WorkOrdersList.tsx
+================
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  ClipboardList,
+  Gauge,
+  Package,
+  Plus,
+  RotateCw,
+  Search,
+  Wrench,
+} from 'lucide-react';
+import { getApiErrorMessage } from '../../api/errors';
+import { workOrdersApi } from '../../api/resources';
+import type { WorkOrder, WorkOrderStatus } from '../../api/types';
+import { formatDate } from '../../utils/format';
+import { WORK_ORDER_STATUS } from '../../utils/status';
+import NewWorkOrderModal from './NewWorkOrderModal';
+import WorkOrderDetailPanel from './WorkOrderDetailPanel';
+import { WORK_ORDER_COLUMNS } from './workOrderFlow';
+
+const columnAccent: Record<WorkOrderStatus, string> = {
+  EN_DIAGNOSTICO: 'bg-sky-400',
+  EN_PROCESO: 'bg-brand-500',
+  ESPERA_REPUESTOS: 'bg-amber-400',
+  CONCLUIDO: 'bg-emerald-400',
+};
+
+const kmFormatter = new Intl.NumberFormat('es');
+
+function matchesFilter(order: WorkOrder, term: string): boolean {
+  if (!term) return true;
+  const haystack = [
+    order.number,
+    order.description,
+    order.vehicle?.plate,
+    order.vehicle?.make,
+    order.vehicle?.model,
+    order.vehicle?.owner?.name,
+    order.mechanic?.name,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(term);
+}
+
+function OrderCard({ order, onOpen }: { order: WorkOrder; onOpen: () => void }) {
+  const partsCount = order.parts?.length ?? 0;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group w-full rounded-xl border border-slate-700 bg-slate-900/70 p-4 text-left transition-colors hover:border-brand-500/50 hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="font-bold text-white group-hover:text-brand-300">{order.number}</p>
+          <p className="font-mono text-sm text-brand-400">{order.vehicle?.plate}</p>
+        </div>
+        <span className="text-right text-xs text-slate-500">
+          {order.vehicle?.make} {order.vehicle?.model}
+        </span>
+      </div>
+      <p className="mt-3 line-clamp-2 text-sm text-slate-300">{order.description}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-700/70 pt-3 text-xs text-slate-400">
+        <span className="inline-flex items-center gap-1">
+          <Wrench size={13} /> {order.mechanic?.name ?? 'Sin asignar'}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <Package size={13} /> {partsCount}
+        </span>
+        {order.mileage !== null && (
+          <span className="inline-flex items-center gap-1">
+            <Gauge size={13} /> {kmFormatter.format(order.mileage)} km
+          </span>
+        )}
+        <span className="ml-auto">{formatDate(order.createdAt)}</span>
+      </div>
+    </button>
+  );
+}
+
+/**
+ * Tablero Kanban de órdenes de trabajo por estado, con alta de nuevas OT y
+ * panel lateral de detalle (flujo de estados, diagnóstico y repuestos).
+ * El backend limita al MECANICO a sus órdenes asignadas.
+ */
+export default function WorkOrdersList() {
   const [orders, setOrders] = useState<WorkOrder[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const latestRequest = useRef(0);
 
-  const load = async () => {
-    try { setOrders((await api.get<WorkOrder[]>('/service/work-orders')).data); }
-    catch (error) { console.error('Error al cargar órdenes', error); toast.error('No se pudieron cargar las órdenes.'); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, []);
-
-  const updateStatus = async (order: WorkOrder, status: Status) => {
+  const load = useCallback(async () => {
+    const requestId = ++latestRequest.current;
+    setIsLoading(true);
+    setError(null);
     try {
-      const updated = await api.patch<WorkOrder>(`/service/work-orders/${order.id}/status`, { status });
-      setOrders((current) => current.map((item) => item.id === order.id ? updated.data : item));
-    } catch (error: any) { toast.error(error.response?.data?.message || 'No se pudo actualizar el estado.'); }
-  };
+      const data = await workOrdersApi.list();
+      if (requestId === latestRequest.current) setOrders(data);
+    } catch (loadError) {
+      if (requestId === latestRequest.current) {
+        setError(getApiErrorMessage(loadError, 'No se pudieron cargar las órdenes de trabajo.'));
+      }
+    } finally {
+      if (requestId === latestRequest.current) setIsLoading(false);
+    }
+  }, []);
 
-  const diagnose = async (order: WorkOrder) => {
-    const diagnosis = window.prompt('Registra el diagnóstico:', order.diagnosis || '');
-    if (!diagnosis?.trim()) return;
-    try {
-      const updated = await api.patch<WorkOrder>(`/service/work-orders/${order.id}/diagnosis`, { diagnosis });
-      setOrders((current) => current.map((item) => item.id === order.id ? updated.data : item));
-    } catch (error) { console.error(error); toast.error('No se pudo registrar el diagnóstico.'); }
-  };
+  useEffect(() => {
+    void load();
+    return () => {
+      latestRequest.current += 1;
+    };
+  }, [load]);
 
-  const close = async (order: WorkOrder) => {
-    if (!window.confirm('¿Cerrar la orden y descontar los repuestos registrados?')) return;
-    try {
-      const updated = await api.patch<WorkOrder>(`/service/work-orders/${order.id}/close`, {});
-      setOrders((current) => current.map((item) => item.id === order.id ? updated.data : item));
-      toast.success('Orden cerrada y stock actualizado.');
-    } catch (error: any) { toast.error(error.response?.data?.message || 'No se pudo cerrar la orden.'); }
-  };
+  const term = filter.trim().toLowerCase();
+  const columns = useMemo(
+    () =>
+      WORK_ORDER_COLUMNS.map((status) => ({
+        status,
+        orders: orders.filter((order) => order.status === status && matchesFilter(order, term)),
+      })),
+    [orders, term],
+  );
 
-  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><ClipboardList size={24} /></div><div><h2 className="text-2xl font-bold text-white">Órdenes de trabajo</h2><p className="text-sm text-slate-400">Gestiona el flujo del taller y los repuestos utilizados.</p></div></header>
-    {loading ? <div className="flex justify-center p-12"><Loader2 className="animate-spin text-brand-400" /></div> : <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">{(['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA'] as Status[]).map((status) => <div key={status} className="rounded-2xl border border-slate-700 bg-slate-800/60 p-4"><h3 className="mb-4 font-semibold text-slate-300">{labels[status]}</h3><div className="space-y-4">{orders.filter((order) => order.status === status).map((order) => <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/70 p-4"><div className="flex items-start justify-between gap-2"><div><p className="font-bold text-white">{order.number}</p><p className="text-sm text-brand-400">{order.vehicle.plate}</p></div><span className="text-xs text-slate-500">{order.vehicle.make} {order.vehicle.model}</span></div><p className="mt-3 text-sm text-slate-300">{order.description}</p>{order.diagnosis && <p className="mt-2 text-xs text-slate-400">Diagnóstico: {order.diagnosis}</p>}<div className="mt-3 border-t border-slate-700 pt-3 text-xs text-slate-400"><p className="mb-1 font-semibold text-slate-300">Repuestos usados</p>{order.parts.length ? order.parts.map((item) => <p key={item.part.code}>{item.quantity} × {item.part.name}</p>) : <p>No registrados</p>}</div>{status !== 'CERRADA' && <div className="mt-4 flex flex-wrap gap-2">{status === 'PENDIENTE' && <button type="button" onClick={() => void updateStatus(order, 'EN_PROGRESO')} className="rounded-lg bg-brand-500 px-3 py-2 text-xs font-semibold text-white"><Play size={13} className="mr-1 inline" />Iniciar</button>}<button type="button" onClick={() => void diagnose(order)} className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200"><Stethoscope size={13} className="mr-1 inline" />Diagnóstico</button><button type="button" onClick={() => void close(order)} className="rounded-lg border border-emerald-500/40 px-3 py-2 text-xs text-emerald-400">Cerrar y descontar</button></div>}</article>)}</div></div>)}</div>}</section>;
+  const selectedOrder = orders.find((order) => order.id === selectedId) ?? null;
+
+  const upsertOrder = useCallback((updated: WorkOrder) => {
+    setOrders((current) =>
+      current.some((order) => order.id === updated.id)
+        ? current.map((order) => (order.id === updated.id ? updated : order))
+        : [updated, ...current],
+    );
+  }, []);
+
+  const closeDetail = useCallback(() => setSelectedId(null), []);
+  const closeCreate = useCallback(() => setIsCreating(false), []);
+
+  return (
+    <section className="space-y-6">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+            <ClipboardList size={24} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-white">Órdenes de trabajo</h2>
+            <p className="text-sm text-slate-400">
+              Flujo del taller por estado
+              {!isLoading && !error && <span className="text-slate-500"> · {orders.length} órdenes</span>}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="relative">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="search"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="Filtrar por OT, placa, cliente…"
+              aria-label="Filtrar órdenes"
+              className="w-full rounded-xl border border-slate-700 bg-slate-800/60 py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-brand-500 sm:w-72"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCreating(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] hover:bg-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+          >
+            <Plus size={18} /> Nueva Orden
+          </button>
+        </div>
+      </header>
+
+      {error && !isLoading ? (
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-800/50 p-10 text-center backdrop-blur-md">
+          <AlertCircle className="text-red-400" size={28} />
+          <p className="text-slate-300">{error}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/50"
+          >
+            <RotateCw size={16} /> Reintentar
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          {columns.map(({ status, orders: columnOrders }) => (
+            <div
+              key={status}
+              className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-md"
+            >
+              <h3 className="mb-4 flex items-center gap-2 font-semibold text-slate-200">
+                <span className={`h-2.5 w-2.5 rounded-full ${columnAccent[status]}`} />
+                {WORK_ORDER_STATUS[status].label}
+                <span className="ml-auto rounded-full bg-slate-700/60 px-2 py-0.5 text-xs text-slate-300">
+                  {isLoading ? '…' : columnOrders.length}
+                </span>
+              </h3>
+
+              <div className="space-y-3" aria-busy={isLoading}>
+                {isLoading &&
+                  Array.from({ length: 2 }, (_, index) => (
+                    <div key={index} className="h-32 animate-pulse rounded-xl border border-slate-700 bg-slate-900/50" />
+                  ))}
+                {!isLoading && columnOrders.length === 0 && (
+                  <p className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-sm text-slate-500">
+                    {term ? 'Sin coincidencias' : 'Sin órdenes'}
+                  </p>
+                )}
+                {!isLoading &&
+                  columnOrders.map((order) => (
+                    <OrderCard key={order.id} order={order} onOpen={() => setSelectedId(order.id)} />
+                  ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isCreating && (
+        <NewWorkOrderModal
+          onClose={closeCreate}
+          onCreated={(order) => {
+            upsertOrder(order);
+            setIsCreating(false);
+            setSelectedId(order.id);
+          }}
+        />
+      )}
+
+      {selectedOrder && (
+        <WorkOrderDetailPanel
+          key={selectedOrder.id}
+          order={selectedOrder}
+          onClose={closeDetail}
+          onUpdated={upsertOrder}
+        />
+      )}
+    </section>
+  );
 }
 
 ================
@@ -1154,10 +3033,10 @@ import toast from 'react-hot-toast';
 import api from '../api/axios';
 
 interface Vehicle { id: number; plate: string; make: string; model: string }
-type Status = 'PENDIENTE' | 'EN_DIAGNOSTICO' | 'EN_PROGRESO' | 'CERRADA';
+type Status = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
 interface WorkOrder { id: number; number: string; description: string; diagnosis?: string; status: Status; vehicle: Vehicle; createdAt: string }
-const statuses: Status[] = ['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA'];
-const labels: Record<Status, string> = { PENDIENTE: 'Pendiente', EN_DIAGNOSTICO: 'En diagnóstico', EN_PROGRESO: 'En progreso', CERRADA: 'Cerrada' };
+const statuses: Status[] = ['EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS', 'CONCLUIDO'];
+const labels: Record<Status, string> = { EN_DIAGNOSTICO: 'En diagnóstico', EN_PROCESO: 'En proceso', ESPERA_REPUESTOS: 'Espera de repuestos', CONCLUIDO: 'Concluido' };
 
 export default function ClienteDashboard() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -1195,7 +3074,7 @@ export default function ClienteDashboard() {
   };
 
   if (loading) return <p className="text-slate-400">Cargando tu portal...</p>;
-  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = statuses.indexOf(order.status); return <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p></div><span className="text-xs text-brand-400">{labels[order.status]}</span></div><div className="mt-5 flex gap-2">{statuses.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < 3 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">Recepción · Diagnóstico · Trabajo · Cierre</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {new Date(order.createdAt).toLocaleDateString()}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="h-fit space-y-4 rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white placeholder:text-slate-500" /><button type="submit" className="w-full rounded-xl bg-brand-500 px-4 py-3 font-semibold text-white hover:bg-brand-600">Solicitar cita</button></form></div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
+  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = statuses.indexOf(order.status); return <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p></div><span className="text-xs text-brand-400">{labels[order.status]}</span></div><div className="mt-5 flex gap-2">{statuses.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < 3 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">Diagnóstico · En proceso · Repuestos · Concluido</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {new Date(order.createdAt).toLocaleDateString()}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="h-fit space-y-4 rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white placeholder:text-slate-500" /><button type="submit" className="w-full rounded-xl bg-brand-500 px-4 py-3 font-semibold text-white hover:bg-brand-600">Solicitar cita</button></form></div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
 }
 
 ================
@@ -1225,10 +3104,10 @@ export default function Dashboard() {
 File: src/components/GerenteDashboard.tsx
 ================
 import { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { AlertCircle, ClipboardList, Cpu, Package, Server } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { createHardwareSocket } from '../api/socket';
 
 interface HwStatus {
   simulationMode: boolean;
@@ -1244,7 +3123,7 @@ interface WorkOrder {
   vehicle: { plate: string; make: string; model: string };
 }
 
-const activeStatuses = new Set(['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO']);
+const activeStatuses = new Set(['EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS']);
 
 export default function GerenteDashboard() {
   const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });
@@ -1273,11 +3152,7 @@ export default function GerenteDashboard() {
     };
     void loadData();
 
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
-    const socket: Socket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      extraHeaders: { 'ngrok-skip-browser-warning': '69420' },
-    });
+    const socket = createHardwareSocket();
     socket.on('hw:status', (status: HwStatus) => setHwStatus(status));
     return () => {
       socket.disconnect();
@@ -1327,147 +3202,36 @@ export default function GerenteDashboard() {
 ================
 File: src/components/Layout.tsx
 ================
-import { NavLink, Outlet } from 'react-router-dom';
-import { Role, useAuth } from '../contexts/AuthContext';
-import {
-  ClipboardList,
-  LayoutDashboard,
-  LogOut,
-  Package,
-  Receipt,
-  Truck,
-  Users,
-  Wrench,
-  type LucideIcon,
-} from 'lucide-react';
-
-interface NavigationItem {
-  label: string;
-  path: string;
-  icon: LucideIcon;
-  roles: Role[];
-  disabled?: boolean;
-}
-
-const navigationItems: NavigationItem[] = [
-  {
-    label: 'Dashboard',
-    path: '/dashboard',
-    icon: LayoutDashboard,
-    roles: ['GERENTE', 'MECANICO'],
-  },
-  {
-    label: 'Mi Vehículo',
-    path: '/dashboard#vehicles',
-    icon: LayoutDashboard,
-    roles: ['CLIENTE'],
-  },
-  {
-    label: 'Citas',
-    path: '/dashboard#appointments',
-    icon: ClipboardList,
-    roles: ['CLIENTE'],
-  },
-  {
-    label: 'Inventario',
-    path: '/inventory',
-    icon: Package,
-    roles: ['GERENTE', 'MECANICO'],
-  },
-  {
-    label: 'Órdenes de trabajo',
-    path: '/work-orders',
-    icon: ClipboardList,
-    roles: ['GERENTE', 'MECANICO'],
-  },
-  {
-    label: 'Usuarios',
-    path: '/users',
-    icon: Users,
-    roles: ['GERENTE'],
-  },
-  {
-    label: 'Proveedores',
-    path: '/suppliers',
-    icon: Truck,
-    roles: ['GERENTE'],
-  },
-  {
-    label: 'Facturación',
-    path: '/billing',
-    icon: Receipt,
-    roles: ['GERENTE'],
-    disabled: true,
-  },
-];
+import { useState } from 'react';
+import { Outlet } from 'react-router-dom';
+import { Menu } from 'lucide-react';
+import Sidebar from './Sidebar';
 
 export default function Layout() {
-  const { user, logout } = useAuth();
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
-      isActive
-        ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
-        : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
-    }`;
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-800/80 backdrop-blur-md border-r border-slate-700 flex flex-col z-20">
-        <div className="h-16 flex items-center px-6 border-b border-slate-700 gap-3">
-          <div className="h-8 w-8 bg-brand-500/20 text-brand-500 rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.3)]">
-            <Wrench size={18} />
-          </div>
-          <span className="text-xl font-bold tracking-tight">GearTrace</span>
-        </div>
-
-        <div className="p-4 border-b border-slate-700/50">
-          <div className="font-medium truncate">{user?.name}</div>
-          <div className="text-xs text-brand-400 mt-1 uppercase tracking-wider font-semibold">
-            {user?.role}
-          </div>
-        </div>
-
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navigationItems
-            .filter((item) => user?.role && item.roles.includes(user.role))
-            .map(({ label, path, icon: Icon, disabled }) =>
-              disabled ? (
-                <span
-                  key={label}
-                  title="Módulo próximamente disponible"
-                  className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2.5 font-medium text-slate-600"
-                >
-                  <Icon size={20} /> {label}
-                </span>
-              ) : (
-                <NavLink key={label} to={path} className={navLinkClass} end={path === '/dashboard'}>
-                  <Icon size={20} /> {label}
-                </NavLink>
-              ),
-            )}
-        </nav>
-
-        <div className="p-4 border-t border-slate-700">
-          <button 
-            onClick={logout}
-            className="flex items-center gap-3 px-3 py-2.5 w-full text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-colors"
-          >
-            <LogOut size={20} /> Cerrar Sesión
-          </button>
-        </div>
-      </aside>
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col relative overflow-hidden">
+      <main className="flex-1 flex flex-col relative overflow-hidden min-w-0">
         {/* Ambient background blur */}
         <div className="absolute top-0 right-0 w-96 h-96 bg-brand-900/30 rounded-full blur-[100px] pointer-events-none -translate-y-1/2 translate-x-1/2"></div>
-        
-        <header className="h-16 flex items-center px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10">
+
+        <header className="h-16 flex items-center gap-3 px-4 sm:px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10">
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(true)}
+            aria-label="Abrir menú"
+            className="rounded-lg p-1.5 text-slate-400 hover:text-white md:hidden"
+          >
+            <Menu size={22} />
+          </button>
           <h1 className="text-xl font-semibold">Panel de Control</h1>
         </header>
-        
-        <div className="flex-1 overflow-auto p-8 z-10">
+
+        <div className="flex-1 overflow-auto p-4 sm:p-8 z-10">
           <Outlet />
         </div>
       </main>
@@ -1581,10 +3345,11 @@ export default function Login() {
 File: src/components/MecanicoDashboard.tsx
 ================
 import { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { Cpu, Search, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { createHardwareSocket } from '../api/socket';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Led { index: number; isActive: boolean; color?: string; partName?: string }
@@ -1613,11 +3378,7 @@ export default function MecanicoDashboard() {
     };
     void loadOrders();
 
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
-    const nextSocket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      extraHeaders: { 'ngrok-skip-browser-warning': '69420' },
-    });
+    const nextSocket = createHardwareSocket();
     setSocket(nextSocket);
     nextSocket.on('hw:status', (status: HwStatus) => {
       setHwStatus(status);
@@ -1685,6 +3446,130 @@ export default function RoleProtectedRoute({
   }
 
   return <>{children}</>;
+}
+
+================
+File: src/components/Sidebar.tsx
+================
+import { NavLink } from 'react-router-dom';
+import {
+  CalendarDays,
+  Car,
+  ClipboardList,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  Receipt,
+  ShoppingCart,
+  Truck,
+  Users,
+  Wrench,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
+import { Role, useAuth } from '../contexts/AuthContext';
+import { ROUTE_ROLES } from '../routes/routeRoles';
+
+interface NavigationItem {
+  label: string;
+  path: string;
+  icon: LucideIcon;
+  roles: readonly Role[];
+}
+
+/** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
+const navigationItems: NavigationItem[] = [
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO'] },
+  { label: 'Mi Vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'] },
+  { label: 'Inventario', path: '/inventory', icon: Package, roles: ROUTE_ROLES.inventory },
+  { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos },
+  { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'] },
+  { label: 'Citas', path: '/citas', icon: CalendarDays, roles: ROUTE_ROLES.citas },
+  { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios },
+  { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores },
+  { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras },
+  { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion },
+];
+
+interface SidebarProps {
+  /** Solo aplica en móvil (< md); en escritorio el sidebar siempre está visible. */
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
+    isActive
+      ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
+      : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+  }`;
+
+export default function Sidebar({ isOpen, onClose }: SidebarProps) {
+  const { user, logout } = useAuth();
+  const visibleItems = user ? navigationItems.filter((item) => item.roles.includes(user.role)) : [];
+
+  return (
+    <>
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-slate-950/70 md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-700 bg-slate-800 transition-transform md:static md:z-20 md:translate-x-0 md:bg-slate-800/80 md:backdrop-blur-md ${
+          isOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="h-16 flex items-center px-6 border-b border-slate-700 gap-3">
+          <div className="h-8 w-8 bg-brand-500/20 text-brand-500 rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.3)]">
+            <Wrench size={18} />
+          </div>
+          <span className="text-xl font-bold tracking-tight">GearTrace</span>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar menú"
+            className="ml-auto rounded-lg p-1.5 text-slate-400 hover:text-white md:hidden"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-4 border-b border-slate-700/50">
+          <div className="font-medium truncate">{user?.name}</div>
+          <div className="text-xs text-brand-400 mt-1 uppercase tracking-wider font-semibold">
+            {user?.role}
+          </div>
+        </div>
+
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {visibleItems.map(({ label, path, icon: Icon }) => (
+            <NavLink
+              key={label}
+              to={path}
+              className={navLinkClass}
+              end={path === '/dashboard'}
+              onClick={onClose}
+            >
+              <Icon size={20} /> {label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-slate-700">
+          <button
+            onClick={logout}
+            className="flex items-center gap-3 px-3 py-2.5 w-full text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-colors"
+          >
+            <LogOut size={20} /> Cerrar Sesión
+          </button>
+        </div>
+      </aside>
+    </>
+  );
 }
 
 ================
@@ -1775,22 +3660,669 @@ export const useAuth = () => {
 };
 
 ================
+File: src/pages/CitasPage.tsx
+================
+import { CalendarDays } from 'lucide-react';
+import { appointmentsApi, clientApi } from '../api/resources';
+import type { Appointment } from '../api/types';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import StatusBadge from '../components/ui/StatusBadge';
+import { useAuth } from '../contexts/AuthContext';
+import { EMPTY, formatDateTime } from '../utils/format';
+import { APPOINTMENT_STATUS } from '../utils/status';
+
+const baseColumns: Column<Appointment>[] = [
+  {
+    key: 'scheduledAt',
+    header: 'Fecha',
+    render: (appointment) => (
+      <span className="whitespace-nowrap text-slate-200">{formatDateTime(appointment.scheduledAt)}</span>
+    ),
+  },
+  {
+    key: 'vehicle',
+    header: 'Vehículo',
+    render: (appointment) =>
+      appointment.vehicle ? (
+        <div>
+          <div className="font-mono text-slate-200">{appointment.vehicle.plate}</div>
+          <div className="text-xs text-slate-500">
+            {appointment.vehicle.make} {appointment.vehicle.model}
+          </div>
+        </div>
+      ) : (
+        EMPTY
+      ),
+  },
+  {
+    key: 'reason',
+    header: 'Motivo',
+    hideOnMobile: true,
+    render: (appointment) => appointment.reason ?? EMPTY,
+  },
+  {
+    key: 'status',
+    header: 'Estado',
+    render: (appointment) => <StatusBadge {...APPOINTMENT_STATUS[appointment.status]} />,
+  },
+];
+
+const ownerColumn: Column<Appointment> = {
+  key: 'owner',
+  header: 'Cliente',
+  hideOnMobile: true,
+  render: (appointment) => appointment.vehicle?.owner?.name ?? EMPTY,
+};
+
+const staffColumns: Column<Appointment>[] = [...baseColumns.slice(0, 2), ownerColumn, ...baseColumns.slice(2)];
+
+/**
+ * /citas — GERENTE y MECANICO ven la agenda completa (/api/appointments);
+ * el CLIENTE solo sus citas (/api/client/appointments).
+ */
+export default function CitasPage() {
+  const { user } = useAuth();
+  const isClient = user?.role === 'CLIENTE';
+
+  return (
+    <ResourceListPage
+      title={isClient ? 'Mis citas' : 'Agenda de citas'}
+      description={isClient ? 'Citas solicitadas para tus vehículos' : 'Citas programadas en el taller'}
+      icon={CalendarDays}
+      entityLabel="la cita"
+      fetchAll={isClient ? clientApi.myAppointments : appointmentsApi.list}
+      columns={isClient ? baseColumns : staffColumns}
+      emptyMessage={isClient ? 'Aún no has solicitado citas.' : 'No hay citas programadas.'}
+      getRowLabel={(appointment) => formatDateTime(appointment.scheduledAt)}
+      canEdit={!isClient}
+      onDelete={user?.role === 'GERENTE' ? appointmentsApi.remove : undefined}
+    />
+  );
+}
+
+================
+File: src/pages/ComprasPage.tsx
+================
+import { ShoppingCart } from 'lucide-react';
+import { purchasesApi } from '../api/resources';
+import type { PurchaseOrder } from '../api/types';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import StatusBadge from '../components/ui/StatusBadge';
+import { EMPTY, formatCurrency, formatDate } from '../utils/format';
+import { PURCHASE_STATUS } from '../utils/status';
+
+/** Total estimado a partir de los ítems con precio unitario. */
+function estimatedTotal(order: PurchaseOrder): number | null {
+  const priced = order.items?.filter((item) => item.unitPrice !== null) ?? [];
+  if (priced.length === 0) return null;
+  return priced.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
+}
+
+const columns: Column<PurchaseOrder>[] = [
+  { key: 'number', header: 'Pedido', render: (order) => <span className="font-semibold text-white">{order.number}</span> },
+  { key: 'supplier', header: 'Proveedor', render: (order) => order.supplier?.name ?? EMPTY },
+  {
+    key: 'items',
+    header: 'Ítems',
+    hideOnMobile: true,
+    render: (order) => {
+      const items = order.items ?? [];
+      const units = items.reduce((sum, item) => sum + item.quantity, 0);
+      return `${items.length} piezas · ${units} u.`;
+    },
+  },
+  {
+    key: 'total',
+    header: 'Total est.',
+    hideOnMobile: true,
+    align: 'right',
+    render: (order) => formatCurrency(estimatedTotal(order)),
+  },
+  { key: 'status', header: 'Estado', render: (order) => <StatusBadge {...PURCHASE_STATUS[order.status]} /> },
+  { key: 'orderedAt', header: 'Fecha', hideOnMobile: true, render: (order) => formatDate(order.orderedAt) },
+];
+
+/** /compras — solo GERENTE. */
+export default function ComprasPage() {
+  return (
+    <ResourceListPage
+      title="Compras"
+      description="Órdenes de compra a proveedores"
+      icon={ShoppingCart}
+      entityLabel="el pedido"
+      fetchAll={purchasesApi.list}
+      columns={columns}
+      emptyMessage="No hay órdenes de compra registradas."
+      getRowLabel={(order) => order.number}
+      onDelete={purchasesApi.remove}
+    />
+  );
+}
+
+================
+File: src/pages/FacturacionPage.tsx
+================
+import { Receipt } from 'lucide-react';
+import { invoicesApi } from '../api/resources';
+import type { Invoice } from '../api/types';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import StatusBadge from '../components/ui/StatusBadge';
+import { EMPTY, formatCurrency, formatDate } from '../utils/format';
+import { INVOICE_STATUS } from '../utils/status';
+
+const columns: Column<Invoice>[] = [
+  { key: 'number', header: 'Factura', render: (invoice) => <span className="font-semibold text-white">{invoice.number}</span> },
+  {
+    key: 'workOrder',
+    header: 'Orden',
+    hideOnMobile: true,
+    render: (invoice) =>
+      invoice.workOrder ? (
+        <div>
+          <div className="text-slate-200">{invoice.workOrder.number}</div>
+          <div className="font-mono text-xs text-slate-500">{invoice.workOrder.vehicle?.plate}</div>
+        </div>
+      ) : (
+        EMPTY
+      ),
+  },
+  { key: 'client', header: 'Cliente', render: (invoice) => invoice.client?.name ?? EMPTY },
+  { key: 'subtotal', header: 'Subtotal', hideOnMobile: true, align: 'right', render: (invoice) => formatCurrency(invoice.subtotal) },
+  { key: 'tax', header: 'Impuestos', hideOnMobile: true, align: 'right', render: (invoice) => formatCurrency(invoice.tax) },
+  {
+    key: 'total',
+    header: 'Total',
+    align: 'right',
+    render: (invoice) => <span className="font-semibold text-white">{formatCurrency(invoice.total)}</span>,
+  },
+  { key: 'status', header: 'Estado', render: (invoice) => <StatusBadge {...INVOICE_STATUS[invoice.status]} /> },
+  { key: 'issuedAt', header: 'Emitida', hideOnMobile: true, render: (invoice) => formatDate(invoice.issuedAt) },
+];
+
+/** /facturacion — solo GERENTE. */
+export default function FacturacionPage() {
+  return (
+    <ResourceListPage
+      title="Facturación"
+      description="Facturas emitidas por órdenes de trabajo concluidas"
+      icon={Receipt}
+      entityLabel="la factura"
+      fetchAll={invoicesApi.list}
+      columns={columns}
+      emptyMessage="No hay facturas emitidas."
+      getRowLabel={(invoice) => invoice.number}
+      onDelete={invoicesApi.remove}
+    />
+  );
+}
+
+================
+File: src/pages/OrdenesTrabajoPage.tsx
+================
+import { useState } from 'react';
+import { ClipboardList, KanbanSquare, Table2 } from 'lucide-react';
+import { workOrdersApi } from '../api/resources';
+import type { WorkOrder } from '../api/types';
+import WorkOrdersList from '../components/WorkOrders/WorkOrdersList';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import StatusBadge from '../components/ui/StatusBadge';
+import ViewTabs, { ViewTab } from '../components/ui/ViewTabs';
+import { useAuth } from '../contexts/AuthContext';
+import { EMPTY, formatCurrency, formatDate } from '../utils/format';
+import { WORK_ORDER_STATUS } from '../utils/status';
+
+type View = 'list' | 'board';
+
+const kmFormatter = new Intl.NumberFormat('es');
+
+const tabs: ViewTab<View>[] = [
+  { key: 'board', label: 'Tablero', icon: KanbanSquare },
+  { key: 'list', label: 'Listado', icon: Table2 },
+];
+
+const columns: Column<WorkOrder>[] = [
+  {
+    key: 'number',
+    header: 'Orden',
+    render: (order) => (
+      <div>
+        <div className="font-semibold text-white">{order.number}</div>
+        <div className="max-w-xs truncate text-xs text-slate-400" title={order.description}>
+          {order.description}
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: 'vehicle',
+    header: 'Vehículo',
+    render: (order) =>
+      order.vehicle ? (
+        <div>
+          <div className="font-mono text-slate-200">{order.vehicle.plate}</div>
+          <div className="text-xs text-slate-500">
+            {order.vehicle.make} {order.vehicle.model}
+          </div>
+        </div>
+      ) : (
+        EMPTY
+      ),
+  },
+  { key: 'status', header: 'Estado', render: (order) => <StatusBadge {...WORK_ORDER_STATUS[order.status]} /> },
+  {
+    key: 'mileage',
+    header: 'Kilometraje',
+    hideOnMobile: true,
+    align: 'right',
+    render: (order) => (order.mileage === null ? EMPTY : `${kmFormatter.format(order.mileage)} km`),
+  },
+  { key: 'mechanic', header: 'Mecánico', hideOnMobile: true, render: (order) => order.mechanic?.name ?? 'Sin asignar' },
+  {
+    key: 'cost',
+    header: 'Costo',
+    hideOnMobile: true,
+    align: 'right',
+    render: (order) => formatCurrency(order.finalCost ?? order.estimatedCost),
+  },
+  { key: 'createdAt', header: 'Creada', hideOnMobile: true, render: (order) => formatDate(order.createdAt) },
+];
+
+/** /ordenes-trabajo — GERENTE, MECANICO. Tablero (Kanban + detalle + repuestos) por defecto; Listado como tabla. */
+export default function OrdenesTrabajoPage() {
+  const { user } = useAuth();
+  const [view, setView] = useState<View>('board');
+  const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
+
+  if (view === 'board') {
+    return (
+      <div className="space-y-6">
+        {toolbar}
+        <WorkOrdersList />
+      </div>
+    );
+  }
+
+  return (
+    <ResourceListPage
+      toolbar={toolbar}
+      title="Órdenes de trabajo"
+      description="Servicios en curso y concluidos del taller"
+      icon={ClipboardList}
+      entityLabel="la orden"
+      fetchAll={workOrdersApi.list}
+      columns={columns}
+      emptyMessage="No hay órdenes de trabajo registradas."
+      getRowLabel={(order) => order.number}
+      onDelete={user?.role === 'GERENTE' ? workOrdersApi.remove : undefined}
+    />
+  );
+}
+
+================
+File: src/pages/ProveedoresPage.tsx
+================
+import { useState } from 'react';
+import { PackageSearch, Table2, Truck } from 'lucide-react';
+import { suppliersApi } from '../api/resources';
+import type { Supplier } from '../api/types';
+import SuppliersList from '../components/Suppliers/SuppliersList';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import ViewTabs, { ViewTab } from '../components/ui/ViewTabs';
+import { EMPTY } from '../utils/format';
+
+type View = 'list' | 'restock';
+
+const tabs: ViewTab<View>[] = [
+  { key: 'list', label: 'Listado', icon: Table2 },
+  { key: 'restock', label: 'Reposición de stock', icon: PackageSearch },
+];
+
+const columns: Column<Supplier>[] = [
+  {
+    key: 'name',
+    header: 'Proveedor',
+    render: (supplier) => (
+      <div>
+        <div className="font-medium text-white">{supplier.name}</div>
+        <div className="text-xs text-slate-500">{supplier.taxId ?? 'Sin identificador fiscal'}</div>
+      </div>
+    ),
+  },
+  { key: 'contact', header: 'Contacto', hideOnMobile: true, render: (supplier) => supplier.contactName ?? EMPTY },
+  { key: 'email', header: 'Correo', hideOnMobile: true, render: (supplier) => supplier.email ?? EMPTY },
+  { key: 'phone', header: 'Teléfono', render: (supplier) => supplier.phone ?? EMPTY },
+  {
+    key: 'orders',
+    header: 'Pedidos',
+    align: 'right',
+    render: (supplier) => supplier._count?.purchaseOrders ?? 0,
+  },
+];
+
+/** /proveedores — solo GERENTE. */
+export default function ProveedoresPage() {
+  const [view, setView] = useState<View>('list');
+  const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
+
+  if (view === 'restock') {
+    return (
+      <div className="space-y-6">
+        {toolbar}
+        <SuppliersList />
+      </div>
+    );
+  }
+
+  return (
+    <ResourceListPage
+      toolbar={toolbar}
+      title="Proveedores"
+      description="Empresas que abastecen repuestos al taller"
+      icon={Truck}
+      entityLabel="el proveedor"
+      fetchAll={suppliersApi.list}
+      columns={columns}
+      emptyMessage="No hay proveedores registrados."
+      getRowLabel={(supplier) => supplier.name}
+      onDelete={suppliersApi.remove}
+    />
+  );
+}
+
+================
+File: src/pages/UsuariosPage.tsx
+================
+import { useState } from 'react';
+import { ShieldCheck, Table2, Users } from 'lucide-react';
+import { usersApi } from '../api/resources';
+import type { AppUser } from '../api/types';
+import UsersList from '../components/Users/UsersList';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import StatusBadge from '../components/ui/StatusBadge';
+import ViewTabs, { ViewTab } from '../components/ui/ViewTabs';
+import { formatDate } from '../utils/format';
+import { ROLE_META } from '../utils/status';
+
+type View = 'list' | 'access';
+
+const tabs: ViewTab<View>[] = [
+  { key: 'list', label: 'Listado', icon: Table2 },
+  { key: 'access', label: 'Gestión de accesos', icon: ShieldCheck },
+];
+
+const columns: Column<AppUser>[] = [
+  {
+    key: 'name',
+    header: 'Usuario',
+    render: (user) => (
+      <div>
+        <div className="font-medium text-white">{user.name}</div>
+        <div className="text-xs text-slate-400">{user.email}</div>
+      </div>
+    ),
+  },
+  {
+    key: 'role',
+    header: 'Rol',
+    render: (user) => <StatusBadge {...ROLE_META[user.role]} />,
+  },
+  {
+    key: 'status',
+    header: 'Estado',
+    render: (user) =>
+      user.isActive ? (
+        <StatusBadge label="Activo" tone="success" />
+      ) : (
+        <StatusBadge label="Inactivo" tone="neutral" />
+      ),
+  },
+  { key: 'createdAt', header: 'Alta', hideOnMobile: true, render: (user) => formatDate(user.createdAt) },
+];
+
+/** /usuarios — solo GERENTE (protegida en App.tsx). */
+export default function UsuariosPage() {
+  const [view, setView] = useState<View>('list');
+  const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
+
+  if (view === 'access') {
+    return (
+      <div className="space-y-6">
+        {toolbar}
+        <UsersList />
+      </div>
+    );
+  }
+
+  return (
+    <ResourceListPage
+      toolbar={toolbar}
+      title="Usuarios"
+      description="Personal del taller y clientes registrados"
+      icon={Users}
+      entityLabel="el usuario"
+      fetchAll={usersApi.list}
+      columns={columns}
+      emptyMessage="No hay usuarios registrados."
+      getRowLabel={(user) => user.email}
+      onDelete={usersApi.remove}
+    />
+  );
+}
+
+================
+File: src/pages/VehiculosPage.tsx
+================
+import { Car } from 'lucide-react';
+import { vehiclesApi } from '../api/resources';
+import type { Vehicle } from '../api/types';
+import type { Column } from '../components/ui/DataTable';
+import ResourceListPage from '../components/ui/ResourceListPage';
+import { useAuth } from '../contexts/AuthContext';
+import { EMPTY } from '../utils/format';
+
+const columns: Column<Vehicle>[] = [
+  {
+    key: 'plate',
+    header: 'Placa',
+    render: (vehicle) => <span className="font-mono font-semibold text-white">{vehicle.plate}</span>,
+  },
+  { key: 'model', header: 'Vehículo', render: (vehicle) => `${vehicle.make} ${vehicle.model}` },
+  { key: 'year', header: 'Año', hideOnMobile: true, render: (vehicle) => vehicle.year ?? EMPTY },
+  { key: 'color', header: 'Color', hideOnMobile: true, render: (vehicle) => vehicle.color ?? EMPTY },
+  {
+    key: 'owner',
+    header: 'Propietario',
+    hideOnMobile: true,
+    render: (vehicle) =>
+      vehicle.owner ? (
+        <div>
+          <div className="text-slate-200">{vehicle.owner.name}</div>
+          <div className="text-xs text-slate-500">{vehicle.owner.email}</div>
+        </div>
+      ) : (
+        EMPTY
+      ),
+  },
+];
+
+/** /vehiculos — GERENTE, MECANICO. */
+export default function VehiculosPage() {
+  const { user } = useAuth();
+
+  return (
+    <ResourceListPage
+      title="Vehículos"
+      description="Vehículos registrados de los clientes"
+      icon={Car}
+      entityLabel="el vehículo"
+      fetchAll={vehiclesApi.list}
+      columns={columns}
+      emptyMessage="No hay vehículos registrados."
+      getRowLabel={(vehicle) => vehicle.plate}
+      onDelete={user?.role === 'GERENTE' ? vehiclesApi.remove : undefined}
+    />
+  );
+}
+
+================
+File: src/routes/routeRoles.ts
+================
+import type { Role } from '../contexts/AuthContext';
+
+/**
+ * Fuente única de roles por ruta. La usan App.tsx (protección) y Sidebar.tsx
+ * (visibilidad de enlaces), así un enlace nunca aparece para un rol que la
+ * ruta rechazaría.
+ */
+export const ROUTE_ROLES = {
+  inventory: ['GERENTE', 'MECANICO'],
+  usuarios: ['GERENTE'],
+  vehiculos: ['GERENTE', 'MECANICO'],
+  'ordenes-trabajo': ['GERENTE', 'MECANICO'],
+  citas: ['GERENTE', 'MECANICO', 'CLIENTE'],
+  proveedores: ['GERENTE'],
+  compras: ['GERENTE'],
+  facturacion: ['GERENTE'],
+} as const satisfies Record<string, readonly Role[]>;
+
+export type AppRoute = keyof typeof ROUTE_ROLES;
+
+export function canAccess(route: AppRoute, role: Role | undefined): boolean {
+  return role !== undefined && (ROUTE_ROLES[route] as readonly Role[]).includes(role);
+}
+
+================
+File: src/utils/format.ts
+================
+const CURRENCY = 'USD';
+
+const dateFormatter = new Intl.DateTimeFormat('es', { dateStyle: 'medium' });
+const dateTimeFormatter = new Intl.DateTimeFormat('es', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
+const currencyFormatter = new Intl.NumberFormat('es', {
+  style: 'currency',
+  currency: CURRENCY,
+});
+
+export const EMPTY = '—';
+
+export function formatDate(value: string | null | undefined): string {
+  return value ? dateFormatter.format(new Date(value)) : EMPTY;
+}
+
+export function formatDateTime(value: string | null | undefined): string {
+  return value ? dateTimeFormatter.format(new Date(value)) : EMPTY;
+}
+
+/** Los Decimal de Prisma llegan como string. */
+export function formatCurrency(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return EMPTY;
+  return currencyFormatter.format(Number(value));
+}
+
+================
+File: src/utils/status.ts
+================
+import type { BadgeTone } from '../components/ui/StatusBadge';
+import type { Role } from '../contexts/AuthContext';
+import type {
+  AppointmentStatus,
+  InvoiceStatus,
+  PurchaseOrderStatus,
+  WorkOrderStatus,
+} from '../api/types';
+
+interface StatusMeta {
+  label: string;
+  tone: BadgeTone;
+}
+
+export const ROLE_META: Record<Role, StatusMeta> = {
+  GERENTE: { label: 'Gerente', tone: 'brand' },
+  MECANICO: { label: 'Mecánico', tone: 'info' },
+  CLIENTE: { label: 'Cliente', tone: 'neutral' },
+};
+
+export const WORK_ORDER_STATUS: Record<WorkOrderStatus, StatusMeta> = {
+  EN_DIAGNOSTICO: { label: 'En diagnóstico', tone: 'info' },
+  EN_PROCESO: { label: 'En proceso', tone: 'brand' },
+  ESPERA_REPUESTOS: { label: 'Espera de repuestos', tone: 'warning' },
+  CONCLUIDO: { label: 'Concluido', tone: 'success' },
+};
+
+export const APPOINTMENT_STATUS: Record<AppointmentStatus, StatusMeta> = {
+  AGENDADA: { label: 'Agendada', tone: 'info' },
+  CONFIRMADA: { label: 'Confirmada', tone: 'brand' },
+  COMPLETADA: { label: 'Completada', tone: 'success' },
+  CANCELADA: { label: 'Cancelada', tone: 'danger' },
+};
+
+export const PURCHASE_STATUS: Record<PurchaseOrderStatus, StatusMeta> = {
+  PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  RECIBIDA: { label: 'Recibida', tone: 'success' },
+  CANCELADA: { label: 'Cancelada', tone: 'danger' },
+};
+
+export const INVOICE_STATUS: Record<InvoiceStatus, StatusMeta> = {
+  PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  PAGADA: { label: 'Pagada', tone: 'success' },
+};
+
+================
 File: src/App.tsx
 ================
+import { ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './contexts/AuthContext'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
 import InventoryList from './components/Inventory/InventoryList'
-import UsersList from './components/Users/UsersList'
-import SuppliersList from './components/Suppliers/SuppliersList'
-import WorkOrdersBoard from './components/WorkOrders/WorkOrdersBoard'
 import AuditLogs from './components/AuditLogs'
 import RoleProtectedRoute from './components/RoleProtectedRoute'
+import UsuariosPage from './pages/UsuariosPage'
+import VehiculosPage from './pages/VehiculosPage'
+import OrdenesTrabajoPage from './pages/OrdenesTrabajoPage'
+import CitasPage from './pages/CitasPage'
+import ProveedoresPage from './pages/ProveedoresPage'
+import ComprasPage from './pages/ComprasPage'
+import FacturacionPage from './pages/FacturacionPage'
+import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
+
+/** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
+const protectedRoutes: Record<AppRoute, ReactNode> = {
+  inventory: <InventoryList />,
+  // Administración
+  usuarios: <UsuariosPage />,
+  // Servicios (SER)
+  vehiculos: <VehiculosPage />,
+  'ordenes-trabajo': <OrdenesTrabajoPage />,
+  citas: <CitasPage />,
+  // Abastecimiento (ABA)
+  proveedores: <ProveedoresPage />,
+  compras: <ComprasPage />,
+  // Facturación (FIN)
+  facturacion: <FacturacionPage />,
+}
+
+/** Rutas anteriores en inglés: redirigen a la ruta canónica en español. */
+const legacyRedirects: Record<string, string> = {
+  users: '/usuarios',
+  'work-orders': '/ordenes-trabajo',
+  suppliers: '/proveedores',
+  billing: '/facturacion',
+}
 
 function App() {
-  const { isAuthenticated, isLoading, user } = useAuth()
+  const { isAuthenticated, isLoading } = useAuth()
 
   if (isLoading) {
     return (
@@ -1802,42 +4334,34 @@ function App() {
 
   return (
     <Routes>
-      <Route 
-        path="/login" 
-        element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />} 
+      <Route
+        path="/login"
+        element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />}
       />
-      
-      <Route 
-        path="/" 
+
+      <Route
+        path="/"
         element={isAuthenticated ? <Layout /> : <Navigate to="/login" />}
       >
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route
-          path="inventory"
-          element={
-            <RoleProtectedRoute allowedRoles={['GERENTE', 'MECANICO']}>
-              <InventoryList />
-            </RoleProtectedRoute>
-          }
-        />
         <Route path="logs" element={<AuditLogs />} />
-        <Route
-          path="suppliers"
-          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <SuppliersList /> : <Navigate to="/dashboard" replace />}
-        />
-        <Route
-          path="work-orders"
-          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <WorkOrdersBoard /> : <Navigate to="/dashboard" replace />}
-        />
-        <Route
-          path="users"
-          element={
-            <RoleProtectedRoute allowedRoles={['GERENTE']}>
-              <UsersList />
-            </RoleProtectedRoute>
-          }
-        />
+
+        {(Object.keys(protectedRoutes) as AppRoute[]).map((path) => (
+          <Route
+            key={path}
+            path={path}
+            element={
+              <RoleProtectedRoute allowedRoles={[...ROUTE_ROLES[path]]}>
+                {protectedRoutes[path]}
+              </RoleProtectedRoute>
+            }
+          />
+        ))}
+
+        {Object.entries(legacyRedirects).map(([from, to]) => (
+          <Route key={from} path={from} element={<Navigate to={to} replace />} />
+        ))}
       </Route>
 
       <Route path="*" element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} />} />
@@ -1927,13 +4451,21 @@ File: clinerules.md
 
 ## Estructura
 - `/src/api/axios.ts`: Instancia con interceptor para adjuntar token JWT automáticamente.
+- `/src/api/resources.ts`: Servicios por dominio (`usersApi`, `vehiclesApi`, ...) creados con `createCrudApi` (`/src/api/crud.ts`); tipos en `/src/api/types.ts`.
 - `/src/contexts/AuthContext.tsx`: Contexto de autenticación global.
-- `/src/components/Dashboard.tsx`: Escucha de eventos Socket.io (`hw:status`, `led:activated`, `led:off`).
+- `/src/components/Dashboard.tsx`: Orquestador por rol. Los sockets viven en `GerenteDashboard`/`MecanicoDashboard` (`hw:status`, `led:activated`, `led:off`).
+- `/src/api/socket.ts`: `createHardwareSocket()`, única forma de abrir Socket.io (solo `websocket`).
 
 ## Reglas de Desarrollo Frontend
 1. Usar componentes funcionales en TypeScript con tipos explícitos.
 2. Utilizar clases utilitarias de TailwindCSS para el diseño (tema oscuro slate-900 / brand orange).
 3. No hacer peticiones `fetch` directas; usar siempre la instancia de `@/api/axios`.
+4. Consumir los módulos del backend mediante los servicios de `@/api/resources`; las actualizaciones son PATCH (el backend no expone PUT).
+5. Rutas de la app en español (`/usuarios`, `/vehiculos`, `/ordenes-trabajo`, `/citas`, `/proveedores`, `/compras`, `/facturacion`). Sus roles se declaran SOLO en `ROUTE_ROLES` (`/src/routes/routeRoles.ts`); `App.tsx` (protección) y `Sidebar.tsx` (enlaces) los leen de ahí.
+6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío; acciones con iconos lucide. Eliminar solo se ofrece al `GERENTE`.
+7. Modales y paneles: capa `bg-slate-950/60-70` + `backdrop-blur-sm`, contenedor `bg-slate-800/90` o `bg-slate-900/95` con `backdrop-blur-xl` y borde `slate-700`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500`.
+8. Tras una acción que responde con menos relaciones que el listado (p. ej. `/close`), recargar la entidad con su `get` antes de reemplazarla en el estado local.
+9. Socket.io siempre vía `createHardwareSocket()` (`transports: ['websocket']`, sin `extraHeaders`). Axios siempre vía la instancia `api` (header `ngrok-skip-browser-warning` incluido); no modificar `axios.defaults`.
 
 ================
 File: index.html

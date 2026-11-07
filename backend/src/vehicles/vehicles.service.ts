@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { isPrismaError } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
@@ -33,8 +34,10 @@ export class VehiclesService {
     return vehicle;
   }
 
+  /** RF-SER-01: registra un vehículo validando que la placa no exista. */
   async create(dto: CreateVehicleDto) {
     await this.ensureOwner(dto.ownerId);
+    await this.ensurePlateAvailable(dto.plate);
     try {
       return await this.prisma.vehicle.create({
         data: dto,
@@ -49,6 +52,7 @@ export class VehiclesService {
   async update(id: number, dto: UpdateVehicleDto) {
     await this.ensureExists(id);
     if (dto.ownerId !== undefined) await this.ensureOwner(dto.ownerId);
+    if (dto.plate !== undefined) await this.ensurePlateAvailable(dto.plate, id);
     try {
       return await this.prisma.vehicle.update({
         where: { id },
@@ -81,8 +85,29 @@ export class VehiclesService {
   }
 
   private async ensureOwner(id: number) {
-    const count = await this.prisma.user.count({ where: { id } });
-    if (count === 0) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    const owner = await this.prisma.user.findUnique({
+      where: { id },
+      select: { role: true, isActive: true },
+    });
+    if (!owner) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    if (owner.role !== Role.CLIENTE || !owner.isActive) {
+      throw new ConflictException('El propietario debe ser un cliente activo');
+    }
+  }
+
+  /**
+   * Comparación sin distinguir mayúsculas para cubrir placas antiguas no
+   * normalizadas. El índice único de `plate` sigue cubriendo la concurrencia.
+   */
+  private async ensurePlateAvailable(plate: string, excludeId?: number) {
+    const existing = await this.prisma.vehicle.findFirst({
+      where: {
+        plate: { equals: plate, mode: 'insensitive' },
+        ...(excludeId !== undefined && { id: { not: excludeId } }),
+      },
+      select: { id: true },
+    });
+    if (existing) throw new ConflictException(`La placa "${plate}" ya está registrada`);
   }
 
   private throwDuplicate(error: unknown) {

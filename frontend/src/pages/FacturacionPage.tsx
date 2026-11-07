@@ -41,7 +41,7 @@ export default function FacturacionPage() {
   return (
     <ResourceListPage
       title="Facturación"
-      description="Facturas emitidas por órdenes de trabajo cerradas"
+      description="Facturas emitidas por órdenes de trabajo concluidas"
       icon={Receipt}
       entityLabel="la factura"
       fetchAll={invoicesApi.list}

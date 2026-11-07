@@ -55,6 +55,10 @@ prisma/
       migration.sql
     20261107210844_add_work_order_parts/
       migration.sql
+    20261107215134_add_invoice_model/
+      migration.sql
+    20261107230000_ser_work_order_states_and_used_parts/
+      migration.sql
   schema.prisma
   seed.sql
   seed.ts
@@ -64,6 +68,12 @@ src/
     alexa.module.ts
     alexa.service.ts
     alexa.types.ts
+  appointments/
+    dto/
+      appointment.dto.ts
+    appointments.controller.ts
+    appointments.module.ts
+    appointments.service.ts
   auth/
     decorators/
       auth.decorators.ts
@@ -85,6 +95,9 @@ src/
     client.controller.ts
     client.module.ts
     client.service.ts
+  common/
+    cors.ts
+    prisma-errors.ts
   inventory/
     dto/
       create-box.dto.ts
@@ -94,6 +107,12 @@ src/
     inventory.controller.ts
     inventory.module.ts
     inventory.service.ts
+  invoices/
+    dto/
+      invoice.dto.ts
+    invoices.controller.ts
+    invoices.module.ts
+    invoices.service.ts
   led/
     led-controller.service.ts
     led.gateway.ts
@@ -105,6 +124,12 @@ src/
   prisma/
     prisma.module.ts
     prisma.service.ts
+  purchases/
+    dto/
+      purchase.dto.ts
+    purchases.controller.ts
+    purchases.module.ts
+    purchases.service.ts
   service/
     dto/
       vehicle.dto.ts
@@ -118,6 +143,32 @@ src/
     supplier.controller.ts
     supplier.module.ts
     supplier.service.ts
+  suppliers/
+    dto/
+      supplier.dto.ts
+    suppliers.controller.ts
+    suppliers.module.ts
+    suppliers.service.ts
+  users/
+    dto/
+      user.dto.ts
+    users.controller.ts
+    users.module.ts
+    users.service.ts
+  vehicles/
+    dto/
+      vehicle.dto.ts
+    vehicles.controller.ts
+    vehicles.module.ts
+    vehicles.service.ts
+  work-orders/
+    dto/
+      work-order.dto.ts
+    work-order-number.ts
+    work-order-scope.ts
+    work-orders.controller.ts
+    work-orders.module.ts
+    work-orders.service.ts
   app.module.ts
   main.ts
 .env.example
@@ -411,6 +462,81 @@ ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_work_order_id_fk
 ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ================
+File: prisma/migrations/20261107215134_add_invoice_model/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "InvoiceStatus" AS ENUM ('PENDIENTE', 'PAGADA');
+
+-- CreateTable
+CREATE TABLE "invoices" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "subtotal" DECIMAL(10,2) NOT NULL,
+    "tax" DECIMAL(10,2) NOT NULL DEFAULT 0,
+    "total" DECIMAL(10,2) NOT NULL,
+    "status" "InvoiceStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "issued_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "paid_at" TIMESTAMP(3),
+    "work_order_id" INTEGER NOT NULL,
+    "client_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "invoices_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "invoices_number_key" ON "invoices"("number");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "invoices_work_order_id_key" ON "invoices"("work_order_id");
+
+-- CreateIndex
+CREATE INDEX "invoices_client_id_idx" ON "invoices"("client_id");
+
+-- CreateIndex
+CREATE INDEX "invoices_status_idx" ON "invoices"("status");
+
+-- AddForeignKey
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
+File: prisma/migrations/20261107230000_ser_work_order_states_and_used_parts/migration.sql
+================
+-- Migración escrita a mano: conserva datos (Prisma generaba DROP/CREATE).
+
+-- 1. WorkOrderStatus: PENDIENTE/EN_DIAGNOSTICO/EN_PROGRESO/CERRADA
+--    → EN_DIAGNOSTICO/EN_PROCESO/ESPERA_REPUESTOS/CONCLUIDO
+ALTER TABLE "work_orders" ALTER COLUMN "status" DROP DEFAULT;
+CREATE TYPE "WorkOrderStatus_new" AS ENUM ('EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS', 'CONCLUIDO');
+ALTER TABLE "work_orders" ALTER COLUMN "status" TYPE "WorkOrderStatus_new" USING (
+  CASE "status"::text
+    WHEN 'PENDIENTE'   THEN 'EN_DIAGNOSTICO'
+    WHEN 'EN_PROGRESO' THEN 'EN_PROCESO'
+    WHEN 'CERRADA'     THEN 'CONCLUIDO'
+    ELSE "status"::text
+  END
+)::"WorkOrderStatus_new";
+DROP TYPE "WorkOrderStatus";
+ALTER TYPE "WorkOrderStatus_new" RENAME TO "WorkOrderStatus";
+ALTER TABLE "work_orders" ALTER COLUMN "status" SET DEFAULT 'EN_DIAGNOSTICO';
+
+-- 2. Kilometraje de ingreso
+ALTER TABLE "work_orders" ADD COLUMN "mileage" INTEGER;
+
+-- 3. WorkOrderItem → UsedPart: renombrar tabla y objetos asociados
+ALTER TABLE "work_order_items" RENAME TO "used_parts";
+ALTER SEQUENCE "work_order_items_id_seq" RENAME TO "used_parts_id_seq";
+ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_pkey" TO "used_parts_pkey";
+ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_work_order_id_fkey" TO "used_parts_work_order_id_fkey";
+ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_part_id_fkey" TO "used_parts_part_id_fkey";
+ALTER INDEX "work_order_items_part_id_idx" RENAME TO "used_parts_part_id_idx";
+ALTER INDEX "work_order_items_work_order_id_part_id_key" RENAME TO "used_parts_work_order_id_part_id_key";
+
+================
 File: prisma/schema.prisma
 ================
 // ============================================================
@@ -441,11 +567,13 @@ enum Role {
   CLIENTE
 }
 
+// Flujo SER: EN_DIAGNOSTICO → EN_PROCESO ⇄ ESPERA_REPUESTOS → CONCLUIDO
+// CONCLUIDO solo se alcanza por el cierre transaccional (descuenta stock).
 enum WorkOrderStatus {
-  PENDIENTE
   EN_DIAGNOSTICO
-  EN_PROGRESO
-  CERRADA
+  EN_PROCESO
+  ESPERA_REPUESTOS
+  CONCLUIDO
 }
 
 enum AppointmentStatus {
@@ -459,6 +587,11 @@ enum PurchaseOrderStatus {
   PENDIENTE
   RECIBIDA
   CANCELADA
+}
+
+enum InvoiceStatus {
+  PENDIENTE
+  PAGADA
 }
 
 // ────────────────────────────────────────────────────────────
@@ -482,6 +615,7 @@ model User {
   searchLogs SearchLog[]
   vehicles   Vehicle[]
   workOrders WorkOrder[] @relation("AssignedMechanic")
+  invoices   Invoice[]   @relation("InvoiceClient")
 
   @@map("users")
 }
@@ -557,7 +691,7 @@ model Part {
   boxId              Int                 @map("box_id")
   box                Box                 @relation(fields: [boxId], references: [id], onDelete: Restrict)
   purchaseOrderItems PurchaseOrderItem[]
-  workOrderItems     WorkOrderItem[]
+  usedParts          UsedPart[]
 
   @@index([name])
   @@index([boxId])
@@ -622,14 +756,17 @@ model WorkOrder {
   number        String          @unique @db.VarChar(30)
   description   String          @db.Text
   diagnosis     String?         @db.Text
-  status        WorkOrderStatus @default(PENDIENTE)
+  /// Kilometraje del vehículo al ingresar al taller
+  mileage       Int?
+  status        WorkOrderStatus @default(EN_DIAGNOSTICO)
   estimatedCost Decimal?        @map("estimated_cost") @db.Decimal(10, 2)
   finalCost     Decimal?        @map("final_cost") @db.Decimal(10, 2)
   vehicleId     Int             @map("vehicle_id")
   mechanicId    Int?            @map("mechanic_id")
   vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
-  parts         WorkOrderItem[]
+  parts         UsedPart[]
+  invoice       Invoice?
 
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -657,7 +794,12 @@ model Appointment {
   @@map("appointments")
 }
 
-model WorkOrderItem {
+// ────────────────────────────────────────────────────────────
+// UsedPart: Repuesto consumido en una orden de trabajo (SER)
+//
+//  Se descuenta del stock de Part al cerrar la orden (CONCLUIDO).
+// ────────────────────────────────────────────────────────────
+model UsedPart {
   id          Int       @id @default(autoincrement())
   quantity    Int
   workOrderId Int       @map("work_order_id")
@@ -667,7 +809,7 @@ model WorkOrderItem {
 
   @@unique([workOrderId, partId])
   @@index([partId])
-  @@map("work_order_items")
+  @@map("used_parts")
 }
 
 model Supplier {
@@ -716,6 +858,35 @@ model PurchaseOrderItem {
   @@unique([purchaseOrderId, partId])
   @@index([partId])
   @@map("purchase_order_items")
+}
+
+// ────────────────────────────────────────────────────────────
+// Invoice: Factura emitida por una orden de trabajo (FIN)
+//
+//  - Una orden de trabajo genera como máximo una factura.
+//  - clientId: Cliente facturado (normalmente el dueño del vehículo).
+//  - total = subtotal + tax (se calcula en el servicio).
+// ────────────────────────────────────────────────────────────
+model Invoice {
+  id          Int           @id @default(autoincrement())
+  number      String        @unique @db.VarChar(30)
+  subtotal    Decimal       @db.Decimal(10, 2)
+  tax         Decimal       @default(0) @db.Decimal(10, 2)
+  total       Decimal       @db.Decimal(10, 2)
+  status      InvoiceStatus @default(PENDIENTE)
+  issuedAt    DateTime      @default(now()) @map("issued_at")
+  paidAt      DateTime?     @map("paid_at")
+  workOrderId Int           @unique @map("work_order_id")
+  clientId    Int           @map("client_id")
+  workOrder   WorkOrder     @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  client      User          @relation("InvoiceClient", fields: [clientId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([clientId])
+  @@index([status])
+  @@map("invoices")
 }
 
 ================
@@ -924,13 +1095,15 @@ async function main() {
   }
 
   // 7. Crear órdenes de trabajo ficticias
+  // Mismo formato que genera WorkOrdersService (RF-SER-05): OT-YYYY-NNN
+  const currentYear = new Date().getFullYear();
   await prisma.workOrder.upsert({
-    where: { number: 'OT-0001' },
+    where: { number: `OT-${currentYear}-001` },
     update: {},
     create: {
-      number: 'OT-0001',
+      number: `OT-${currentYear}-001`,
       description: 'Cambio de aceite y filtro',
-      status: WorkOrderStatus.CERRADA,
+      status: WorkOrderStatus.CONCLUIDO,
       finalCost: 45,
       vehicleId: vehiculoCliente.id,
       mechanicId: mecanico.id,
@@ -939,10 +1112,10 @@ async function main() {
   });
 
   await prisma.workOrder.upsert({
-    where: { number: 'OT-0002' },
+    where: { number: `OT-${currentYear}-002` },
     update: {},
     create: {
-      number: 'OT-0002',
+      number: `OT-${currentYear}-002`,
       description: 'Revisión del sistema de frenos',
       status: WorkOrderStatus.EN_DIAGNOSTICO,
       vehicleId: vehiculoEmpresa.id,
@@ -1491,6 +1664,212 @@ export interface AlexaCard {
   title: string;
   text?: string;
   content?: string;
+}
+
+================
+File: src/appointments/dto/appointment.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { AppointmentStatus } from '@prisma/client';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
+
+export class CreateAppointmentDto {
+  /** Fecha y hora ISO 8601; debe ser futura */
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+}
+
+export class UpdateAppointmentDto extends PartialType(CreateAppointmentDto) {
+  @IsOptional()
+  @IsEnum(AppointmentStatus)
+  status?: AppointmentStatus;
+}
+
+================
+File: src/appointments/appointments.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { AppointmentsService } from './appointments.service';
+import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
+
+/**
+ * /api/appointments — Agenda del taller (personal).
+ * El CLIENTE agenda sus propias citas en POST /api/client/appointments.
+ */
+@Controller('appointments')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class AppointmentsController {
+  constructor(private readonly appointmentsService: AppointmentsService) {}
+
+  @Get()
+  findAll() {
+    return this.appointmentsService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.appointmentsService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateAppointmentDto) {
+    return this.appointmentsService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateAppointmentDto,
+  ) {
+    return this.appointmentsService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.appointmentsService.remove(id);
+  }
+}
+
+================
+File: src/appointments/appointments.module.ts
+================
+import { Module } from '@nestjs/common';
+import { AppointmentsController } from './appointments.controller';
+import { AppointmentsService } from './appointments.service';
+
+@Module({
+  controllers: [AppointmentsController],
+  providers: [AppointmentsService],
+})
+export class AppointmentsModule {}
+
+================
+File: src/appointments/appointments.service.ts
+================
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { AppointmentStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
+
+const APPOINTMENT_INCLUDE = {
+  vehicle: {
+    include: { owner: { select: { id: true, name: true, email: true } } },
+  },
+} as const;
+
+const FINAL_STATUSES: AppointmentStatus[] = [
+  AppointmentStatus.COMPLETADA,
+  AppointmentStatus.CANCELADA,
+];
+
+@Injectable()
+export class AppointmentsService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findAll() {
+    return this.prisma.appointment.findMany({
+      include: APPOINTMENT_INCLUDE,
+      orderBy: { scheduledAt: 'asc' },
+    });
+  }
+
+  async findOne(id: number) {
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id },
+      include: APPOINTMENT_INCLUDE,
+    });
+    if (!appointment) throw new NotFoundException(`Cita con id ${id} no encontrada`);
+    return appointment;
+  }
+
+  async create(dto: CreateAppointmentDto) {
+    await this.ensureVehicle(dto.vehicleId);
+    return this.prisma.appointment.create({
+      data: {
+        scheduledAt: this.toFutureDate(dto.scheduledAt),
+        reason: dto.reason,
+        vehicleId: dto.vehicleId,
+      },
+      include: APPOINTMENT_INCLUDE,
+    });
+  }
+
+  async update(id: number, dto: UpdateAppointmentDto) {
+    const appointment = await this.findOne(id);
+    if (FINAL_STATUSES.includes(appointment.status)) {
+      throw new ConflictException('Una cita completada o cancelada no puede modificarse');
+    }
+    if (dto.vehicleId !== undefined) await this.ensureVehicle(dto.vehicleId);
+
+    return this.prisma.appointment.update({
+      where: { id },
+      data: {
+        ...dto,
+        scheduledAt: dto.scheduledAt ? this.toFutureDate(dto.scheduledAt) : undefined,
+      },
+      include: APPOINTMENT_INCLUDE,
+    });
+  }
+
+  async remove(id: number) {
+    await this.findOne(id);
+    await this.prisma.appointment.delete({ where: { id } });
+  }
+
+  private toFutureDate(value: string): Date {
+    const date = new Date(value);
+    if (date <= new Date()) {
+      throw new BadRequestException('La cita debe agendarse para una fecha futura');
+    }
+    return date;
+  }
+
+  private async ensureVehicle(id: number) {
+    const count = await this.prisma.vehicle.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
+  }
 }
 
 ================
@@ -2174,6 +2553,11 @@ export class ClientController {
     return this.clientService.findMyVehicles(user.id);
   }
 
+  @Get('appointments')
+  findMyAppointments(@CurrentUser() user: AuthenticatedUser) {
+    return this.clientService.findMyAppointments(user.id);
+  }
+
   @Post('appointments')
   @HttpCode(HttpStatus.CREATED)
   createAppointment(
@@ -2224,6 +2608,14 @@ export class ClientService {
     });
   }
 
+  findMyAppointments(ownerId: number) {
+    return this.prisma.appointment.findMany({
+      where: { vehicle: { ownerId } },
+      include: { vehicle: true },
+      orderBy: { scheduledAt: 'desc' },
+    });
+  }
+
   async createAppointment(ownerId: number, dto: CreateAppointmentDto) {
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id: dto.vehicleId, ownerId },
@@ -2258,6 +2650,101 @@ export class ClientService {
       orderBy: { createdAt: 'desc' },
     });
   }
+}
+
+================
+File: src/common/cors.ts
+================
+/**
+ * Política de orígenes única para HTTP (main.ts) y Socket.io (led.gateway.ts).
+ *
+ * Permitidos:
+ *  1. Orígenes exactos de CORS_ORIGIN (separados por coma), p. ej. el dominio
+ *     de producción en Vercel: https://geartrace.vercel.app
+ *  2. Túneles ngrok por SUFIJO de dominio y solo HTTPS (*.ngrok-free.app, ...).
+ *  3. localhost y red privada (desarrollo / Raspberry Pi en LAN).
+ *  4. Previews de Vercel (*.vercel.app) SOLO si CORS_ALLOW_VERCEL_PREVIEWS=true:
+ *     cualquiera puede publicar en vercel.app, así que no se aceptan por defecto.
+ *
+ * Las variables se leen en cada llamada (no al importar), porque los
+ * decoradores se evalúan antes de que ConfigModule cargue el .env.
+ */
+
+const NGROK_SUFFIXES = ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'];
+
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]', 'geartrace.local']);
+
+const PRIVATE_NETWORK = [
+  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^192\.168\.\d{1,3}\.\d{1,3}$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+];
+
+/** Headers que el frontend envía (incluye el bypass de la advertencia de ngrok). */
+export const CORS_ALLOWED_HEADERS = [
+  'Content-Type',
+  'Authorization',
+  'Accept',
+  'ngrok-skip-browser-warning',
+];
+
+const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '').toLowerCase();
+
+function configuredOrigins(): string[] {
+  return (process.env.CORS_ORIGIN ?? '').split(',').map(normalizeOrigin).filter(Boolean);
+}
+
+/**
+ * `undefined` = petición sin header Origin (Alexa, curl, servidor a servidor):
+ * se permite; CORS solo protege a navegadores y la API exige JWT igualmente.
+ */
+export function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+
+  const normalized = normalizeOrigin(origin);
+  if (configuredOrigins().includes(normalized)) return true;
+
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    return false;
+  }
+  const { protocol, hostname } = url;
+  if (protocol !== 'https:' && protocol !== 'http:') return false;
+
+  if (protocol === 'https:' && NGROK_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
+    return true;
+  }
+  if (LOCAL_HOSTNAMES.has(hostname) || PRIVATE_NETWORK.some((range) => range.test(hostname))) {
+    return true;
+  }
+  return (
+    process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
+    protocol === 'https:' &&
+    hostname.endsWith('.vercel.app')
+  );
+}
+
+/** Adaptador para la opción `origin` de `cors` / Socket.io. */
+export function corsOriginCallback(
+  origin: string | undefined,
+  callback: (error: Error | null, allow?: boolean) => void,
+): void {
+  // Rechazo sin Error: se omiten las cabeceras CORS en lugar de responder 500.
+  callback(null, isAllowedOrigin(origin));
+}
+
+================
+File: src/common/prisma-errors.ts
+================
+import { Prisma } from '@prisma/client';
+
+/** P2002: violación de restricción única. P2003: violación de llave foránea. */
+export type PrismaErrorCode = 'P2002' | 'P2003';
+
+export function isPrismaError(error: unknown, code: PrismaErrorCode): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
 
 ================
@@ -2791,6 +3278,265 @@ export class InventoryService {
 }
 
 ================
+File: src/invoices/dto/invoice.dto.ts
+================
+import { InvoiceStatus } from '@prisma/client';
+import {
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
+
+export class CreateInvoiceDto {
+  @IsString()
+  @MaxLength(30)
+  number: string;
+
+  /** La orden debe estar CONCLUIDO y no tener factura previa */
+  @IsInt()
+  @Min(1)
+  workOrderId: number;
+
+  /** Por defecto: dueño del vehículo de la orden */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  clientId?: number;
+
+  /** Por defecto: finalCost (o estimatedCost) de la orden */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  subtotal?: number;
+
+  /** Monto de impuestos; por defecto 0. total = subtotal + tax */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  tax?: number;
+}
+
+/** Solo facturas PENDIENTES pueden editarse; total se recalcula. */
+export class UpdateInvoiceDto {
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  subtotal?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  tax?: number;
+
+  @IsOptional()
+  @IsEnum(InvoiceStatus)
+  status?: InvoiceStatus;
+}
+
+================
+File: src/invoices/invoices.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
+import { InvoicesService } from './invoices.service';
+
+/** /api/invoices — Facturación (solo GERENTE). */
+@Controller('invoices')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE)
+export class InvoicesController {
+  constructor(private readonly invoicesService: InvoicesService) {}
+
+  @Get()
+  findAll() {
+    return this.invoicesService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.invoicesService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateInvoiceDto) {
+    return this.invoicesService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateInvoiceDto) {
+    return this.invoicesService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.invoicesService.remove(id);
+  }
+}
+
+================
+File: src/invoices/invoices.module.ts
+================
+import { Module } from '@nestjs/common';
+import { InvoicesController } from './invoices.controller';
+import { InvoicesService } from './invoices.service';
+
+@Module({
+  controllers: [InvoicesController],
+  providers: [InvoicesService],
+})
+export class InvoicesModule {}
+
+================
+File: src/invoices/invoices.service.ts
+================
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InvoiceStatus, Prisma, WorkOrderStatus } from '@prisma/client';
+import { isPrismaError } from '../common/prisma-errors';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
+
+const INVOICE_INCLUDE = {
+  client: { select: { id: true, name: true, email: true } },
+  workOrder: { include: { vehicle: true } },
+} as const;
+
+@Injectable()
+export class InvoicesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findAll() {
+    return this.prisma.invoice.findMany({
+      include: INVOICE_INCLUDE,
+      orderBy: { issuedAt: 'desc' },
+    });
+  }
+
+  async findOne(id: number) {
+    const invoice = await this.prisma.invoice.findUnique({
+      where: { id },
+      include: INVOICE_INCLUDE,
+    });
+    if (!invoice) throw new NotFoundException(`Factura con id ${id} no encontrada`);
+    return invoice;
+  }
+
+  async create(dto: CreateInvoiceDto) {
+    const order = await this.prisma.workOrder.findUnique({
+      where: { id: dto.workOrderId },
+      include: { vehicle: { select: { ownerId: true } }, invoice: { select: { id: true } } },
+    });
+    if (!order) {
+      throw new NotFoundException(`Orden de trabajo con id ${dto.workOrderId} no encontrada`);
+    }
+    if (order.status !== WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('Solo se pueden facturar órdenes de trabajo concluidas');
+    }
+    if (order.invoice) {
+      throw new ConflictException('La orden de trabajo ya tiene una factura');
+    }
+
+    if (dto.clientId !== undefined) await this.ensureUser(dto.clientId);
+    const clientId = dto.clientId ?? order.vehicle.ownerId;
+
+    const subtotal =
+      dto.subtotal !== undefined
+        ? new Prisma.Decimal(dto.subtotal)
+        : order.finalCost ?? order.estimatedCost;
+    if (subtotal === null) {
+      throw new BadRequestException(
+        'Indica el subtotal: la orden no tiene costo final ni estimado',
+      );
+    }
+    const tax = new Prisma.Decimal(dto.tax ?? 0);
+
+    try {
+      return await this.prisma.invoice.create({
+        data: {
+          number: dto.number,
+          workOrderId: dto.workOrderId,
+          clientId,
+          subtotal,
+          tax,
+          total: subtotal.plus(tax),
+        },
+        include: INVOICE_INCLUDE,
+      });
+    } catch (error) {
+      if (isPrismaError(error, 'P2002')) {
+        throw new ConflictException(
+          `Ya existe una factura con el número "${dto.number}" o para esta orden`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async update(id: number, dto: UpdateInvoiceDto) {
+    const invoice = await this.findOne(id);
+    if (invoice.status === InvoiceStatus.PAGADA) {
+      throw new ConflictException('Una factura pagada no puede modificarse');
+    }
+
+    const subtotal =
+      dto.subtotal !== undefined ? new Prisma.Decimal(dto.subtotal) : invoice.subtotal;
+    const tax = dto.tax !== undefined ? new Prisma.Decimal(dto.tax) : invoice.tax;
+    const isPaid = dto.status === InvoiceStatus.PAGADA;
+
+    return this.prisma.invoice.update({
+      where: { id },
+      data: {
+        subtotal,
+        tax,
+        total: subtotal.plus(tax),
+        status: dto.status,
+        paidAt: isPaid ? new Date() : undefined,
+      },
+      include: INVOICE_INCLUDE,
+    });
+  }
+
+  async remove(id: number) {
+    const invoice = await this.findOne(id);
+    if (invoice.status === InvoiceStatus.PAGADA) {
+      throw new ConflictException('No se puede eliminar una factura pagada');
+    }
+    await this.prisma.invoice.delete({ where: { id } });
+  }
+
+  private async ensureUser(id: number) {
+    const count = await this.prisma.user.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Cliente con id ${id} no encontrado`);
+  }
+}
+
+================
 File: src/led/led-controller.service.ts
 ================
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
@@ -3119,6 +3865,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { CORS_ALLOWED_HEADERS, corsOriginCallback, isAllowedOrigin } from '../common/cors';
 import { LedControllerService } from './led-controller.service';
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3156,46 +3903,19 @@ export interface LedActivatedPayload {
 
 @WebSocketGateway({
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      try {
-        const { hostname, protocol } = new URL(origin);
-        const normalizedHostname = hostname.toLowerCase();
-        const isVercel = normalizedHostname.endsWith('.vercel.app');
-        const isNgrok = normalizedHostname.includes('ngrok');
-        const isLocalhost =
-          normalizedHostname === 'localhost' ||
-          normalizedHostname === '127.0.0.1' ||
-          normalizedHostname === '::1';
-        const isPrivateNetwork =
-          /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
-          /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
-
-        if (
-          (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
-          (protocol === 'http:' || protocol === 'https:')
-        ) {
-          return callback(null, true);
-        }
-      } catch {
-        // Socket.io rechazará el origen con formato inválido.
-      }
-
-      return callback(new Error(`Origen WebSocket no permitido: ${origin}`), false);
-    },
+    origin: corsOriginCallback,
     credentials: true,
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'ngrok-skip-browser-warning',
-    ],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
   },
   namespace: '/',
-  transports: ['websocket', 'polling'],
+  // Solo WebSocket: el long-polling (XHR) a través de ngrok recibe la página
+  // HTML de advertencia y rompe el handshake de Socket.io.
+  transports: ['websocket'],
+  // CORS no aplica al upgrade WebSocket: se valida el Origin explícitamente.
+  allowRequest: (request, callback) => {
+    const allowed = isAllowedOrigin(request.headers.origin);
+    callback(allowed ? null : 'Origen WebSocket no permitido', allowed);
+  },
 })
 export class LedGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -3459,137 +4179,218 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 }
 
 ================
+File: src/purchases/dto/purchase.dto.ts
+================
+import { PurchaseOrderStatus } from '@prisma/client';
+import { IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { CreatePurchaseOrderDto } from '../../supplier/dto/purchase-order.dto';
+
+/**
+ * Misma forma y validación que el pedido de reposición existente
+ * (number, supplierId, items[{ partId, quantity, unitPrice? }]).
+ */
+export class CreatePurchaseDto extends CreatePurchaseOrderDto {}
+
+/**
+ * Solo pedidos PENDIENTES pueden editarse. Estado admitido: CANCELADA.
+ * La recepción (RECIBIDA) incrementa stock y se hace en
+ * POST /api/suppliers/purchase-orders/:id/receive.
+ */
+export class UpdatePurchaseDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  number?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
+
+  @IsOptional()
+  @IsEnum(PurchaseOrderStatus)
+  status?: PurchaseOrderStatus;
+}
+
+================
+File: src/purchases/purchases.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
+import { PurchasesService } from './purchases.service';
+
+/** /api/purchases — CRUD de órdenes de compra (abastecimiento). */
+@Controller('purchases')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class PurchasesController {
+  constructor(private readonly purchasesService: PurchasesService) {}
+
+  @Get()
+  findAll() {
+    return this.purchasesService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.purchasesService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreatePurchaseDto) {
+    return this.purchasesService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdatePurchaseDto) {
+    return this.purchasesService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.purchasesService.remove(id);
+  }
+}
+
+================
+File: src/purchases/purchases.module.ts
+================
+import { Module } from '@nestjs/common';
+import { SupplierModule } from '../supplier/supplier.module';
+import { PurchasesController } from './purchases.controller';
+import { PurchasesService } from './purchases.service';
+
+@Module({
+  imports: [SupplierModule],
+  controllers: [PurchasesController],
+  providers: [PurchasesService],
+})
+export class PurchasesModule {}
+
+================
+File: src/purchases/purchases.service.ts
+================
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { PurchaseOrderStatus } from '@prisma/client';
+import { isPrismaError } from '../common/prisma-errors';
+import { PrismaService } from '../prisma/prisma.service';
+import { SupplierService } from '../supplier/supplier.service';
+import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
+
+const PURCHASE_INCLUDE = {
+  supplier: true,
+  items: { include: { part: true } },
+} as const;
+
+@Injectable()
+export class PurchasesService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly supplierService: SupplierService,
+  ) {}
+
+  findAll() {
+    return this.prisma.purchaseOrder.findMany({
+      include: PURCHASE_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findOne(id: number) {
+    const order = await this.prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: PURCHASE_INCLUDE,
+    });
+    if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
+    return order;
+  }
+
+  /** Reutiliza las reglas de negocio existentes (piezas bajo stock mínimo). */
+  create(dto: CreatePurchaseDto) {
+    return this.supplierService.createPurchaseOrder(dto);
+  }
+
+  async update(id: number, dto: UpdatePurchaseDto) {
+    const order = await this.findOne(id);
+    if (order.status !== PurchaseOrderStatus.PENDIENTE) {
+      throw new ConflictException('Solo se pueden modificar pedidos pendientes');
+    }
+    if (dto.status === PurchaseOrderStatus.RECIBIDA) {
+      throw new BadRequestException(
+        'Para recibir el pedido usa POST /api/suppliers/purchase-orders/:id/receive (actualiza stock)',
+      );
+    }
+    if (dto.supplierId !== undefined) await this.ensureSupplier(dto.supplierId);
+
+    try {
+      return await this.prisma.purchaseOrder.update({
+        where: { id },
+        data: dto,
+        include: PURCHASE_INCLUDE,
+      });
+    } catch (error) {
+      if (isPrismaError(error, 'P2002')) {
+        throw new ConflictException(`Ya existe un pedido con el número "${dto.number}"`);
+      }
+      throw error;
+    }
+  }
+
+  async remove(id: number) {
+    const order = await this.findOne(id);
+    if (order.status === PurchaseOrderStatus.RECIBIDA) {
+      throw new ConflictException(
+        'No se puede eliminar un pedido recibido: ya incrementó el inventario',
+      );
+    }
+    // Los PurchaseOrderItem se eliminan en cascada.
+    await this.prisma.purchaseOrder.delete({ where: { id } });
+  }
+
+  private async ensureSupplier(id: number) {
+    const count = await this.prisma.supplier.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
+  }
+}
+
+================
 File: src/service/dto/vehicle.dto.ts
 ================
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-
-export class CreateVehicleDto {
-  @IsString()
-  @MaxLength(20)
-  plate: string;
-
-  @IsString()
-  @MaxLength(80)
-  make: string;
-
-  @IsString()
-  @MaxLength(80)
-  model: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1886)
-  @Max(2100)
-  year?: number;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(17)
-  vin?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  color?: string;
-
-  @IsInt()
-  @Min(1)
-  ownerId: number;
-}
-
-export class UpdateVehicleDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(20)
-  plate?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  make?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  model?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1886)
-  @Max(2100)
-  year?: number;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(17)
-  vin?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  color?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  ownerId?: number;
-}
+/** Fuente única: mismas validaciones que /api/vehicles (placa normalizada, RF-SER-01). */
+export { CreateVehicleDto, UpdateVehicleDto } from '../../vehicles/dto/vehicle.dto';
 
 ================
 File: src/service/dto/work-order.dto.ts
 ================
 import { WorkOrderStatus } from '@prisma/client';
-import {
-  IsArray,
-  IsEnum,
-  IsInt,
-  IsNumber,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-  ValidateNested,
-} from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
-export class WorkOrderPartDto {
-  @IsInt()
-  @Min(1)
-  partId: number;
-
-  @IsInt()
-  @Min(1)
-  quantity: number;
-}
-
-export class CreateWorkOrderDto {
-  @IsString()
-  @MaxLength(30)
-  number: string;
-
-  @IsString()
-  description: string;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  estimatedCost?: number;
-
-  @IsInt()
-  @Min(1)
-  vehicleId: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  mechanicId?: number;
-
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => WorkOrderPartDto)
-  parts?: WorkOrderPartDto[];
-}
+/** Fuente única: el código OT-YYYY-NNN lo genera WorkOrdersService (RF-SER-05). */
+export { CreateWorkOrderDto, WorkOrderPartDto } from '../../work-orders/dto/work-order.dto';
 
 export class UpdateWorkOrderStatusDto {
   @IsEnum(WorkOrderStatus)
@@ -3625,9 +4426,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { Roles } from '../auth/decorators/auth.decorators';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { VehiclesService } from '../vehicles/vehicles.service';
+import { WorkOrdersService } from '../work-orders/work-orders.service';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
 import {
   CloseWorkOrderDto,
@@ -3637,26 +4441,35 @@ import {
 } from './dto/work-order.dto';
 import { ServiceService } from './service.service';
 
+/**
+ * Rutas legadas /api/service/* (las consume el frontend actual). Mantienen sus
+ * paths, pero delegan en VehiclesService/WorkOrdersService para no duplicar
+ * reglas (placa única, código OT-YYYY-NNN, alcance por mecánico).
+ */
 @Controller('service')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.MECANICO, Role.GERENTE)
 export class ServiceController {
-  constructor(private readonly serviceService: ServiceService) {}
+  constructor(
+    private readonly serviceService: ServiceService,
+    private readonly vehiclesService: VehiclesService,
+    private readonly workOrdersService: WorkOrdersService,
+  ) {}
 
   @Get('vehicles')
   findVehicles() {
-    return this.serviceService.findVehicles();
+    return this.vehiclesService.findAll();
   }
 
   @Get('vehicles/:id')
   findVehicle(@Param('id', ParseIntPipe) id: number) {
-    return this.serviceService.findVehicle(id);
+    return this.vehiclesService.findOne(id);
   }
 
   @Post('vehicles')
   @HttpCode(HttpStatus.CREATED)
   createVehicle(@Body() dto: CreateVehicleDto) {
-    return this.serviceService.createVehicle(dto);
+    return this.vehiclesService.create(dto);
   }
 
   @Patch('vehicles/:id')
@@ -3664,48 +4477,54 @@ export class ServiceController {
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateVehicleDto,
   ) {
-    return this.serviceService.updateVehicle(id, dto);
+    return this.vehiclesService.update(id, dto);
   }
 
   @Delete('vehicles/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
   removeVehicle(@Param('id', ParseIntPipe) id: number) {
-    return this.serviceService.removeVehicle(id);
+    return this.vehiclesService.remove(id);
   }
 
   @Get('work-orders')
-  findWorkOrders() {
-    return this.serviceService.findWorkOrders();
+  findWorkOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.workOrdersService.findAll(user);
   }
 
   @Post('work-orders')
   @HttpCode(HttpStatus.CREATED)
-  createWorkOrder(@Body() dto: CreateWorkOrderDto) {
-    return this.serviceService.createWorkOrder(dto);
+  createWorkOrder(
+    @Body() dto: CreateWorkOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.create(dto, user);
   }
 
   @Patch('work-orders/:id/status')
   updateWorkOrderStatus(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateWorkOrderStatusDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.serviceService.updateWorkOrderStatus(id, dto.status);
+    return this.serviceService.updateWorkOrderStatus(id, dto.status, user);
   }
 
   @Patch('work-orders/:id/diagnosis')
   diagnoseWorkOrder(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: DiagnoseWorkOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.serviceService.diagnoseWorkOrder(id, dto.diagnosis);
+    return this.serviceService.diagnoseWorkOrder(id, dto.diagnosis, user);
   }
 
   @Patch('work-orders/:id/close')
   closeWorkOrder(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: CloseWorkOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.serviceService.closeWorkOrder(id, dto.finalCost);
+    return this.serviceService.closeWorkOrder(id, dto.finalCost, user);
   }
 }
 
@@ -3713,10 +4532,13 @@ export class ServiceController {
 File: src/service/service.module.ts
 ================
 import { Module } from '@nestjs/common';
+import { VehiclesModule } from '../vehicles/vehicles.module';
+import { WorkOrdersModule } from '../work-orders/work-orders.module';
 import { ServiceController } from './service.controller';
 import { ServiceService } from './service.service';
 
 @Module({
+  imports: [VehiclesModule, WorkOrdersModule],
   controllers: [ServiceController],
   providers: [ServiceService],
 })
@@ -3726,192 +4548,89 @@ export class ServiceModule {}
 File: src/service/service.service.ts
 ================
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, WorkOrderStatus } from '@prisma/client';
+import { WorkOrderStatus } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
-import { CreateWorkOrderDto } from './dto/work-order.dto';
+import { workOrderScope } from '../work-orders/work-order-scope';
 
+const WORK_ORDER_INCLUDE = { vehicle: true, parts: { include: { part: true } } } as const;
+
+/**
+ * Transiciones operativas de órdenes (estado, diagnóstico y cierre). El stock
+ * se descuenta al agregar repuestos (WorkOrdersService, RF-INV-13). El CRUD de vehículos y la creación/listado de órdenes
+ * viven en VehiclesService y WorkOrdersService; ServiceController delega en ellos.
+ * Un MECANICO solo puede operar órdenes asignadas a él (workOrderScope).
+ */
 @Injectable()
 export class ServiceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findVehicles() {
-    return this.prisma.vehicle.findMany({
-      include: { owner: { select: { id: true, name: true, email: true } } },
-      orderBy: { plate: 'asc' },
-    });
-  }
-
-  async findVehicle(id: number) {
-    const vehicle = await this.prisma.vehicle.findUnique({
-      where: { id },
-      include: { owner: true, workOrders: true, appointments: true },
-    });
-    if (!vehicle) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
-    return vehicle;
-  }
-
-  async createVehicle(dto: CreateVehicleDto) {
-    await this.ensureUser(dto.ownerId);
-    try {
-      return await this.prisma.vehicle.create({ data: dto });
-    } catch (error) {
-      this.throwUniqueVehicleError(error);
-      throw error;
+  async updateWorkOrderStatus(id: number, status: WorkOrderStatus, user: AuthenticatedUser) {
+    const order = await this.findWorkOrder(id, user);
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('Una orden concluida no puede cambiar de estado');
     }
-  }
-
-  async updateVehicle(id: number, dto: UpdateVehicleDto) {
-    await this.findVehicle(id);
-    if (dto.ownerId !== undefined) await this.ensureUser(dto.ownerId);
-    try {
-      return await this.prisma.vehicle.update({ where: { id }, data: dto });
-    } catch (error) {
-      this.throwUniqueVehicleError(error);
-      throw error;
-    }
-  }
-
-  async removeVehicle(id: number) {
-    await this.findVehicle(id);
-    try {
-      await this.prisma.vehicle.delete({ where: { id } });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
-        throw new ConflictException('No se puede eliminar un vehículo con órdenes o citas asociadas');
-      }
-      throw error;
-    }
-  }
-
-  findWorkOrders() {
-    return this.prisma.workOrder.findMany({
-      include: {
-        vehicle: true,
-        mechanic: { select: { id: true, name: true, email: true } },
-        parts: { include: { part: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-  }
-
-  async createWorkOrder(dto: CreateWorkOrderDto) {
-    await this.findVehicle(dto.vehicleId);
-    if (dto.mechanicId !== undefined) await this.ensureMechanic(dto.mechanicId);
-    if (dto.parts) await this.ensureParts(dto.parts);
-
-    try {
-      return await this.prisma.workOrder.create({
-        data: {
-          number: dto.number,
-          description: dto.description,
-          estimatedCost: dto.estimatedCost,
-          vehicleId: dto.vehicleId,
-          mechanicId: dto.mechanicId,
-          parts: dto.parts
-            ? { create: dto.parts.map((part) => ({ partId: part.partId, quantity: part.quantity })) }
-            : undefined,
-        },
-        include: { vehicle: true, parts: { include: { part: true } } },
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException(`Ya existe una orden con el número "${dto.number}"`);
-      }
-      throw error;
-    }
-  }
-
-  async updateWorkOrderStatus(id: number, status: WorkOrderStatus) {
-    const order = await this.findWorkOrder(id);
-    if (order.status === WorkOrderStatus.CERRADA) {
-      throw new ConflictException('Una orden cerrada no puede cambiar de estado');
+    if (status === WorkOrderStatus.CONCLUIDO) {
+      throw new BadRequestException(
+        'Para concluir la orden usa PATCH /api/service/work-orders/:id/close',
+      );
     }
     return this.prisma.workOrder.update({
       where: { id },
       data: {
         status,
-        startedAt: status === WorkOrderStatus.EN_PROGRESO ? new Date() : undefined,
+        // Solo la primera vez: reanudar desde ESPERA_REPUESTOS no reinicia la fecha.
+        startedAt:
+          status === WorkOrderStatus.EN_PROCESO && !order.startedAt ? new Date() : undefined,
       },
-      include: { vehicle: true, parts: { include: { part: true } } },
+      include: WORK_ORDER_INCLUDE,
     });
   }
 
-  async diagnoseWorkOrder(id: number, diagnosis: string) {
-    await this.findWorkOrder(id);
+  async diagnoseWorkOrder(id: number, diagnosis: string, user: AuthenticatedUser) {
+    const order = await this.findWorkOrder(id, user);
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('Una orden concluida no puede modificarse');
+    }
     return this.prisma.workOrder.update({
       where: { id },
       data: { diagnosis, status: WorkOrderStatus.EN_DIAGNOSTICO },
-      include: { vehicle: true, parts: { include: { part: true } } },
+      include: WORK_ORDER_INCLUDE,
     });
   }
 
-  async closeWorkOrder(id: number, finalCost?: number) {
-    return this.prisma.$transaction(async (transaction) => {
-      const order = await transaction.workOrder.findUnique({
-        where: { id },
-        include: { parts: true },
-      });
-      if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
-      if (order.status === WorkOrderStatus.CERRADA) {
-        throw new ConflictException('La orden de trabajo ya está cerrada');
-      }
-
-      for (const item of order.parts) {
-        const updated = await transaction.part.updateMany({
-          where: { id: item.partId, quantity: { gte: item.quantity } },
-          data: { quantity: { decrement: item.quantity } },
-        });
-        if (updated.count !== 1) {
-          throw new ConflictException(`Stock insuficiente para el repuesto ${item.partId}`);
-        }
-      }
-
-      return transaction.workOrder.update({
-        where: { id },
-        data: {
-          status: WorkOrderStatus.CERRADA,
-          finalCost,
-          completedAt: new Date(),
-        },
-        include: { vehicle: true, parts: { include: { part: true } } },
-      });
+  /**
+   * Concluye la orden (finalCost + completedAt). No toca inventario: por
+   * RF-INV-13 cada UsedPart ya descontó stock al agregarse a la orden.
+   */
+  async closeWorkOrder(id: number, finalCost: number | undefined, user: AuthenticatedUser) {
+    const order = await this.findWorkOrder(id, user);
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('La orden de trabajo ya está concluida');
+    }
+    // Condición en el WHERE: si otra petición la concluyó entre medio, no se repite.
+    const updated = await this.prisma.workOrder.updateMany({
+      where: { id, status: { not: WorkOrderStatus.CONCLUIDO } },
+      data: { status: WorkOrderStatus.CONCLUIDO, finalCost, completedAt: new Date() },
     });
+    if (updated.count === 0) {
+      throw new ConflictException('La orden de trabajo ya está concluida');
+    }
+    return this.prisma.workOrder.findUniqueOrThrow({ where: { id }, include: WORK_ORDER_INCLUDE });
   }
 
-  private async findWorkOrder(id: number) {
-    const order = await this.prisma.workOrder.findUnique({ where: { id } });
+  /** Fuera del alcance del usuario responde 404 (no revela que existe). */
+  private async findWorkOrder(id: number, user: AuthenticatedUser) {
+    const order = await this.prisma.workOrder.findFirst({
+      where: { id, ...workOrderScope(user) },
+    });
     if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
     return order;
-  }
-
-  private async ensureUser(id: number) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
-  }
-
-  private async ensureMechanic(id: number) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException(`Mecánico con id ${id} no encontrado`);
-    if (user.role !== 'MECANICO' && user.role !== 'GERENTE') {
-      throw new ConflictException('El usuario asignado no tiene rol de mecánico');
-    }
-  }
-
-  private async ensureParts(parts: { partId: number; quantity: number }[]) {
-    const ids = [...new Set(parts.map((part) => part.partId))];
-    const count = await this.prisma.part.count({ where: { id: { in: ids } } });
-    if (count !== ids.length) throw new NotFoundException('Una o más piezas no existen');
-  }
-
-  private throwUniqueVehicleError(error: unknown) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      throw new ConflictException('La placa o VIN ya está registrado');
-    }
   }
 }
 
@@ -3951,37 +4670,6 @@ export class CreatePurchaseOrderDto {
   items: PurchaseOrderItemDto[];
 }
 
-export class CreateSupplierDto {
-  @IsString()
-  @MaxLength(150)
-  name: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  taxId?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  contactName?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  phone?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  address?: string;
-}
-
 ================
 File: src/supplier/supplier.controller.ts
 ================
@@ -4000,28 +4688,18 @@ import { Role } from '@prisma/client';
 import { Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import {
-  CreatePurchaseOrderDto,
-  CreateSupplierDto,
-} from './dto/purchase-order.dto';
+import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
 import { SupplierService } from './supplier.service';
 
+/**
+ * Flujo de reposición: stock bajo, pedidos y recepción.
+ * GET/POST /api/suppliers (CRUD de proveedores) vive en SuppliersController.
+ */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.GERENTE, Role.MECANICO)
 export class SupplierController {
   constructor(private readonly supplierService: SupplierService) {}
-
-  @Get()
-  findSuppliers() {
-    return this.supplierService.findSuppliers();
-  }
-
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  createSupplier(@Body() dto: CreateSupplierDto) {
-    return this.supplierService.createSupplier(dto);
-  }
 
   @Get('low-stock')
   findLowStockParts() {
@@ -4055,6 +4733,7 @@ import { SupplierService } from './supplier.service';
 @Module({
   controllers: [SupplierController],
   providers: [SupplierService],
+  exports: [SupplierService],
 })
 export class SupplierModule {}
 
@@ -4068,32 +4747,11 @@ import {
 } from '@nestjs/common';
 import { Prisma, PurchaseOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  CreatePurchaseOrderDto,
-  CreateSupplierDto,
-} from './dto/purchase-order.dto';
+import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
 
 @Injectable()
 export class SupplierService {
   constructor(private readonly prisma: PrismaService) {}
-
-  findSuppliers() {
-    return this.prisma.supplier.findMany({
-      include: { _count: { select: { purchaseOrders: true } } },
-      orderBy: { name: 'asc' },
-    });
-  }
-
-  async createSupplier(dto: CreateSupplierDto) {
-    try {
-      return await this.prisma.supplier.create({ data: dto });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('El identificador fiscal ya está registrado');
-      }
-      throw error;
-    }
-  }
 
   async findLowStockParts() {
     const lowStock = await this.prisma.$queryRaw<
@@ -4195,6 +4853,1178 @@ export class SupplierService {
 }
 
 ================
+File: src/suppliers/dto/supplier.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+
+export class CreateSupplierDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  /** Identificador fiscal (RUC/NIT); único si se informa */
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  taxId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  contactName?: string;
+
+  @IsOptional()
+  @IsEmail({}, { message: 'El correo electrónico no es válido' })
+  @MaxLength(255)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address?: string;
+}
+
+export class UpdateSupplierDto extends PartialType(CreateSupplierDto) {}
+
+================
+File: src/suppliers/suppliers.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateSupplierDto, UpdateSupplierDto } from './dto/supplier.dto';
+import { SuppliersService } from './suppliers.service';
+
+/**
+ * /api/suppliers — CRUD de proveedores.
+ * Comparte prefijo con SupplierController (low-stock y purchase-orders); el
+ * parámetro `:id(\\d+)` evita que capture esas rutas literales.
+ */
+@Controller('suppliers')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class SuppliersController {
+  constructor(private readonly suppliersService: SuppliersService) {}
+
+  @Get()
+  findAll() {
+    return this.suppliersService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.suppliersService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateSupplierDto) {
+    return this.suppliersService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateSupplierDto) {
+    return this.suppliersService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.suppliersService.remove(id);
+  }
+}
+
+================
+File: src/suppliers/suppliers.module.ts
+================
+import { Module } from '@nestjs/common';
+import { SuppliersController } from './suppliers.controller';
+import { SuppliersService } from './suppliers.service';
+
+@Module({
+  controllers: [SuppliersController],
+  providers: [SuppliersService],
+})
+export class SuppliersModule {}
+
+================
+File: src/suppliers/suppliers.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { isPrismaError } from '../common/prisma-errors';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateSupplierDto, UpdateSupplierDto } from './dto/supplier.dto';
+
+@Injectable()
+export class SuppliersService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  /** Mantiene `_count.purchaseOrders`, usado por el frontend (SuppliersList). */
+  findAll() {
+    return this.prisma.supplier.findMany({
+      include: { _count: { select: { purchaseOrders: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async findOne(id: number) {
+    const supplier = await this.prisma.supplier.findUnique({
+      where: { id },
+      include: { purchaseOrders: { orderBy: { orderedAt: 'desc' } } },
+    });
+    if (!supplier) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
+    return supplier;
+  }
+
+  async create(dto: CreateSupplierDto) {
+    try {
+      return await this.prisma.supplier.create({ data: dto });
+    } catch (error) {
+      this.throwDuplicateTaxId(error);
+      throw error;
+    }
+  }
+
+  async update(id: number, dto: UpdateSupplierDto) {
+    await this.ensureExists(id);
+    try {
+      return await this.prisma.supplier.update({ where: { id }, data: dto });
+    } catch (error) {
+      this.throwDuplicateTaxId(error);
+      throw error;
+    }
+  }
+
+  async remove(id: number) {
+    await this.ensureExists(id);
+    try {
+      await this.prisma.supplier.delete({ where: { id } });
+    } catch (error) {
+      if (isPrismaError(error, 'P2003')) {
+        throw new ConflictException(
+          'No se puede eliminar un proveedor con pedidos de compra registrados',
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async ensureExists(id: number) {
+    const count = await this.prisma.supplier.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
+  }
+
+  private throwDuplicateTaxId(error: unknown) {
+    if (isPrismaError(error, 'P2002')) {
+      throw new ConflictException('El identificador fiscal ya está registrado');
+    }
+  }
+}
+
+================
+File: src/users/dto/user.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { Role } from '@prisma/client';
+import {
+  IsBoolean,
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+
+export class CreateUserDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  @IsEmail({}, { message: 'El correo electrónico no es válido' })
+  @MaxLength(255)
+  email: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72) // límite de bcrypt
+  password: string;
+
+  @IsOptional()
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  role?: Role;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class UpdateUserDto extends PartialType(CreateUserDto) {}
+
+================
+File: src/users/users.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+import { UsersService } from './users.service';
+
+/** /api/users — Administración de usuarios (solo GERENTE). */
+@Controller('users')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE)
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
+
+  @Get()
+  findAll() {
+    return this.usersService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateUserDto) {
+    return this.usersService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto) {
+    return this.usersService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.usersService.remove(id, user.id);
+  }
+}
+
+================
+File: src/users/users.module.ts
+================
+import { Module } from '@nestjs/common';
+import { UsersController } from './users.controller';
+import { UsersService } from './users.service';
+
+@Module({
+  controllers: [UsersController],
+  providers: [UsersService],
+})
+export class UsersModule {}
+
+================
+File: src/users/users.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, Role } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+import { isPrismaError } from '../common/prisma-errors';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+
+const BCRYPT_ROUNDS = 10;
+
+/** Campos públicos: nunca se expone `password`. */
+const USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.UserSelect;
+
+@Injectable()
+export class UsersService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findAll() {
+    return this.prisma.user.findMany({
+      select: USER_SELECT,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findOne(id: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: USER_SELECT,
+    });
+    if (!user) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    return user;
+  }
+
+  async create(dto: CreateUserDto) {
+    try {
+      return await this.prisma.user.create({
+        data: {
+          ...dto,
+          role: dto.role ?? Role.CLIENTE,
+          password: await bcrypt.hash(dto.password, BCRYPT_ROUNDS),
+        },
+        select: USER_SELECT,
+      });
+    } catch (error) {
+      this.throwDuplicateEmail(error);
+      throw error;
+    }
+  }
+
+  async update(id: number, dto: UpdateUserDto) {
+    await this.findOne(id);
+    try {
+      return await this.prisma.user.update({
+        where: { id },
+        data: {
+          ...dto,
+          password: dto.password
+            ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
+            : undefined,
+        },
+        select: USER_SELECT,
+      });
+    } catch (error) {
+      this.throwDuplicateEmail(error);
+      throw error;
+    }
+  }
+
+  async remove(id: number, currentUserId: number) {
+    if (id === currentUserId) {
+      throw new ConflictException('No puedes eliminar tu propio usuario');
+    }
+    await this.findOne(id);
+    try {
+      await this.prisma.user.delete({ where: { id } });
+    } catch (error) {
+      if (isPrismaError(error, 'P2003')) {
+        throw new ConflictException(
+          'El usuario tiene vehículos o facturas asociadas; desactívalo en lugar de eliminarlo',
+        );
+      }
+      throw error;
+    }
+  }
+
+  private throwDuplicateEmail(error: unknown) {
+    if (isPrismaError(error, 'P2002')) {
+      throw new ConflictException('El correo electrónico ya está registrado');
+    }
+  }
+}
+
+================
+File: src/vehicles/dto/vehicle.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { Transform } from 'class-transformer';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+
+const toUpperTrimmed = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim().toUpperCase() : value;
+
+export class CreateVehicleDto {
+  /** Se normaliza a mayúsculas sin espacios externos ("abc-123 " → "ABC-123"). */
+  @Transform(toUpperTrimmed)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  plate: string;
+
+  @IsString()
+  @MaxLength(80)
+  make: string;
+
+  @IsString()
+  @MaxLength(80)
+  model: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1886)
+  @Max(2100)
+  year?: number;
+
+  @IsOptional()
+  @Transform(toUpperTrimmed)
+  @IsString()
+  @MaxLength(17)
+  vin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  color?: string;
+
+  /** Cliente propietario del vehículo (rol CLIENTE, activo) */
+  @IsInt()
+  @Min(1)
+  ownerId: number;
+}
+
+export class UpdateVehicleDto extends PartialType(CreateVehicleDto) {}
+
+================
+File: src/vehicles/vehicles.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import { VehiclesService } from './vehicles.service';
+
+/** /api/vehicles — Gestión de vehículos (personal del taller). */
+@Controller('vehicles')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class VehiclesController {
+  constructor(private readonly vehiclesService: VehiclesService) {}
+
+  @Get()
+  findAll() {
+    return this.vehiclesService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.vehiclesService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateVehicleDto) {
+    return this.vehiclesService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateVehicleDto) {
+    return this.vehiclesService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.vehiclesService.remove(id);
+  }
+}
+
+================
+File: src/vehicles/vehicles.module.ts
+================
+import { Module } from '@nestjs/common';
+import { VehiclesController } from './vehicles.controller';
+import { VehiclesService } from './vehicles.service';
+
+@Module({
+  controllers: [VehiclesController],
+  providers: [VehiclesService],
+  exports: [VehiclesService],
+})
+export class VehiclesModule {}
+
+================
+File: src/vehicles/vehicles.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { isPrismaError } from '../common/prisma-errors';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+
+const OWNER_SELECT = { select: { id: true, name: true, email: true } } as const;
+
+@Injectable()
+export class VehiclesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findAll() {
+    return this.prisma.vehicle.findMany({
+      include: { owner: OWNER_SELECT },
+      orderBy: { plate: 'asc' },
+    });
+  }
+
+  async findOne(id: number) {
+    const vehicle = await this.prisma.vehicle.findUnique({
+      where: { id },
+      include: {
+        owner: OWNER_SELECT,
+        workOrders: { orderBy: { createdAt: 'desc' } },
+        appointments: { orderBy: { scheduledAt: 'desc' } },
+      },
+    });
+    if (!vehicle) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
+    return vehicle;
+  }
+
+  /** RF-SER-01: registra un vehículo validando que la placa no exista. */
+  async create(dto: CreateVehicleDto) {
+    await this.ensureOwner(dto.ownerId);
+    await this.ensurePlateAvailable(dto.plate);
+    try {
+      return await this.prisma.vehicle.create({
+        data: dto,
+        include: { owner: OWNER_SELECT },
+      });
+    } catch (error) {
+      this.throwDuplicate(error);
+      throw error;
+    }
+  }
+
+  async update(id: number, dto: UpdateVehicleDto) {
+    await this.ensureExists(id);
+    if (dto.ownerId !== undefined) await this.ensureOwner(dto.ownerId);
+    if (dto.plate !== undefined) await this.ensurePlateAvailable(dto.plate, id);
+    try {
+      return await this.prisma.vehicle.update({
+        where: { id },
+        data: dto,
+        include: { owner: OWNER_SELECT },
+      });
+    } catch (error) {
+      this.throwDuplicate(error);
+      throw error;
+    }
+  }
+
+  async remove(id: number) {
+    await this.ensureExists(id);
+    try {
+      await this.prisma.vehicle.delete({ where: { id } });
+    } catch (error) {
+      if (isPrismaError(error, 'P2003')) {
+        throw new ConflictException(
+          'No se puede eliminar un vehículo con órdenes o citas asociadas',
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async ensureExists(id: number) {
+    const count = await this.prisma.vehicle.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
+  }
+
+  private async ensureOwner(id: number) {
+    const owner = await this.prisma.user.findUnique({
+      where: { id },
+      select: { role: true, isActive: true },
+    });
+    if (!owner) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    if (owner.role !== Role.CLIENTE || !owner.isActive) {
+      throw new ConflictException('El propietario debe ser un cliente activo');
+    }
+  }
+
+  /**
+   * Comparación sin distinguir mayúsculas para cubrir placas antiguas no
+   * normalizadas. El índice único de `plate` sigue cubriendo la concurrencia.
+   */
+  private async ensurePlateAvailable(plate: string, excludeId?: number) {
+    const existing = await this.prisma.vehicle.findFirst({
+      where: {
+        plate: { equals: plate, mode: 'insensitive' },
+        ...(excludeId !== undefined && { id: { not: excludeId } }),
+      },
+      select: { id: true },
+    });
+    if (existing) throw new ConflictException(`La placa "${plate}" ya está registrada`);
+  }
+
+  private throwDuplicate(error: unknown) {
+    if (isPrismaError(error, 'P2002')) {
+      throw new ConflictException('La placa o VIN ya está registrado');
+    }
+  }
+}
+
+================
+File: src/work-orders/dto/work-order.dto.ts
+================
+import { Type } from 'class-transformer';
+import { WorkOrderStatus } from '@prisma/client';
+import {
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+
+export class WorkOrderPartDto {
+  @IsInt()
+  @Min(1)
+  partId: number;
+
+  @IsInt()
+  @Min(1)
+  quantity: number;
+}
+
+/** RF-INV-13: repuesto consumido que se agrega a una orden y descuenta stock. */
+export class AddUsedPartDto extends WorkOrderPartDto {}
+
+/**
+ * El código `number` (OT-YYYY-NNN) lo genera el servidor (RF-SER-05); si el
+ * cliente lo envía, la validación global lo rechaza (forbidNonWhitelisted).
+ */
+export class CreateWorkOrderDto {
+  /** Motivo de ingreso / trabajo solicitado */
+  @IsString()
+  description: string;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  estimatedCost?: number;
+
+  /** Kilometraje del vehículo al ingresar */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  mileage?: number;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  mechanicId?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkOrderPartDto)
+  parts?: WorkOrderPartDto[];
+}
+
+/**
+ * Edición general de la orden. El cierre (CONCLUIDO) no se permite aquí: usar
+ * PATCH /api/service/work-orders/:id/close (registra finalCost y completedAt).
+ * Los repuestos se agregan con POST /api/work-orders/:id/parts.
+ */
+export class UpdateWorkOrderDto {
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  diagnosis?: string;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  estimatedCost?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  mileage?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  mechanicId?: number;
+
+  @IsOptional()
+  @IsEnum(WorkOrderStatus)
+  status?: WorkOrderStatus;
+}
+
+================
+File: src/work-orders/work-order-number.ts
+================
+import { Prisma } from '@prisma/client';
+
+/** RF-SER-05: código correlativo por año, formato OT-YYYY-NNN (NNN crece a 4+ dígitos si hace falta). */
+const PREFIX = 'OT';
+const LOCK_KEY = 'geartrace:work_order_number';
+
+export function formatWorkOrderNumber(year: number, sequence: number): string {
+  return `${PREFIX}-${year}-${String(sequence).padStart(3, '0')}`;
+}
+
+/**
+ * Calcula el siguiente código del año. DEBE ejecutarse dentro de la misma
+ * transacción que crea la orden: el advisory lock serializa creaciones
+ * concurrentes y se libera solo al confirmar o revertir.
+ */
+export async function nextWorkOrderNumber(
+  tx: Prisma.TransactionClient,
+  date: Date = new Date(),
+): Promise<string> {
+  const year = date.getFullYear();
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${LOCK_KEY}))`;
+
+  // MAX numérico (no orden de texto): OT-2026-1000 debe ganar a OT-2026-999.
+  const pattern = `^${PREFIX}-${year}-[0-9]+$`;
+  const [row] = await tx.$queryRaw<Array<{ last: number | null }>>`
+    SELECT MAX(CAST(split_part(number, '-', 3) AS INTEGER)) AS last
+    FROM work_orders
+    WHERE number ~ ${pattern}
+  `;
+
+  return formatWorkOrderNumber(year, (row?.last ?? 0) + 1);
+}
+
+================
+File: src/work-orders/work-order-scope.ts
+================
+import { Prisma, Role } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/auth.types';
+
+/**
+ * Órdenes visibles para el usuario autenticado:
+ *  - GERENTE: todas.
+ *  - MECANICO: solo las asignadas a él.
+ *  - CLIENTE: solo las de sus vehículos.
+ * Combinar siempre con el filtro propio de la consulta (`{ id, ...scope }`).
+ */
+export function workOrderScope(user: AuthenticatedUser): Prisma.WorkOrderWhereInput {
+  switch (user.role) {
+    case Role.GERENTE:
+      return {};
+    case Role.MECANICO:
+      return { mechanicId: user.id };
+    case Role.CLIENTE:
+      return { vehicle: { ownerId: user.id } };
+  }
+}
+
+================
+File: src/work-orders/work-orders.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import {
+  AddUsedPartDto,
+  CreateWorkOrderDto,
+  UpdateWorkOrderDto,
+} from './dto/work-order.dto';
+import { WorkOrdersService } from './work-orders.service';
+
+/**
+ * /api/work-orders — Órdenes de trabajo (SER).
+ * GERENTE ve y gestiona todas; MECANICO solo las asignadas a él (@CurrentUser).
+ */
+@Controller('work-orders')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class WorkOrdersController {
+  constructor(private readonly workOrdersService: WorkOrdersService) {}
+
+  @Get()
+  findAll(@CurrentUser() user: AuthenticatedUser) {
+    return this.workOrdersService.findAll(user);
+  }
+
+  @Get(':id(\\d+)')
+  findOne(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.findOne(id, user);
+  }
+
+  /** RF-SER-05: genera el código OT-YYYY-NNN. */
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(
+    @Body() dto: CreateWorkOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.create(dto, user);
+  }
+
+  /** RF-INV-13: agrega un repuesto consumido y descuenta stock (transacción). */
+  @Post(':id(\\d+)/parts')
+  @HttpCode(HttpStatus.CREATED)
+  addUsedPart(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AddUsedPartDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.addUsedPart(id, dto, user);
+  }
+
+  @Patch(':id(\\d+)')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateWorkOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.update(id, dto, user);
+  }
+
+  @Delete(':id(\\d+)')
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.remove(id, user);
+  }
+}
+
+================
+File: src/work-orders/work-orders.module.ts
+================
+import { Module } from '@nestjs/common';
+import { WorkOrdersController } from './work-orders.controller';
+import { WorkOrdersService } from './work-orders.service';
+
+@Module({
+  controllers: [WorkOrdersController],
+  providers: [WorkOrdersService],
+  exports: [WorkOrdersService],
+})
+export class WorkOrdersModule {}
+
+================
+File: src/work-orders/work-orders.service.ts
+================
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, Role, WorkOrderStatus } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { isPrismaError } from '../common/prisma-errors';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  AddUsedPartDto,
+  CreateWorkOrderDto,
+  UpdateWorkOrderDto,
+  WorkOrderPartDto,
+} from './dto/work-order.dto';
+import { nextWorkOrderNumber } from './work-order-number';
+import { workOrderScope } from './work-order-scope';
+
+const USER_SUMMARY = { select: { id: true, name: true, email: true } } as const;
+
+const WORK_ORDER_INCLUDE = {
+  vehicle: { include: { owner: USER_SUMMARY } },
+  mechanic: USER_SUMMARY,
+  parts: { include: { part: true } },
+  invoice: true,
+} as const;
+
+/**
+ * Fuente única de la lógica de órdenes de trabajo. También la usan las rutas
+ * legadas /api/service/work-orders (GET y POST).
+ */
+@Injectable()
+export class WorkOrdersService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  /** GERENTE ve todas; MECANICO solo las asignadas a él. */
+  findAll(user: AuthenticatedUser) {
+    return this.prisma.workOrder.findMany({
+      where: workOrderScope(user),
+      include: WORK_ORDER_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /** Una orden fuera del alcance del usuario responde 404 (no revela que existe). */
+  async findOne(id: number, user: AuthenticatedUser) {
+    const order = await this.prisma.workOrder.findFirst({
+      where: { id, ...workOrderScope(user) },
+      include: WORK_ORDER_INCLUDE,
+    });
+    if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
+    return order;
+  }
+
+  /**
+   * RF-SER-05: el código OT-YYYY-NNN se genera en la misma transacción que la orden.
+   * RF-INV-13: los repuestos iniciales descuentan stock en esa misma transacción;
+   * si alguno no alcanza, no se crea nada.
+   */
+  async create(dto: CreateWorkOrderDto, user: AuthenticatedUser) {
+    const mechanicId = this.resolveMechanicId(dto.mechanicId, user);
+    await this.ensureVehicle(dto.vehicleId);
+    if (mechanicId !== undefined) await this.ensureMechanic(mechanicId);
+    if (dto.parts?.length) await this.ensureParts(dto.parts);
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const number = await nextWorkOrderNumber(tx);
+        const order = await tx.workOrder.create({
+          data: {
+            number,
+            description: dto.description,
+            estimatedCost: dto.estimatedCost,
+            mileage: dto.mileage,
+            vehicleId: dto.vehicleId,
+            mechanicId,
+          },
+          select: { id: true },
+        });
+        for (const { partId, quantity } of dto.parts ?? []) {
+          await this.consumePart(tx, order.id, partId, quantity);
+        }
+        return tx.workOrder.findUniqueOrThrow({
+          where: { id: order.id },
+          include: WORK_ORDER_INCLUDE,
+        });
+      });
+    } catch (error) {
+      if (isPrismaError(error, 'P2002')) {
+        throw new ConflictException('No se pudo generar un código de orden único; intenta de nuevo');
+      }
+      throw error;
+    }
+  }
+
+  async update(id: number, dto: UpdateWorkOrderDto, user: AuthenticatedUser) {
+    const order = await this.findOne(id, user);
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('Una orden concluida no puede modificarse');
+    }
+    if (dto.status === WorkOrderStatus.CONCLUIDO) {
+      throw new BadRequestException(
+        'Para concluir la orden usa PATCH /api/service/work-orders/:id/close',
+      );
+    }
+    if (dto.mechanicId !== undefined) {
+      this.resolveMechanicId(dto.mechanicId, user);
+      await this.ensureMechanic(dto.mechanicId);
+    }
+
+    const startsNow = dto.status === WorkOrderStatus.EN_PROCESO && !order.startedAt;
+
+    return this.prisma.workOrder.update({
+      where: { id },
+      data: { ...dto, startedAt: startsNow ? new Date() : undefined },
+      include: WORK_ORDER_INCLUDE,
+    });
+  }
+
+  /**
+   * RF-INV-13: agrega un repuesto consumido y descuenta `Part.quantity` en la
+   * misma transacción. Si la pieza ya está en la orden, suma la cantidad.
+   * Stock insuficiente → 409 y no se registra nada.
+   */
+  async addUsedPart(id: number, dto: AddUsedPartDto, user: AuthenticatedUser) {
+    await this.findOne(id, user); // alcance del usuario: orden ajena → 404
+
+    return this.prisma.$transaction(async (tx) => {
+      // Bloquea la orden para que no se concluya mientras se agrega el repuesto.
+      await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
+      const order = await tx.workOrder.findUniqueOrThrow({
+        where: { id },
+        select: { status: true },
+      });
+      if (order.status === WorkOrderStatus.CONCLUIDO) {
+        throw new ConflictException('No se pueden agregar repuestos a una orden concluida');
+      }
+
+      await this.consumePart(tx, id, dto.partId, dto.quantity);
+
+      return tx.workOrder.findUniqueOrThrow({ where: { id }, include: WORK_ORDER_INCLUDE });
+    });
+  }
+
+  /** Una orden no concluida devuelve al inventario los repuestos que descontó. */
+  async remove(id: number, user: AuthenticatedUser) {
+    const order = await this.findOne(id, user);
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException('No se puede eliminar una orden concluida');
+    }
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of order.parts) {
+          await tx.part.update({
+            where: { id: item.partId },
+            data: { quantity: { increment: item.quantity } },
+          });
+        }
+        // Los UsedPart se eliminan en cascada.
+        await tx.workOrder.delete({ where: { id } });
+      });
+    } catch (error) {
+      if (isPrismaError(error, 'P2003')) {
+        throw new ConflictException('La orden tiene una factura asociada');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * El GERENTE asigna a cualquier mecánico. Un MECANICO solo puede asignarse a
+   * sí mismo y, si crea una orden sin indicar mecánico, queda asignado (si no,
+   * no podría verla).
+   */
+  private resolveMechanicId(requested: number | undefined, user: AuthenticatedUser): number | undefined {
+    if (user.role !== Role.MECANICO) return requested;
+    if (requested !== undefined && requested !== user.id) {
+      throw new ForbiddenException('Un mecánico solo puede asignarse órdenes a sí mismo');
+    }
+    return user.id;
+  }
+
+  /**
+   * Descuenta stock y registra el UsedPart. DEBE ejecutarse dentro de una
+   * transacción. El `updateMany` condicionado a `quantity >= cantidad` es
+   * atómico: dos consumos simultáneos nunca dejan el stock negativo.
+   */
+  private async consumePart(
+    tx: Prisma.TransactionClient,
+    workOrderId: number,
+    partId: number,
+    quantity: number,
+  ) {
+    const updated = await tx.part.updateMany({
+      where: { id: partId, quantity: { gte: quantity } },
+      data: { quantity: { decrement: quantity } },
+    });
+    if (updated.count === 0) {
+      const part = await tx.part.findUnique({
+        where: { id: partId },
+        select: { name: true, quantity: true },
+      });
+      if (!part) throw new NotFoundException(`Repuesto con id ${partId} no encontrado`);
+      throw new ConflictException(
+        `Stock insuficiente para "${part.name}": disponible ${part.quantity}, solicitado ${quantity}`,
+      );
+    }
+
+    await tx.usedPart.upsert({
+      where: { workOrderId_partId: { workOrderId, partId } },
+      create: { workOrderId, partId, quantity },
+      update: { quantity: { increment: quantity } },
+    });
+  }
+
+  private async ensureVehicle(id: number) {
+    const count = await this.prisma.vehicle.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
+  }
+
+  private async ensureMechanic(id: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { role: true, isActive: true },
+    });
+    if (!user) throw new NotFoundException(`Mecánico con id ${id} no encontrado`);
+    if (user.role === Role.CLIENTE || !user.isActive) {
+      throw new ConflictException('El usuario asignado no es un mecánico activo');
+    }
+  }
+
+  private async ensureParts(parts: WorkOrderPartDto[]) {
+    const ids = [...new Set(parts.map((part) => part.partId))];
+    if (ids.length !== parts.length) {
+      throw new BadRequestException('Una pieza aparece repetida en la orden');
+    }
+    const count = await this.prisma.part.count({ where: { id: { in: ids } } });
+    if (count !== ids.length) throw new NotFoundException('Una o más piezas no existen');
+  }
+}
+
+================
 File: src/app.module.ts
 ================
 import { Module } from '@nestjs/common';
@@ -4210,6 +6040,13 @@ import { SearchLogModule } from './logs/search-log.module';
 import { ClientModule } from './client/client.module';
 import { ServiceModule } from './service/service.module';
 import { SupplierModule } from './supplier/supplier.module';
+import { UsersModule } from './users/users.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
+import { AppointmentsModule } from './appointments/appointments.module';
+import { WorkOrdersModule } from './work-orders/work-orders.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
+import { PurchasesModule } from './purchases/purchases.module';
+import { InvoicesModule } from './invoices/invoices.module';
 
 @Module({
   imports: [
@@ -4233,6 +6070,15 @@ import { SupplierModule } from './supplier/supplier.module';
     ClientModule,
     ServiceModule,
     SupplierModule,
+
+    // CRUD REST por dominio (Administración, SER, ABA, FIN)
+    UsersModule,
+    VehiclesModule,
+    AppointmentsModule,
+    WorkOrdersModule,
+    SuppliersModule,
+    PurchasesModule,
+    InvoicesModule,
   ],
 })
 export class AppModule {}
@@ -4243,6 +6089,7 @@ File: src/main.ts
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { CORS_ALLOWED_HEADERS, isAllowedOrigin } from './common/cors';
 
 async function bootstrap() {
   const logger = new Logger('GearTrace');
@@ -4260,73 +6107,20 @@ async function bootstrap() {
     }),
   );
 
-  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
-  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const defaultAllowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3000',
-    'http://geartrace.local',
-    ...configuredOrigins,
-  ];
-
-  const isAllowedDynamicOrigin = (origin: string): boolean => {
-    try {
-      const { hostname, protocol } = new URL(origin);
-      const normalizedHostname = hostname.toLowerCase();
-
-      const isVercel = normalizedHostname.endsWith('.vercel.app');
-      const isNgrok = normalizedHostname.includes('ngrok');
-      const isLocalhost =
-        normalizedHostname === 'localhost' ||
-        normalizedHostname === '127.0.0.1' ||
-        normalizedHostname === '::1';
-      const isPrivateNetwork =
-        /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
-        /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
-
-      return (
-        (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
-        (protocol === 'http:' || protocol === 'https:')
-      );
-    } catch {
-      return false;
-    }
-  };
-
+  // CORS: origen exacto de Vercel (CORS_ORIGIN), túneles ngrok (*.ngrok-free.app…),
+  // localhost y red local. Política compartida con el gateway Socket.io.
   app.enableCors({
     origin: (origin, callback) => {
-      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
-      if (defaultAllowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // Vercel, túneles Ngrok, localhost y direcciones privadas de la red local.
-      if (isAllowedDynamicOrigin(origin)) {
-        return callback(null, true);
-      }
-
+      if (isAllowedOrigin(origin)) return callback(null, true);
       logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
-      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
+      // Sin Error: responde sin cabeceras CORS (el navegador bloquea) en vez de un 500.
+      return callback(null, false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'ngrok-skip-browser-warning',
-    ],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
     credentials: true,
+    // Cachea el preflight 10 min: evita un OPTIONS extra por petición a través de ngrok.
+    maxAge: 600,
   });
 
   const port = process.env.PORT ?? 3000;
@@ -4360,8 +6154,12 @@ NODE_ENV=development
 
 # ─── CORS Origins ────────────────────────────────────────────────────────────
 # Orígenes adicionales separados por coma (ej. https://tu-app.vercel.app)
-# Ya se permiten por defecto: localhost:5173, localhost:3000, *.vercel.app, *.ngrok-free.app y la LAN 192.168.x.x
+# Ya se permiten por defecto: localhost, la red privada (192.168.x.x, 10.x, 172.16-31.x)
+# y túneles ngrok por HTTPS (*.ngrok-free.app, *.ngrok-free.dev, *.ngrok.app, *.ngrok.io).
+# El dominio de Vercel debe ir aquí de forma explícita (sin "/" final).
 CORS_ORIGIN=https://geartrace.vercel.app
+# Previews de Vercel (*.vercel.app). Desactivado: cualquiera puede publicar en vercel.app.
+CORS_ALLOW_VERCEL_PREVIEWS=false
 
 # ─── JWT Auth ───────────────────────────────────────────────────────────────
 # Cambia este secret en producción (mínimo 32 caracteres aleatorios)
@@ -4401,6 +6199,16 @@ File: clinerules.md
 2. Validar payloads siempre con DTOs de `class-validator`.
 3. Al modificar `prisma/schema.prisma`, recordar generar la migración.
 4. Refactorizar métodos por partes sin romper las firmas existentes.
+5. CRUD por dominio en `src/<dominio>/` (`users`, `vehicles`, `appointments`, `work-orders`, `suppliers`, `purchases`, `invoices`): Module + Controller + Service con `PrismaService` + DTOs (`Update*Dto` vía `PartialType` de `@nestjs/mapped-types` cuando aplique).
+6. Declarar parámetros numéricos como `:id(\\d+)` + `ParseIntPipe` para no colisionar con rutas literales del mismo prefijo.
+7. Mapear errores de Prisma con `isPrismaError` (`src/common/prisma-errors.ts`): P2002 → 409 (único), P2003 → 409 (registros asociados).
+8. Toda modificación de stock ocurre en una `prisma.$transaction` junto con el registro que la origina: consumir repuesto (`UsedPart`, RF-INV-13) descuenta al insertarse; recibir pedido incrementa. Nunca en un `PATCH` genérico ni en el cierre de la orden (evita doble descuento). Descontar con `updateMany` condicionado a `quantity >= cantidad`; stock insuficiente → `ConflictException`.
+9. Nombres Prisma estables: modelos en inglés `PascalCase` singular, tablas `@@map` en `snake_case` plural, campos `@map` en `snake_case`. Renombrar modelos, tablas, campos o valores de enum SOLO por un cambio fuerte (cambia el significado o lo exige el ERS), nunca por estética o sinónimos.
+10. Todo renombrado lleva migración manual que conserve datos (`RENAME` de tabla, secuencia, PK, FKs e índices; `CASE` para valores de enum). Rechazar el `DROP`/`CREATE` que propone Prisma. Verificar que `prisma migrate diff --from-schema-datasource ... --to-schema-datamodel ...` quede vacío.
+11. Flujo de `WorkOrderStatus`: `EN_DIAGNOSTICO` → `EN_PROCESO` ⇄ `ESPERA_REPUESTOS` → `CONCLUIDO`. `CONCLUIDO` solo vía `PATCH /api/service/work-orders/:id/close` (no toca stock); una orden concluida no admite repuestos.
+12. Órdenes de trabajo: el código `OT-YYYY-NNN` lo genera solo `nextWorkOrderNumber` dentro de la transacción de creación; nunca aceptarlo del cliente. Toda lectura/mutación de órdenes filtra con `workOrderScope(user)` (MECANICO solo las asignadas; fuera de alcance → 404).
+13. Las rutas legadas `/api/service/*` no duplican lógica: delegan en `VehiclesService`/`WorkOrdersService`. Nunca usar `include: { owner: true }` ni devolver `User` completo (expone `password`); usar `select` con campos públicos.
+14. CORS: un solo lugar, `src/common/cors.ts`, para HTTP y Socket.io. El dominio de Vercel va explícito en `CORS_ORIGIN`; ngrok solo por sufijo HTTPS. Nunca `includes(...)` sobre el hostname ni `*.vercel.app` abierto por defecto. El gateway usa solo `websocket` y valida `Origin` en `allowRequest`.
 
 ================
 File: package.json

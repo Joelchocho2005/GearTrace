@@ -1,8 +1,15 @@
 import { PartialType } from '@nestjs/mapped-types';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+
+const toUpperTrimmed = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim().toUpperCase() : value;
 
 export class CreateVehicleDto {
+  /** Se normaliza a mayúsculas sin espacios externos ("abc-123 " → "ABC-123"). */
+  @Transform(toUpperTrimmed)
   @IsString()
+  @IsNotEmpty()
   @MaxLength(20)
   plate: string;
 
@@ -21,6 +28,7 @@ export class CreateVehicleDto {
   year?: number;
 
   @IsOptional()
+  @Transform(toUpperTrimmed)
   @IsString()
   @MaxLength(17)
   vin?: string;
@@ -30,7 +38,7 @@ export class CreateVehicleDto {
   @MaxLength(50)
   color?: string;
 
-  /** Cliente propietario del vehículo */
+  /** Cliente propietario del vehículo (rol CLIENTE, activo) */
   @IsInt()
   @Min(1)
   ownerId: number;

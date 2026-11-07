@@ -7,7 +7,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -22,11 +21,15 @@ export class WorkOrderPartDto {
   quantity: number;
 }
 
-export class CreateWorkOrderDto {
-  @IsString()
-  @MaxLength(30)
-  number: string;
+/** RF-INV-13: repuesto consumido que se agrega a una orden y descuenta stock. */
+export class AddUsedPartDto extends WorkOrderPartDto {}
 
+/**
+ * El código `number` (OT-YYYY-NNN) lo genera el servidor (RF-SER-05); si el
+ * cliente lo envía, la validación global lo rechaza (forbidNonWhitelisted).
+ */
+export class CreateWorkOrderDto {
+  /** Motivo de ingreso / trabajo solicitado */
   @IsString()
   description: string;
 
@@ -34,6 +37,12 @@ export class CreateWorkOrderDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   estimatedCost?: number;
+
+  /** Kilometraje del vehículo al ingresar */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  mileage?: number;
 
   @IsInt()
   @Min(1)
@@ -52,8 +61,9 @@ export class CreateWorkOrderDto {
 }
 
 /**
- * Edición general de la orden. El cierre (CERRADA) no se permite aquí porque
- * descuenta inventario: usar PATCH /api/service/work-orders/:id/close.
+ * Edición general de la orden. El cierre (CONCLUIDO) no se permite aquí: usar
+ * PATCH /api/service/work-orders/:id/close (registra finalCost y completedAt).
+ * Los repuestos se agregan con POST /api/work-orders/:id/parts.
  */
 export class UpdateWorkOrderDto {
   @IsOptional()
@@ -68,6 +78,11 @@ export class UpdateWorkOrderDto {
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   estimatedCost?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  mileage?: number;
 
   @IsOptional()
   @IsInt()

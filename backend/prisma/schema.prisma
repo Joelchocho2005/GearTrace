@@ -26,11 +26,13 @@ enum Role {
   CLIENTE
 }
 
+// Flujo SER: EN_DIAGNOSTICO → EN_PROCESO ⇄ ESPERA_REPUESTOS → CONCLUIDO
+// CONCLUIDO solo se alcanza por el cierre transaccional (descuenta stock).
 enum WorkOrderStatus {
-  PENDIENTE
   EN_DIAGNOSTICO
-  EN_PROGRESO
-  CERRADA
+  EN_PROCESO
+  ESPERA_REPUESTOS
+  CONCLUIDO
 }
 
 enum AppointmentStatus {
@@ -148,7 +150,7 @@ model Part {
   boxId              Int                 @map("box_id")
   box                Box                 @relation(fields: [boxId], references: [id], onDelete: Restrict)
   purchaseOrderItems PurchaseOrderItem[]
-  workOrderItems     WorkOrderItem[]
+  usedParts          UsedPart[]
 
   @@index([name])
   @@index([boxId])
@@ -213,14 +215,16 @@ model WorkOrder {
   number        String          @unique @db.VarChar(30)
   description   String          @db.Text
   diagnosis     String?         @db.Text
-  status        WorkOrderStatus @default(PENDIENTE)
+  /// Kilometraje del vehículo al ingresar al taller
+  mileage       Int?
+  status        WorkOrderStatus @default(EN_DIAGNOSTICO)
   estimatedCost Decimal?        @map("estimated_cost") @db.Decimal(10, 2)
   finalCost     Decimal?        @map("final_cost") @db.Decimal(10, 2)
   vehicleId     Int             @map("vehicle_id")
   mechanicId    Int?            @map("mechanic_id")
   vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
-  parts         WorkOrderItem[]
+  parts         UsedPart[]
   invoice       Invoice?
 
   createdAt   DateTime  @default(now()) @map("created_at")
@@ -249,7 +253,12 @@ model Appointment {
   @@map("appointments")
 }
 
-model WorkOrderItem {
+// ────────────────────────────────────────────────────────────
+// UsedPart: Repuesto consumido en una orden de trabajo (SER)
+//
+//  Se descuenta del stock de Part al cerrar la orden (CONCLUIDO).
+// ────────────────────────────────────────────────────────────
+model UsedPart {
   id          Int       @id @default(autoincrement())
   quantity    Int
   workOrderId Int       @map("work_order_id")
@@ -259,7 +268,7 @@ model WorkOrderItem {
 
   @@unique([workOrderId, partId])
   @@index([partId])
-  @@map("work_order_items")
+  @@map("used_parts")
 }
 
 model Supplier {

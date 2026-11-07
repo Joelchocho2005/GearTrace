@@ -167,13 +167,15 @@ async function main() {
   }
 
   // 7. Crear órdenes de trabajo ficticias
+  // Mismo formato que genera WorkOrdersService (RF-SER-05): OT-YYYY-NNN
+  const currentYear = new Date().getFullYear();
   await prisma.workOrder.upsert({
-    where: { number: 'OT-0001' },
+    where: { number: `OT-${currentYear}-001` },
     update: {},
     create: {
-      number: 'OT-0001',
+      number: `OT-${currentYear}-001`,
       description: 'Cambio de aceite y filtro',
-      status: WorkOrderStatus.CERRADA,
+      status: WorkOrderStatus.CONCLUIDO,
       finalCost: 45,
       vehicleId: vehiculoCliente.id,
       mechanicId: mecanico.id,
@@ -182,10 +184,10 @@ async function main() {
   });
 
   await prisma.workOrder.upsert({
-    where: { number: 'OT-0002' },
+    where: { number: `OT-${currentYear}-002` },
     update: {},
     create: {
-      number: 'OT-0002',
+      number: `OT-${currentYear}-002`,
       description: 'Revisión del sistema de frenos',
       status: WorkOrderStatus.EN_DIAGNOSTICO,
       vehicleId: vehiculoEmpresa.id,

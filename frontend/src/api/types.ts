@@ -8,7 +8,7 @@ import type { Role } from '../contexts/AuthContext';
 export type DecimalString = string;
 export type ISODateString = string;
 
-export type WorkOrderStatus = 'PENDIENTE' | 'EN_DIAGNOSTICO' | 'EN_PROGRESO' | 'CERRADA';
+export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
 export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
 export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
 export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
@@ -83,8 +83,26 @@ export interface UpdateAppointmentPayload extends Partial<CreateAppointmentPaylo
   status?: AppointmentStatus;
 }
 
+// ── Inventario ──────────────────────────────────────────────
+/** Pieza devuelta por /inventory/search/:query (máx. 5 coincidencias). */
+export interface InventoryPart {
+  id: number;
+  name: string;
+  code: string;
+  quantity: number;
+  minStock: number;
+  photoUrl: string | null;
+  box?: { id: number; name: string; ledIndex: number; location?: string | null };
+}
+
+export interface AddUsedPartPayload {
+  partId: number;
+  quantity: number;
+}
+
 // ── Órdenes de trabajo ──────────────────────────────────────
-export interface WorkOrderItem {
+/** Repuesto consumido en una orden (modelo UsedPart). */
+export interface UsedPart {
   id: number;
   quantity: number;
   partId: number;
@@ -96,6 +114,7 @@ export interface WorkOrder {
   number: string;
   description: string;
   diagnosis: string | null;
+  mileage: number | null;
   status: WorkOrderStatus;
   estimatedCost: DecimalString | null;
   finalCost: DecimalString | null;
@@ -103,7 +122,7 @@ export interface WorkOrder {
   mechanicId: number | null;
   vehicle?: Vehicle;
   mechanic?: UserSummary | null;
-  parts?: WorkOrderItem[];
+  parts?: UsedPart[];
   invoice?: Invoice | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
@@ -111,22 +130,24 @@ export interface WorkOrder {
   completedAt: ISODateString | null;
 }
 
+/** `number` (OT-YYYY-NNN) lo genera el backend. */
 export interface CreateWorkOrderPayload {
-  number: string;
   description: string;
   estimatedCost?: number;
+  mileage?: number;
   vehicleId: number;
   mechanicId?: number;
   parts?: { partId: number; quantity: number }[];
 }
 
-/** `CERRADA` no se acepta aquí: el cierre usa /service/work-orders/:id/close. */
+/** `CONCLUIDO` no se acepta aquí: el cierre usa /service/work-orders/:id/close. */
 export interface UpdateWorkOrderPayload {
   description?: string;
   diagnosis?: string;
   estimatedCost?: number;
+  mileage?: number;
   mechanicId?: number;
-  status?: Exclude<WorkOrderStatus, 'CERRADA'>;
+  status?: Exclude<WorkOrderStatus, 'CONCLUIDO'>;
 }
 
 // ── Proveedores ─────────────────────────────────────────────

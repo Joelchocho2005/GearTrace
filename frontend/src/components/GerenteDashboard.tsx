@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { AlertCircle, ClipboardList, Cpu, Package, Server } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
+import { createHardwareSocket } from '../api/socket';
 
 interface HwStatus {
   simulationMode: boolean;
@@ -18,7 +18,7 @@ interface WorkOrder {
   vehicle: { plate: string; make: string; model: string };
 }
 
-const activeStatuses = new Set(['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO']);
+const activeStatuses = new Set(['EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS']);
 
 export default function GerenteDashboard() {
   const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });
@@ -47,11 +47,7 @@ export default function GerenteDashboard() {
     };
     void loadData();
 
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
-    const socket: Socket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      extraHeaders: { 'ngrok-skip-browser-warning': '69420' },
-    });
+    const socket = createHardwareSocket();
     socket.on('hw:status', (status: HwStatus) => setHwStatus(status));
     return () => {
       socket.disconnect();

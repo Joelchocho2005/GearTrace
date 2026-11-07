@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ClipboardList, KanbanSquare, Table2 } from 'lucide-react';
 import { workOrdersApi } from '../api/resources';
 import type { WorkOrder } from '../api/types';
-import WorkOrdersBoard from '../components/WorkOrders/WorkOrdersBoard';
+import WorkOrdersList from '../components/WorkOrders/WorkOrdersList';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
 import StatusBadge from '../components/ui/StatusBadge';
@@ -13,9 +13,11 @@ import { WORK_ORDER_STATUS } from '../utils/status';
 
 type View = 'list' | 'board';
 
+const kmFormatter = new Intl.NumberFormat('es');
+
 const tabs: ViewTab<View>[] = [
-  { key: 'list', label: 'Listado', icon: Table2 },
   { key: 'board', label: 'Tablero', icon: KanbanSquare },
+  { key: 'list', label: 'Listado', icon: Table2 },
 ];
 
 const columns: Column<WorkOrder>[] = [
@@ -47,6 +49,13 @@ const columns: Column<WorkOrder>[] = [
       ),
   },
   { key: 'status', header: 'Estado', render: (order) => <StatusBadge {...WORK_ORDER_STATUS[order.status]} /> },
+  {
+    key: 'mileage',
+    header: 'Kilometraje',
+    hideOnMobile: true,
+    align: 'right',
+    render: (order) => (order.mileage === null ? EMPTY : `${kmFormatter.format(order.mileage)} km`),
+  },
   { key: 'mechanic', header: 'Mecánico', hideOnMobile: true, render: (order) => order.mechanic?.name ?? 'Sin asignar' },
   {
     key: 'cost',
@@ -58,17 +67,17 @@ const columns: Column<WorkOrder>[] = [
   { key: 'createdAt', header: 'Creada', hideOnMobile: true, render: (order) => formatDate(order.createdAt) },
 ];
 
-/** /ordenes-trabajo — GERENTE, MECANICO. El tablero conserva el flujo de estados existente. */
+/** /ordenes-trabajo — GERENTE, MECANICO. Tablero (Kanban + detalle + repuestos) por defecto; Listado como tabla. */
 export default function OrdenesTrabajoPage() {
   const { user } = useAuth();
-  const [view, setView] = useState<View>('list');
+  const [view, setView] = useState<View>('board');
   const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
 
   if (view === 'board') {
     return (
       <div className="space-y-6">
         {toolbar}
-        <WorkOrdersBoard />
+        <WorkOrdersList />
       </div>
     );
   }
@@ -77,7 +86,7 @@ export default function OrdenesTrabajoPage() {
     <ResourceListPage
       toolbar={toolbar}
       title="Órdenes de trabajo"
-      description="Servicios en curso y cerrados del taller"
+      description="Servicios en curso y concluidos del taller"
       icon={ClipboardList}
       entityLabel="la orden"
       fetchAll={workOrdersApi.list}

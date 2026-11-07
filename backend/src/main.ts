@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { CORS_ALLOWED_HEADERS, isAllowedOrigin } from './common/cors';
 
 async function bootstrap() {
   const logger = new Logger('GearTrace');
@@ -18,73 +19,20 @@ async function bootstrap() {
     }),
   );
 
-  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
-  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const defaultAllowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3000',
-    'http://geartrace.local',
-    ...configuredOrigins,
-  ];
-
-  const isAllowedDynamicOrigin = (origin: string): boolean => {
-    try {
-      const { hostname, protocol } = new URL(origin);
-      const normalizedHostname = hostname.toLowerCase();
-
-      const isVercel = normalizedHostname.endsWith('.vercel.app');
-      const isNgrok = normalizedHostname.includes('ngrok');
-      const isLocalhost =
-        normalizedHostname === 'localhost' ||
-        normalizedHostname === '127.0.0.1' ||
-        normalizedHostname === '::1';
-      const isPrivateNetwork =
-        /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
-        /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
-
-      return (
-        (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
-        (protocol === 'http:' || protocol === 'https:')
-      );
-    } catch {
-      return false;
-    }
-  };
-
+  // CORS: origen exacto de Vercel (CORS_ORIGIN), túneles ngrok (*.ngrok-free.app…),
+  // localhost y red local. Política compartida con el gateway Socket.io.
   app.enableCors({
     origin: (origin, callback) => {
-      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
-      if (defaultAllowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // Vercel, túneles Ngrok, localhost y direcciones privadas de la red local.
-      if (isAllowedDynamicOrigin(origin)) {
-        return callback(null, true);
-      }
-
+      if (isAllowedOrigin(origin)) return callback(null, true);
       logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
-      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
+      // Sin Error: responde sin cabeceras CORS (el navegador bloquea) en vez de un 500.
+      return callback(null, false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'ngrok-skip-browser-warning',
-    ],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
     credentials: true,
+    // Cachea el preflight 10 min: evita un OPTIONS extra por petición a través de ngrok.
+    maxAge: 600,
   });
 
   const port = process.env.PORT ?? 3000;
