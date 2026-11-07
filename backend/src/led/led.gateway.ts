@@ -46,8 +46,45 @@ export interface LedActivatedPayload {
 }
 
 @WebSocketGateway({
-  cors: { origin: ['https://gear-trace.vercel.app', 'http://localhost:5173'],
-    credentials: true,},
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      try {
+        const { hostname, protocol } = new URL(origin);
+        const normalizedHostname = hostname.toLowerCase();
+        const isVercel = normalizedHostname.endsWith('.vercel.app');
+        const isNgrok = normalizedHostname.includes('ngrok');
+        const isLocalhost =
+          normalizedHostname === 'localhost' ||
+          normalizedHostname === '127.0.0.1' ||
+          normalizedHostname === '::1';
+        const isPrivateNetwork =
+          /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
+          /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
+
+        if (
+          (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
+          (protocol === 'http:' || protocol === 'https:')
+        ) {
+          return callback(null, true);
+        }
+      } catch {
+        // Socket.io rechazará el origen con formato inválido.
+      }
+
+      return callback(new Error(`Origen WebSocket no permitido: ${origin}`), false);
+    },
+    credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'ngrok-skip-browser-warning',
+    ],
+  },
   namespace: '/',
   transports: ['websocket', 'polling'],
 })

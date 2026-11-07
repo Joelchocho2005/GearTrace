@@ -33,6 +33,30 @@ async function bootstrap() {
     ...configuredOrigins,
   ];
 
+  const isAllowedDynamicOrigin = (origin: string): boolean => {
+    try {
+      const { hostname, protocol } = new URL(origin);
+      const normalizedHostname = hostname.toLowerCase();
+
+      const isVercel = normalizedHostname.endsWith('.vercel.app');
+      const isNgrok = normalizedHostname.includes('ngrok');
+      const isLocalhost =
+        normalizedHostname === 'localhost' ||
+        normalizedHostname === '127.0.0.1' ||
+        normalizedHostname === '::1';
+      const isPrivateNetwork =
+        /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
+        /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
+
+      return (
+        (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
+        (protocol === 'http:' || protocol === 'https:')
+      );
+    } catch {
+      return false;
+    }
+  };
+
   app.enableCors({
     origin: (origin, callback) => {
       // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
@@ -45,22 +69,8 @@ async function bootstrap() {
         return callback(null, true);
       }
 
-      // 3. Despliegues en Vercel (*.vercel.app y subdominios)
-      if (/^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // 4. Dominios de túnel Ngrok (*.ngrok-free.app, *.ngrok.app)
-      if (/^https:\/\/([a-zA-Z0-9-]+\.)*ngrok(-free)?\.app$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // 5. Red local (Raspberry Pi y clientes LAN: 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-      if (
-        /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
-          origin,
-        )
-      ) {
+      // Vercel, túneles Ngrok, localhost y direcciones privadas de la red local.
+      if (isAllowedDynamicOrigin(origin)) {
         return callback(null, true);
       }
 
@@ -68,7 +78,12 @@ async function bootstrap() {
       return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept','ngrok-skip-browser-warning'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'ngrok-skip-browser-warning',
+    ],
     credentials: true,
   });
 
