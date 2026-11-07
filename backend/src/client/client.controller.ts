@@ -26,6 +26,11 @@ export class ClientController {
     return this.clientService.findMyVehicles(user.id);
   }
 
+  @Get('appointments')
+  findMyAppointments(@CurrentUser() user: AuthenticatedUser) {
+    return this.clientService.findMyAppointments(user.id);
+  }
+
   @Post('appointments')
   @HttpCode(HttpStatus.CREATED)
   createAppointment(

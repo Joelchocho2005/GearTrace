@@ -1,0 +1,44 @@
+import type { BadgeTone } from '../components/ui/StatusBadge';
+import type { Role } from '../contexts/AuthContext';
+import type {
+  AppointmentStatus,
+  InvoiceStatus,
+  PurchaseOrderStatus,
+  WorkOrderStatus,
+} from '../api/types';
+
+interface StatusMeta {
+  label: string;
+  tone: BadgeTone;
+}
+
+export const ROLE_META: Record<Role, StatusMeta> = {
+  GERENTE: { label: 'Gerente', tone: 'brand' },
+  MECANICO: { label: 'Mecánico', tone: 'info' },
+  CLIENTE: { label: 'Cliente', tone: 'neutral' },
+};
+
+export const WORK_ORDER_STATUS: Record<WorkOrderStatus, StatusMeta> = {
+  PENDIENTE: { label: 'Pendiente', tone: 'neutral' },
+  EN_DIAGNOSTICO: { label: 'En diagnóstico', tone: 'info' },
+  EN_PROGRESO: { label: 'En progreso', tone: 'warning' },
+  CERRADA: { label: 'Cerrada', tone: 'success' },
+};
+
+export const APPOINTMENT_STATUS: Record<AppointmentStatus, StatusMeta> = {
+  AGENDADA: { label: 'Agendada', tone: 'info' },
+  CONFIRMADA: { label: 'Confirmada', tone: 'brand' },
+  COMPLETADA: { label: 'Completada', tone: 'success' },
+  CANCELADA: { label: 'Cancelada', tone: 'danger' },
+};
+
+export const PURCHASE_STATUS: Record<PurchaseOrderStatus, StatusMeta> = {
+  PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  RECIBIDA: { label: 'Recibida', tone: 'success' },
+  CANCELADA: { label: 'Cancelada', tone: 'danger' },
+};
+
+export const INVOICE_STATUS: Record<InvoiceStatus, StatusMeta> = {
+  PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  PAGADA: { label: 'Pagada', tone: 'success' },
+};

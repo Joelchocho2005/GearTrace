@@ -30,34 +30,3 @@ export class CreatePurchaseOrderDto {
   @Type(() => PurchaseOrderItemDto)
   items: PurchaseOrderItemDto[];
 }
-
-export class CreateSupplierDto {
-  @IsString()
-  @MaxLength(150)
-  name: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  taxId?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  contactName?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  phone?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  address?: string;
-}

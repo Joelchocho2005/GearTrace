@@ -46,6 +46,11 @@ enum PurchaseOrderStatus {
   CANCELADA
 }
 
+enum InvoiceStatus {
+  PENDIENTE
+  PAGADA
+}
+
 // ────────────────────────────────────────────────────────────
 // User: Usuarios del sistema GearTrace
 // ────────────────────────────────────────────────────────────
@@ -67,6 +72,7 @@ model User {
   searchLogs SearchLog[]
   vehicles   Vehicle[]
   workOrders WorkOrder[] @relation("AssignedMechanic")
+  invoices   Invoice[]   @relation("InvoiceClient")
 
   @@map("users")
 }
@@ -215,6 +221,7 @@ model WorkOrder {
   vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
   parts         WorkOrderItem[]
+  invoice       Invoice?
 
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -301,4 +308,33 @@ model PurchaseOrderItem {
   @@unique([purchaseOrderId, partId])
   @@index([partId])
   @@map("purchase_order_items")
+}
+
+// ────────────────────────────────────────────────────────────
+// Invoice: Factura emitida por una orden de trabajo (FIN)
+//
+//  - Una orden de trabajo genera como máximo una factura.
+//  - clientId: Cliente facturado (normalmente el dueño del vehículo).
+//  - total = subtotal + tax (se calcula en el servicio).
+// ────────────────────────────────────────────────────────────
+model Invoice {
+  id          Int           @id @default(autoincrement())
+  number      String        @unique @db.VarChar(30)
+  subtotal    Decimal       @db.Decimal(10, 2)
+  tax         Decimal       @default(0) @db.Decimal(10, 2)
+  total       Decimal       @db.Decimal(10, 2)
+  status      InvoiceStatus @default(PENDIENTE)
+  issuedAt    DateTime      @default(now()) @map("issued_at")
+  paidAt      DateTime?     @map("paid_at")
+  workOrderId Int           @unique @map("work_order_id")
+  clientId    Int           @map("client_id")
+  workOrder   WorkOrder     @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  client      User          @relation("InvoiceClient", fields: [clientId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([clientId])
+  @@index([status])
+  @@map("invoices")
 }

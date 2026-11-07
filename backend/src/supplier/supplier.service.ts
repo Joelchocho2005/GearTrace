@@ -5,32 +5,11 @@ import {
 } from '@nestjs/common';
 import { Prisma, PurchaseOrderStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  CreatePurchaseOrderDto,
-  CreateSupplierDto,
-} from './dto/purchase-order.dto';
+import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
 
 @Injectable()
 export class SupplierService {
   constructor(private readonly prisma: PrismaService) {}
-
-  findSuppliers() {
-    return this.prisma.supplier.findMany({
-      include: { _count: { select: { purchaseOrders: true } } },
-      orderBy: { name: 'asc' },
-    });
-  }
-
-  async createSupplier(dto: CreateSupplierDto) {
-    try {
-      return await this.prisma.supplier.create({ data: dto });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('El identificador fiscal ya está registrado');
-      }
-      throw error;
-    }
-  }
 
   async findLowStockParts() {
     const lowStock = await this.prisma.$queryRaw<

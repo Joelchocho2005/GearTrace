@@ -17,6 +17,14 @@ export class ClientService {
     });
   }
 
+  findMyAppointments(ownerId: number) {
+    return this.prisma.appointment.findMany({
+      where: { vehicle: { ownerId } },
+      include: { vehicle: true },
+      orderBy: { scheduledAt: 'desc' },
+    });
+  }
+
   async createAppointment(ownerId: number, dto: CreateAppointmentDto) {
     const vehicle = await this.prisma.vehicle.findFirst({
       where: { id: dto.vehicleId, ownerId },

@@ -11,6 +11,13 @@ import { SearchLogModule } from './logs/search-log.module';
 import { ClientModule } from './client/client.module';
 import { ServiceModule } from './service/service.module';
 import { SupplierModule } from './supplier/supplier.module';
+import { UsersModule } from './users/users.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
+import { AppointmentsModule } from './appointments/appointments.module';
+import { WorkOrdersModule } from './work-orders/work-orders.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
+import { PurchasesModule } from './purchases/purchases.module';
+import { InvoicesModule } from './invoices/invoices.module';
 
 @Module({
   imports: [
@@ -34,6 +41,15 @@ import { SupplierModule } from './supplier/supplier.module';
     ClientModule,
     ServiceModule,
     SupplierModule,
+
+    // CRUD REST por dominio (Administración, SER, ABA, FIN)
+    UsersModule,
+    VehiclesModule,
+    AppointmentsModule,
+    WorkOrdersModule,
+    SuppliersModule,
+    PurchasesModule,
+    InvoicesModule,
   ],
 })
 export class AppModule {}

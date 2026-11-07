@@ -1,17 +1,47 @@
+import { ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './contexts/AuthContext'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
 import InventoryList from './components/Inventory/InventoryList'
-import UsersList from './components/Users/UsersList'
-import SuppliersList from './components/Suppliers/SuppliersList'
-import WorkOrdersBoard from './components/WorkOrders/WorkOrdersBoard'
 import AuditLogs from './components/AuditLogs'
 import RoleProtectedRoute from './components/RoleProtectedRoute'
+import UsuariosPage from './pages/UsuariosPage'
+import VehiculosPage from './pages/VehiculosPage'
+import OrdenesTrabajoPage from './pages/OrdenesTrabajoPage'
+import CitasPage from './pages/CitasPage'
+import ProveedoresPage from './pages/ProveedoresPage'
+import ComprasPage from './pages/ComprasPage'
+import FacturacionPage from './pages/FacturacionPage'
+import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
+
+/** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
+const protectedRoutes: Record<AppRoute, ReactNode> = {
+  inventory: <InventoryList />,
+  // Administración
+  usuarios: <UsuariosPage />,
+  // Servicios (SER)
+  vehiculos: <VehiculosPage />,
+  'ordenes-trabajo': <OrdenesTrabajoPage />,
+  citas: <CitasPage />,
+  // Abastecimiento (ABA)
+  proveedores: <ProveedoresPage />,
+  compras: <ComprasPage />,
+  // Facturación (FIN)
+  facturacion: <FacturacionPage />,
+}
+
+/** Rutas anteriores en inglés: redirigen a la ruta canónica en español. */
+const legacyRedirects: Record<string, string> = {
+  users: '/usuarios',
+  'work-orders': '/ordenes-trabajo',
+  suppliers: '/proveedores',
+  billing: '/facturacion',
+}
 
 function App() {
-  const { isAuthenticated, isLoading, user } = useAuth()
+  const { isAuthenticated, isLoading } = useAuth()
 
   if (isLoading) {
     return (
@@ -23,42 +53,34 @@ function App() {
 
   return (
     <Routes>
-      <Route 
-        path="/login" 
-        element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />} 
+      <Route
+        path="/login"
+        element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />}
       />
-      
-      <Route 
-        path="/" 
+
+      <Route
+        path="/"
         element={isAuthenticated ? <Layout /> : <Navigate to="/login" />}
       >
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route
-          path="inventory"
-          element={
-            <RoleProtectedRoute allowedRoles={['GERENTE', 'MECANICO']}>
-              <InventoryList />
-            </RoleProtectedRoute>
-          }
-        />
         <Route path="logs" element={<AuditLogs />} />
-        <Route
-          path="suppliers"
-          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <SuppliersList /> : <Navigate to="/dashboard" replace />}
-        />
-        <Route
-          path="work-orders"
-          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <WorkOrdersBoard /> : <Navigate to="/dashboard" replace />}
-        />
-        <Route
-          path="users"
-          element={
-            <RoleProtectedRoute allowedRoles={['GERENTE']}>
-              <UsersList />
-            </RoleProtectedRoute>
-          }
-        />
+
+        {(Object.keys(protectedRoutes) as AppRoute[]).map((path) => (
+          <Route
+            key={path}
+            path={path}
+            element={
+              <RoleProtectedRoute allowedRoles={[...ROUTE_ROLES[path]]}>
+                {protectedRoutes[path]}
+              </RoleProtectedRoute>
+            }
+          />
+        ))}
+
+        {Object.entries(legacyRedirects).map(([from, to]) => (
+          <Route key={from} path={from} element={<Navigate to={to} replace />} />
+        ))}
       </Route>
 
       <Route path="*" element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} />} />

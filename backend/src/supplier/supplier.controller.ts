@@ -13,28 +13,18 @@ import { Role } from '@prisma/client';
 import { Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import {
-  CreatePurchaseOrderDto,
-  CreateSupplierDto,
-} from './dto/purchase-order.dto';
+import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
 import { SupplierService } from './supplier.service';
 
+/**
+ * Flujo de reposición: stock bajo, pedidos y recepción.
+ * GET/POST /api/suppliers (CRUD de proveedores) vive en SuppliersController.
+ */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.GERENTE, Role.MECANICO)
 export class SupplierController {
   constructor(private readonly supplierService: SupplierService) {}
-
-  @Get()
-  findSuppliers() {
-    return this.supplierService.findSuppliers();
-  }
-
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  createSupplier(@Body() dto: CreateSupplierDto) {
-    return this.supplierService.createSupplier(dto);
-  }
 
   @Get('low-stock')
   findLowStockParts() {
