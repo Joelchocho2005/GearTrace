@@ -1,6 +1,76 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
+import { Role, useAuth } from '../contexts/AuthContext';
+import {
+  ClipboardList,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  Receipt,
+  Truck,
+  Users,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
+
+interface NavigationItem {
+  label: string;
+  path: string;
+  icon: LucideIcon;
+  roles: Role[];
+  disabled?: boolean;
+}
+
+const navigationItems: NavigationItem[] = [
+  {
+    label: 'Dashboard',
+    path: '/dashboard',
+    icon: LayoutDashboard,
+    roles: ['GERENTE', 'MECANICO'],
+  },
+  {
+    label: 'Mi Vehículo',
+    path: '/dashboard#vehicles',
+    icon: LayoutDashboard,
+    roles: ['CLIENTE'],
+  },
+  {
+    label: 'Citas',
+    path: '/dashboard#appointments',
+    icon: ClipboardList,
+    roles: ['CLIENTE'],
+  },
+  {
+    label: 'Inventario',
+    path: '/inventory',
+    icon: Package,
+    roles: ['GERENTE', 'MECANICO'],
+  },
+  {
+    label: 'Órdenes de trabajo',
+    path: '/work-orders',
+    icon: ClipboardList,
+    roles: ['GERENTE', 'MECANICO'],
+  },
+  {
+    label: 'Usuarios',
+    path: '/users',
+    icon: Users,
+    roles: ['GERENTE'],
+  },
+  {
+    label: 'Proveedores',
+    path: '/suppliers',
+    icon: Truck,
+    roles: ['GERENTE'],
+  },
+  {
+    label: 'Facturación',
+    path: '/billing',
+    icon: Receipt,
+    roles: ['GERENTE'],
+    disabled: true,
+  },
+];
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -30,21 +100,23 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <NavLink to="/dashboard" className={navLinkClass} end>
-            <LayoutDashboard size={20} /> Dashboard
-          </NavLink>
-          
-          {(user?.role === 'GERENTE' || user?.role === 'MECANICO') && (
-            <NavLink to="/inventory" className={navLinkClass}>
-              <Package size={20} /> Inventario
-            </NavLink>
-          )}
-          
-          {user?.role === 'GERENTE' && (
-            <NavLink to="/users" className={navLinkClass}>
-              <Users size={20} /> Usuarios
-            </NavLink>
-          )}
+          {navigationItems
+            .filter((item) => user?.role && item.roles.includes(user.role))
+            .map(({ label, path, icon: Icon, disabled }) =>
+              disabled ? (
+                <span
+                  key={label}
+                  title="Módulo próximamente disponible"
+                  className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2.5 font-medium text-slate-600"
+                >
+                  <Icon size={20} /> {label}
+                </span>
+              ) : (
+                <NavLink key={label} to={path} className={navLinkClass} end={path === '/dashboard'}>
+                  <Icon size={20} /> {label}
+                </NavLink>
+              ),
+            )}
         </nav>
 
         <div className="p-4 border-t border-slate-700">

@@ -4,8 +4,11 @@ import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
 import InventoryList from './components/Inventory/InventoryList'
-import UsersManagement from './components/Users/UsersManagement'
+import UsersList from './components/Users/UsersList'
+import SuppliersList from './components/Suppliers/SuppliersList'
+import WorkOrdersBoard from './components/WorkOrders/WorkOrdersBoard'
 import AuditLogs from './components/AuditLogs'
+import RoleProtectedRoute from './components/RoleProtectedRoute'
 
 function App() {
   const { isAuthenticated, isLoading, user } = useAuth()
@@ -31,16 +34,29 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="inventory" element={<InventoryList />} />
+        <Route
+          path="inventory"
+          element={
+            <RoleProtectedRoute allowedRoles={['GERENTE', 'MECANICO']}>
+              <InventoryList />
+            </RoleProtectedRoute>
+          }
+        />
         <Route path="logs" element={<AuditLogs />} />
+        <Route
+          path="suppliers"
+          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <SuppliersList /> : <Navigate to="/dashboard" replace />}
+        />
+        <Route
+          path="work-orders"
+          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <WorkOrdersBoard /> : <Navigate to="/dashboard" replace />}
+        />
         <Route
           path="users"
           element={
-            user?.role === 'GERENTE' ? (
-              <UsersManagement />
-            ) : (
-              <Navigate to="/dashboard" replace />
-            )
+            <RoleProtectedRoute allowedRoles={['GERENTE']}>
+              <UsersList />
+            </RoleProtectedRoute>
           }
         />
       </Route>

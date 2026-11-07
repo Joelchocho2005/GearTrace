@@ -51,6 +51,10 @@ backend/
     migrations/
       20260930141834_init/
         migration.sql
+      20261107210444_add_service_and_supply_models/
+        migration.sql
+      20261107210844_add_work_order_parts/
+        migration.sql
       migration_lock.toml
     schema.prisma
     seed.sql
@@ -66,6 +70,7 @@ backend/
         auth.decorators.ts
       dto/
         auth.dto.ts
+        update-user.dto.ts
       guards/
         jwt-auth.guard.ts
         roles.guard.ts
@@ -75,6 +80,12 @@ backend/
       auth.module.ts
       auth.service.ts
       auth.types.ts
+    client/
+      dto/
+        create-appointment.dto.ts
+      client.controller.ts
+      client.module.ts
+      client.service.ts
     inventory/
       dto/
         create-box.dto.ts
@@ -95,6 +106,19 @@ backend/
     prisma/
       prisma.module.ts
       prisma.service.ts
+    service/
+      dto/
+        vehicle.dto.ts
+        work-order.dto.ts
+      service.controller.ts
+      service.module.ts
+      service.service.ts
+    supplier/
+      dto/
+        purchase-order.dto.ts
+      supplier.controller.ts
+      supplier.module.ts
+      supplier.service.ts
     app.module.ts
     main.ts
   .env.example
@@ -110,12 +134,21 @@ frontend/
       Inventory/
         InventoryList.tsx
         PartFormModal.tsx
+      Suppliers/
+        SuppliersList.tsx
       Users/
+        UsersList.tsx
         UsersManagement.tsx
+      WorkOrders/
+        WorkOrdersBoard.tsx
       AuditLogs.tsx
+      ClienteDashboard.tsx
       Dashboard.tsx
+      GerenteDashboard.tsx
       Layout.tsx
       Login.tsx
+      MecanicoDashboard.tsx
+      RoleProtectedRoute.tsx
     contexts/
       AuthContext.tsx
     App.tsx
@@ -143,6 +176,520 @@ README.md
 ================================================================
 Files
 ================================================================
+
+================
+File: frontend/src/components/Suppliers/SuppliersList.tsx
+================
+import { useEffect, useState } from 'react';
+import { AlertTriangle, PackageCheck, Truck } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../../api/axios';
+
+interface Supplier { id: number; name: string; email?: string; phone?: string }
+interface LowStockPart { id: number; name: string; code: string; quantity: number; minStock: number }
+
+export default function SuppliersList() {
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [lowStock, setLowStock] = useState<LowStockPart[]>([]);
+  const [supplierId, setSupplierId] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    try {
+      const [supplierResponse, stockResponse] = await Promise.all([
+        api.get<Supplier[]>('/suppliers'),
+        api.get<LowStockPart[]>('/suppliers/low-stock'),
+      ]);
+      setSuppliers(supplierResponse.data);
+      setLowStock(stockResponse.data);
+      if (!supplierId && supplierResponse.data[0]) setSupplierId(String(supplierResponse.data[0].id));
+    } catch (error) {
+      console.error('Error al cargar abastecimiento', error);
+      toast.error('No se pudo cargar la información de proveedores.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const requestRestock = async (part: LowStockPart) => {
+    if (!supplierId) {
+      toast.error('Selecciona un proveedor.');
+      return;
+    }
+    try {
+      await api.post('/suppliers/purchase-orders', {
+        number: `AUTO-${part.code}-${Date.now()}`,
+        supplierId: Number(supplierId),
+        items: [{ partId: part.id, quantity: Math.max(part.minStock * 2 - part.quantity, 1) }],
+      });
+      toast.success(`Reposición solicitada para ${part.name}.`);
+      setLowStock((current) => current.filter((item) => item.id !== part.id));
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'No se pudo registrar la reposición.');
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><Truck size={24} /></div><div><h2 className="text-2xl font-bold text-white">Proveedores y abastecimiento</h2><p className="text-sm text-slate-400">Solicita reposiciones cuando el stock esté bajo.</p></div></header>
+      <div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-5"><label className="mb-2 block text-sm text-slate-400">Proveedor para nuevas solicitudes</label><select value={supplierId} onChange={(event) => setSupplierId(event.target.value)} className="w-full max-w-md rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white">{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></div>
+      <div className="overflow-hidden rounded-2xl border border-amber-500/30 bg-slate-800/60">
+        <div className="flex items-center gap-2 border-b border-slate-700 p-5 text-amber-400"><AlertTriangle size={20} /><h3 className="font-semibold">Alertas de stock mínimo</h3></div>
+        {loading ? <p className="p-6 text-slate-400">Cargando alertas...</p> : lowStock.length === 0 ? <p className="p-6 text-emerald-400">No hay piezas bajo el mínimo.</p> : <div className="divide-y divide-slate-700">{lowStock.map((part) => <div key={part.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium text-white">{part.name}</p><p className="text-sm text-slate-400">{part.code} · Stock: <span className="text-amber-400">{part.quantity}</span> / mínimo {part.minStock}</p></div><button type="button" onClick={() => void requestRestock(part)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2 font-semibold text-white hover:bg-brand-600"><PackageCheck size={17} /> Solicitar reposición</button></div>)}</div>}
+      </div>
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/Users/UsersList.tsx
+================
+import { FormEvent, useEffect, useState } from 'react';
+import { Plus, ShieldCheck, Users, X } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../../api/axios';
+import { Role, useAuth } from '../../contexts/AuthContext';
+
+interface ManagedUser {
+  id: number;
+  name: string;
+  email: string;
+  role: Role;
+  isActive: boolean;
+}
+
+const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+
+export default function UsersList() {
+  const { user } = useAuth();
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'CLIENTE' as Role });
+
+  const loadUsers = async () => {
+    try {
+      const response = await api.get<ManagedUser[]>('/auth/users');
+      setUsers(response.data);
+    } catch (error) {
+      console.error('Error al cargar usuarios', error);
+      toast.error('No se pudieron cargar los usuarios.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user?.role === 'GERENTE') void loadUsers();
+  }, [user?.role]);
+
+  if (user?.role !== 'GERENTE') {
+    return <p className="text-slate-400">No tienes permisos para administrar usuarios.</p>;
+  }
+
+  const createUser = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await api.post('/auth/admin/create', form);
+      toast.success('Usuario creado correctamente.');
+      setForm({ name: '', email: '', password: '', role: 'CLIENTE' });
+      setIsModalOpen(false);
+      await loadUsers();
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'No se pudo crear el usuario.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleActive = async (managedUser: ManagedUser) => {
+    try {
+      await api.patch(`/auth/users/${managedUser.id}/toggle`, { isActive: !managedUser.isActive });
+      setUsers((current) =>
+        current.map((item) => item.id === managedUser.id ? { ...item, isActive: !item.isActive } : item),
+      );
+      toast.success(managedUser.isActive ? 'Acceso desactivado.' : 'Acceso activado.');
+    } catch (error) {
+      console.error('Error al cambiar acceso', error);
+      toast.error('No se pudo cambiar el acceso.');
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><Users size={24} /></div>
+          <div>
+            <h2 className="text-2xl font-bold text-white">Usuarios</h2>
+            <p className="text-sm text-slate-400">Administra personal, clientes y accesos.</p>
+          </div>
+        </div>
+        <button type="button" onClick={() => setIsModalOpen(true)} className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white hover:bg-brand-600">
+          <Plus size={18} /> Nuevo usuario
+        </button>
+      </header>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+        {isLoading ? <p className="p-8 text-center text-slate-400">Cargando usuarios...</p> : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-700 text-left">
+              <thead className="bg-slate-800 text-xs uppercase text-slate-400"><tr><th className="px-6 py-4">Usuario</th><th className="px-6 py-4">Rol</th><th className="px-6 py-4">Estado</th><th className="px-6 py-4">Acción</th></tr></thead>
+              <tbody className="divide-y divide-slate-700/80">
+                {users.map((managedUser) => (
+                  <tr key={managedUser.id} className="hover:bg-slate-700/20">
+                    <td className="px-6 py-4"><div className="font-medium text-white">{managedUser.name}</div><div className="text-sm text-slate-400">{managedUser.email}</div></td>
+                    <td className="px-6 py-4 text-slate-300">{managedUser.role}</td>
+                    <td className={`px-6 py-4 ${managedUser.isActive ? 'text-emerald-400' : 'text-slate-500'}`}><span className="inline-flex items-center gap-2"><ShieldCheck size={16} />{managedUser.isActive ? 'Activo' : 'Inactivo'}</span></td>
+                    <td className="px-6 py-4"><button type="button" onClick={() => void toggleActive(managedUser)} className="text-sm font-medium text-brand-400 hover:text-brand-300">{managedUser.isActive ? 'Desactivar' : 'Activar'}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/80 p-4">
+          <form onSubmit={createUser} className="w-full max-w-lg space-y-4 rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-2xl">
+            <div className="flex items-center justify-between"><h3 className="text-xl font-bold text-white">Crear usuario</h3><button type="button" onClick={() => setIsModalOpen(false)} aria-label="Cerrar"><X /></button></div>
+            {(['name', 'email', 'password'] as const).map((field) => (
+              <input key={field} required value={form[field]} type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'} placeholder={field === 'name' ? 'Nombre completo' : field === 'email' ? 'Correo electrónico' : 'Contraseña'} onChange={(event) => setForm({ ...form, [field]: event.target.value })} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white outline-none focus:border-brand-500" />
+            ))}
+            <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white outline-none focus:border-brand-500">
+              {roles.map((role) => <option key={role} value={role}>{role}</option>)}
+            </select>
+            <button disabled={saving} className="w-full rounded-xl bg-brand-500 px-4 py-3 font-semibold text-white hover:bg-brand-600 disabled:opacity-50">{saving ? 'Guardando...' : 'Crear usuario'}</button>
+          </form>
+        </div>
+      )}
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/WorkOrders/WorkOrdersBoard.tsx
+================
+import { useEffect, useState } from 'react';
+import { ClipboardList, Loader2, Play, Stethoscope } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../../api/axios';
+
+type Status = 'PENDIENTE' | 'EN_DIAGNOSTICO' | 'EN_PROGRESO' | 'CERRADA';
+interface WorkOrder { id: number; number: string; description: string; diagnosis?: string; status: Status; vehicle: { plate: string; make: string; model: string }; parts: { quantity: number; part: { name: string; code: string } }[] }
+
+const labels: Record<Status, string> = { PENDIENTE: 'Pendiente', EN_DIAGNOSTICO: 'En diagnóstico', EN_PROGRESO: 'En progreso', CERRADA: 'Cerrada' };
+
+export default function WorkOrdersBoard() {
+  const [orders, setOrders] = useState<WorkOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    try { setOrders((await api.get<WorkOrder[]>('/service/work-orders')).data); }
+    catch (error) { console.error('Error al cargar órdenes', error); toast.error('No se pudieron cargar las órdenes.'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const updateStatus = async (order: WorkOrder, status: Status) => {
+    try {
+      const updated = await api.patch<WorkOrder>(`/service/work-orders/${order.id}/status`, { status });
+      setOrders((current) => current.map((item) => item.id === order.id ? updated.data : item));
+    } catch (error: any) { toast.error(error.response?.data?.message || 'No se pudo actualizar el estado.'); }
+  };
+
+  const diagnose = async (order: WorkOrder) => {
+    const diagnosis = window.prompt('Registra el diagnóstico:', order.diagnosis || '');
+    if (!diagnosis?.trim()) return;
+    try {
+      const updated = await api.patch<WorkOrder>(`/service/work-orders/${order.id}/diagnosis`, { diagnosis });
+      setOrders((current) => current.map((item) => item.id === order.id ? updated.data : item));
+    } catch (error) { console.error(error); toast.error('No se pudo registrar el diagnóstico.'); }
+  };
+
+  const close = async (order: WorkOrder) => {
+    if (!window.confirm('¿Cerrar la orden y descontar los repuestos registrados?')) return;
+    try {
+      const updated = await api.patch<WorkOrder>(`/service/work-orders/${order.id}/close`, {});
+      setOrders((current) => current.map((item) => item.id === order.id ? updated.data : item));
+      toast.success('Orden cerrada y stock actualizado.');
+    } catch (error: any) { toast.error(error.response?.data?.message || 'No se pudo cerrar la orden.'); }
+  };
+
+  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><ClipboardList size={24} /></div><div><h2 className="text-2xl font-bold text-white">Órdenes de trabajo</h2><p className="text-sm text-slate-400">Gestiona el flujo del taller y los repuestos utilizados.</p></div></header>
+    {loading ? <div className="flex justify-center p-12"><Loader2 className="animate-spin text-brand-400" /></div> : <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">{(['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA'] as Status[]).map((status) => <div key={status} className="rounded-2xl border border-slate-700 bg-slate-800/60 p-4"><h3 className="mb-4 font-semibold text-slate-300">{labels[status]}</h3><div className="space-y-4">{orders.filter((order) => order.status === status).map((order) => <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/70 p-4"><div className="flex items-start justify-between gap-2"><div><p className="font-bold text-white">{order.number}</p><p className="text-sm text-brand-400">{order.vehicle.plate}</p></div><span className="text-xs text-slate-500">{order.vehicle.make} {order.vehicle.model}</span></div><p className="mt-3 text-sm text-slate-300">{order.description}</p>{order.diagnosis && <p className="mt-2 text-xs text-slate-400">Diagnóstico: {order.diagnosis}</p>}<div className="mt-3 border-t border-slate-700 pt-3 text-xs text-slate-400"><p className="mb-1 font-semibold text-slate-300">Repuestos usados</p>{order.parts.length ? order.parts.map((item) => <p key={item.part.code}>{item.quantity} × {item.part.name}</p>) : <p>No registrados</p>}</div>{status !== 'CERRADA' && <div className="mt-4 flex flex-wrap gap-2">{status === 'PENDIENTE' && <button type="button" onClick={() => void updateStatus(order, 'EN_PROGRESO')} className="rounded-lg bg-brand-500 px-3 py-2 text-xs font-semibold text-white"><Play size={13} className="mr-1 inline" />Iniciar</button>}<button type="button" onClick={() => void diagnose(order)} className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200"><Stethoscope size={13} className="mr-1 inline" />Diagnóstico</button><button type="button" onClick={() => void close(order)} className="rounded-lg border border-emerald-500/40 px-3 py-2 text-xs text-emerald-400">Cerrar y descontar</button></div>}</article>)}</div></div>)}</div>}</section>;
+}
+
+================
+File: frontend/src/components/ClienteDashboard.tsx
+================
+import { FormEvent, useEffect, useState } from 'react';
+import { CalendarDays, CheckCircle2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../api/axios';
+
+interface Vehicle { id: number; plate: string; make: string; model: string }
+type Status = 'PENDIENTE' | 'EN_DIAGNOSTICO' | 'EN_PROGRESO' | 'CERRADA';
+interface WorkOrder { id: number; number: string; description: string; diagnosis?: string; status: Status; vehicle: Vehicle; createdAt: string }
+const statuses: Status[] = ['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA'];
+const labels: Record<Status, string> = { PENDIENTE: 'Pendiente', EN_DIAGNOSTICO: 'En diagnóstico', EN_PROGRESO: 'En progreso', CERRADA: 'Cerrada' };
+
+export default function ClienteDashboard() {
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [orders, setOrders] = useState<WorkOrder[]>([]);
+  const [vehicleId, setVehicleId] = useState('');
+  const [scheduledAt, setScheduledAt] = useState('');
+  const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [vehicleResponse, orderResponse] = await Promise.all([api.get<Vehicle[]>('/client/vehicles'), api.get<WorkOrder[]>('/client/work-orders')]);
+        setVehicles(vehicleResponse.data);
+        setOrders(orderResponse.data);
+        if (vehicleResponse.data[0]) setVehicleId(String(vehicleResponse.data[0].id));
+      } catch (error) {
+        console.error('Error al cargar el portal del cliente', error);
+        toast.error('No se pudo cargar tu información.');
+      } finally { setLoading(false); }
+    };
+    void load();
+  }, []);
+
+  const requestAppointment = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      await api.post('/client/appointments', { vehicleId: Number(vehicleId), scheduledAt: new Date(scheduledAt).toISOString(), reason });
+      setScheduledAt('');
+      setReason('');
+      toast.success('Cita solicitada correctamente.');
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'No se pudo solicitar la cita.');
+    }
+  };
+
+  if (loading) return <p className="text-slate-400">Cargando tu portal...</p>;
+  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = statuses.indexOf(order.status); return <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p></div><span className="text-xs text-brand-400">{labels[order.status]}</span></div><div className="mt-5 flex gap-2">{statuses.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < 3 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">Recepción · Diagnóstico · Trabajo · Cierre</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {new Date(order.createdAt).toLocaleDateString()}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="h-fit space-y-4 rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white placeholder:text-slate-500" /><button type="submit" className="w-full rounded-xl bg-brand-500 px-4 py-3 font-semibold text-white hover:bg-brand-600">Solicitar cita</button></form></div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
+}
+
+================
+File: frontend/src/components/GerenteDashboard.tsx
+================
+import { useEffect, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+import { AlertCircle, ClipboardList, Cpu, Package, Server } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../api/axios';
+
+interface HwStatus {
+  simulationMode: boolean;
+  ledCount: number;
+  gpioPin: number;
+}
+
+interface WorkOrder {
+  id: number;
+  number: string;
+  description: string;
+  status: string;
+  vehicle: { plate: string; make: string; model: string };
+}
+
+const activeStatuses = new Set(['PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO']);
+
+export default function GerenteDashboard() {
+  const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });
+  const [hwStatus, setHwStatus] = useState<HwStatus | null>(null);
+  const [orders, setOrders] = useState<WorkOrder[]>([]);
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const [boxes, parts, lowStock, workOrders] = await Promise.all([
+          api.get('/inventory/boxes'),
+          api.get('/inventory/parts'),
+          api.get('/inventory/parts/low-stock'),
+          api.get<WorkOrder[]>('/service/work-orders'),
+        ]);
+        setStats({
+          boxes: boxes.data.length,
+          parts: parts.data.length,
+          lowStock: lowStock.data.length,
+        });
+        setOrders(workOrders.data.filter((order) => activeStatuses.has(order.status)));
+      } catch (error) {
+        console.error('Error al cargar el dashboard del gerente', error);
+        toast.error('No se pudieron cargar las métricas.');
+      }
+    };
+    void loadData();
+
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
+    const socket: Socket = io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      extraHeaders: { 'ngrok-skip-browser-warning': '69420' },
+    });
+    socket.on('hw:status', (status: HwStatus) => setHwStatus(status));
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  const cards = [
+    { label: 'Total Cajas', value: stats.boxes, icon: Package, color: 'text-blue-400' },
+    { label: 'Tipos de Piezas', value: stats.parts, icon: Server, color: 'text-emerald-400' },
+    { label: 'Stock Bajo', value: stats.lowStock, icon: AlertCircle, color: 'text-rose-400' },
+  ];
+
+  return (
+    <section className="space-y-6">
+      <header>
+        <h2 className="text-2xl font-bold text-white">Panel del gerente</h2>
+        <p className="text-sm text-slate-400">Visión general de la operación de GearTrace.</p>
+      </header>
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        {cards.map(({ label, value, icon: Icon, color }) => (
+          <div key={label} className="flex items-center gap-4 rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+            <div className={`rounded-xl bg-slate-900 p-4 ${color}`}><Icon size={28} /></div>
+            <div><p className="text-sm text-slate-400">{label}</p><p className="text-3xl font-bold text-white">{value}</p></div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+          <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Estado general del hardware</h3>
+          {hwStatus ? (
+            <div className="space-y-3 text-sm">
+              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">Modo</span><span className={hwStatus.simulationMode ? 'text-amber-400' : 'text-emerald-400'}>{hwStatus.simulationMode ? 'Simulación' : 'GPIO real'}</span></p>
+              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">LEDs configurados</span><span className="text-white">{hwStatus.ledCount} WS2812B</span></p>
+              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">Pin GPIO</span><span className="text-white">{hwStatus.gpioPin}</span></p>
+            </div>
+          ) : <p className="text-slate-400">Conectando con el hardware...</p>}
+        </div>
+        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+          <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><ClipboardList className="text-brand-400" /> Órdenes activas</h3>
+          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{order.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle.plate} · {order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/MecanicoDashboard.tsx
+================
+import { useEffect, useState } from 'react';
+import { io, Socket } from 'socket.io-client';
+import { Cpu, Search, Wrench } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api from '../api/axios';
+import { useAuth } from '../contexts/AuthContext';
+
+interface Led { index: number; isActive: boolean; color?: string; partName?: string }
+interface HwStatus { simulationMode: boolean; ledCount: number; gpioPin: number }
+interface WorkOrder { id: number; number: string; description: string; status: string; mechanic?: { id: number }; vehicle: { plate: string; make: string; model: string } }
+interface Part { id: number; name: string; code: string; quantity: number }
+
+export default function MecanicoDashboard() {
+  const { user } = useAuth();
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [hwStatus, setHwStatus] = useState<HwStatus | null>(null);
+  const [leds, setLeds] = useState<Led[]>([]);
+  const [orders, setOrders] = useState<WorkOrder[]>([]);
+  const [query, setQuery] = useState('');
+  const [parts, setParts] = useState<Part[]>([]);
+
+  useEffect(() => {
+    const loadOrders = async () => {
+      try {
+        const response = await api.get<WorkOrder[]>('/service/work-orders');
+        setOrders(response.data.filter((order) => order.mechanic?.id === user?.id));
+      } catch (error) {
+        console.error('Error al cargar órdenes asignadas', error);
+        toast.error('No se pudieron cargar tus órdenes.');
+      }
+    };
+    void loadOrders();
+
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
+    const nextSocket = io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      extraHeaders: { 'ngrok-skip-browser-warning': '69420' },
+    });
+    setSocket(nextSocket);
+    nextSocket.on('hw:status', (status: HwStatus) => {
+      setHwStatus(status);
+      setLeds(Array.from({ length: status.ledCount }, (_, index) => ({ index, isActive: false })));
+    });
+    nextSocket.on('led:activated', (data: { ledIndex: number; partName: string; colorHex?: string }) => {
+      setLeds((current) => current.map((led) => led.index === data.ledIndex ? { ...led, isActive: true, partName: data.partName, color: data.colorHex || '#F97316' } : led));
+    });
+    nextSocket.on('led:off', (data: { ledIndex: number; manual?: boolean }) => {
+      if (data.manual) toast.success(`LED ${data.ledIndex} apagado.`);
+      setLeds((current) => current.map((led) => led.index === data.ledIndex ? { ...led, isActive: false, partName: undefined } : led));
+    });
+    setLeds(Array.from({ length: 5 }, (_, index) => ({ index, isActive: false })));
+    return () => {
+      nextSocket.disconnect();
+    };
+  }, [user?.id]);
+
+  const searchParts = async () => {
+    if (!query.trim()) return;
+    try {
+      setParts((await api.get<Part[]>(`/inventory/search/${encodeURIComponent(query.trim())}`)).data);
+    } catch (error) {
+      console.error('Error al buscar repuestos', error);
+      toast.error('No se pudieron buscar repuestos.');
+    }
+  };
+
+  const emitLedAction = (led: Led) => {
+    socket?.emit(led.isActive ? 'led:turnOff' : 'led:test', led.isActive ? { ledIndex: led.index } : { ledIndex: led.index, colorHex: '#38BDF8' });
+  };
+
+  return (
+    <section className="space-y-6">
+      <header><h2 className="text-2xl font-bold text-white">Panel del mecánico</h2><p className="text-sm text-slate-400">Operación diaria, órdenes asignadas y búsqueda de repuestos.</p></header>
+      <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Control WS2812B {hwStatus?.simulationMode && <span className="text-xs text-amber-400">(simulación)</span>}</h3><div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{leds.map((led) => <div key={led.index} className="text-center"><div className={`h-16 rounded-lg border ${led.isActive ? 'border-white' : 'border-slate-700 bg-slate-950'}`} style={led.isActive ? { backgroundColor: led.color, boxShadow: `0 0 20px ${led.color}` } : undefined} /><p className="mt-2 text-xs text-slate-400">LED {led.index}</p><button type="button" onClick={() => emitLedAction(led)} className="mt-2 rounded-lg bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-600">{led.isActive ? 'Apagar' : 'Test'}</button></div>)}</div></div>
+        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6"><h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-white"><Search className="text-brand-400" /> Buscar repuesto</h3><div className="flex gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchParts(); }} placeholder="Nombre o código" className="min-w-0 flex-1 rounded-xl border border-slate-600 bg-slate-900 px-3 py-2 text-white" /><button type="button" onClick={() => void searchParts()} className="rounded-xl bg-brand-500 px-3 text-white"><Search size={18} /></button></div><div className="mt-4 space-y-2">{parts.map((part) => <p key={part.id} className="rounded-lg bg-slate-900/70 p-3 text-sm text-slate-300">{part.name} <span className="text-slate-500">({part.code}) · stock {part.quantity}</span></p>)}</div></div>
+      </div>
+      <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Wrench className="text-brand-400" /> Mis órdenes asignadas</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes asignadas.</p> : <div className="grid gap-4 md:grid-cols-2">{orders.map((order) => <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p><span className="mt-3 inline-block rounded-full bg-brand-500/10 px-3 py-1 text-xs text-brand-400">{order.status.replace('_', ' ')}</span></article>)}</div>}</div>
+    </section>
+  );
+}
+
+================
+File: frontend/src/components/RoleProtectedRoute.tsx
+================
+import { ReactNode } from 'react';
+import { Navigate } from 'react-router-dom';
+import { Role, useAuth } from '../contexts/AuthContext';
+
+interface RoleProtectedRouteProps {
+  allowedRoles: Role[];
+  children: ReactNode;
+}
+
+export default function RoleProtectedRoute({
+  allowedRoles,
+  children,
+}: RoleProtectedRouteProps) {
+  const { user } = useAuth();
+
+  if (!user || !allowedRoles.includes(user.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <>{children}</>;
+}
 
 ================
 File: backend/prisma/migrations/20260930141834_init/migration.sql
@@ -237,173 +784,199 @@ ALTER TABLE "parts" ADD CONSTRAINT "parts_box_id_fkey" FOREIGN KEY ("box_id") RE
 ALTER TABLE "search_logs" ADD CONSTRAINT "search_logs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 ================
+File: backend/prisma/migrations/20261107210444_add_service_and_supply_models/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "WorkOrderStatus" AS ENUM ('PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA');
+
+-- CreateEnum
+CREATE TYPE "AppointmentStatus" AS ENUM ('AGENDADA', 'CONFIRMADA', 'COMPLETADA', 'CANCELADA');
+
+-- CreateEnum
+CREATE TYPE "PurchaseOrderStatus" AS ENUM ('PENDIENTE', 'RECIBIDA', 'CANCELADA');
+
+-- CreateTable
+CREATE TABLE "vehicles" (
+    "id" SERIAL NOT NULL,
+    "plate" VARCHAR(20) NOT NULL,
+    "make" VARCHAR(80) NOT NULL,
+    "model" VARCHAR(80) NOT NULL,
+    "year" INTEGER,
+    "vin" VARCHAR(17),
+    "color" VARCHAR(50),
+    "owner_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "vehicles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "work_orders" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "description" TEXT NOT NULL,
+    "diagnosis" TEXT,
+    "status" "WorkOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "estimated_cost" DECIMAL(10,2),
+    "final_cost" DECIMAL(10,2),
+    "vehicle_id" INTEGER NOT NULL,
+    "mechanic_id" INTEGER,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "started_at" TIMESTAMP(3),
+    "completed_at" TIMESTAMP(3),
+
+    CONSTRAINT "work_orders_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "appointments" (
+    "id" SERIAL NOT NULL,
+    "scheduled_at" TIMESTAMP(3) NOT NULL,
+    "reason" VARCHAR(255),
+    "status" "AppointmentStatus" NOT NULL DEFAULT 'AGENDADA',
+    "vehicle_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "appointments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "suppliers" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "tax_id" VARCHAR(50),
+    "contact_name" VARCHAR(150),
+    "email" VARCHAR(255),
+    "phone" VARCHAR(50),
+    "address" VARCHAR(255),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "suppliers_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "purchase_orders" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "status" "PurchaseOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "ordered_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "received_at" TIMESTAMP(3),
+    "supplier_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "purchase_orders_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "purchase_order_items" (
+    "id" SERIAL NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "unit_price" DECIMAL(10,2),
+    "purchase_order_id" INTEGER NOT NULL,
+    "part_id" INTEGER NOT NULL,
+
+    CONSTRAINT "purchase_order_items_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "vehicles_plate_key" ON "vehicles"("plate");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "vehicles_vin_key" ON "vehicles"("vin");
+
+-- CreateIndex
+CREATE INDEX "vehicles_owner_id_idx" ON "vehicles"("owner_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_orders_number_key" ON "work_orders"("number");
+
+-- CreateIndex
+CREATE INDEX "work_orders_vehicle_id_idx" ON "work_orders"("vehicle_id");
+
+-- CreateIndex
+CREATE INDEX "work_orders_mechanic_id_idx" ON "work_orders"("mechanic_id");
+
+-- CreateIndex
+CREATE INDEX "work_orders_status_idx" ON "work_orders"("status");
+
+-- CreateIndex
+CREATE INDEX "appointments_vehicle_id_scheduled_at_idx" ON "appointments"("vehicle_id", "scheduled_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "suppliers_tax_id_key" ON "suppliers"("tax_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "purchase_orders_number_key" ON "purchase_orders"("number");
+
+-- CreateIndex
+CREATE INDEX "purchase_orders_supplier_id_idx" ON "purchase_orders"("supplier_id");
+
+-- CreateIndex
+CREATE INDEX "purchase_orders_status_idx" ON "purchase_orders"("status");
+
+-- CreateIndex
+CREATE INDEX "purchase_order_items_part_id_idx" ON "purchase_order_items"("part_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "purchase_order_items_purchase_order_id_part_id_key" ON "purchase_order_items"("purchase_order_id", "part_id");
+
+-- AddForeignKey
+ALTER TABLE "vehicles" ADD CONSTRAINT "vehicles_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_mechanic_id_fkey" FOREIGN KEY ("mechanic_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "appointments" ADD CONSTRAINT "appointments_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_orders" ADD CONSTRAINT "purchase_orders_supplier_id_fkey" FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/20261107210844_add_work_order_parts/migration.sql
+================
+-- CreateTable
+CREATE TABLE "work_order_items" (
+    "id" SERIAL NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "work_order_id" INTEGER NOT NULL,
+    "part_id" INTEGER NOT NULL,
+
+    CONSTRAINT "work_order_items_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE INDEX "work_order_items_part_id_idx" ON "work_order_items"("part_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_order_items_work_order_id_part_id_key" ON "work_order_items"("work_order_id", "part_id");
+
+-- AddForeignKey
+ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
 File: backend/prisma/migrations/migration_lock.toml
 ================
 # Please do not edit this file manually
 # It should be added in your version-control system (i.e. Git)
 provider = "postgresql"
-
-================
-File: backend/prisma/schema.prisma
-================
-// ============================================================
-// GearTrace - Prisma Schema
-// Base de datos: PostgreSQL 15
-// ORM: Prisma
-// ============================================================
-
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-// ────────────────────────────────────────────────────────────
-// Role: Roles del sistema
-//
-//  GERENTE  → Acceso total: inventario, LEDs, usuarios, reportes
-//  MECANICO → Acceso operativo: inventario + control de LEDs
-//  CLIENTE  → Acceso de solo lectura: consulta de piezas
-// ────────────────────────────────────────────────────────────
-enum Role {
-  GERENTE
-  MECANICO
-  CLIENTE
-}
-
-// ────────────────────────────────────────────────────────────
-// User: Usuarios del sistema GearTrace
-// ────────────────────────────────────────────────────────────
-model User {
-  id           Int      @id @default(autoincrement())
-  name         String   @db.VarChar(150)
-  email        String   @unique @db.VarChar(255)
-
-  /// Contraseña hasheada con bcrypt (nunca texto plano)
-  password     String   @db.VarChar(255)
-
-  role         Role     @default(CLIENTE)
-  isActive     Boolean  @default(true) @map("is_active")
-
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  /// Historial de búsquedas realizadas por este usuario
-  searchLogs   SearchLog[]
-
-  @@map("users")
-}
-
-// ────────────────────────────────────────────────────────────
-// Box: Caja física en el almacén
-//
-//  - ledIndex: Índice del LED en la tira WS2812B (0-4).
-//              Cuando Alexa localiza una pieza, este índice
-//              determina qué LED se enciende físicamente.
-//  - location: Referencia textual adicional (ej: "Estante A, Nivel 2")
-// ────────────────────────────────────────────────────────────
-model Box {
-  id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(100)
-  description String?  @db.VarChar(255)
-
-  /// Índice del LED en la tira WS2812B (0 a 4, inclusive)
-  /// Debe ser único: cada caja tiene su propio LED
-  ledIndex    Int      @unique @map("led_index")
-
-  location    String?  @db.VarChar(150)
-  colorHex    String   @default("#FF6600") @map("color_hex") @db.VarChar(7)
-
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  // Relación: Una caja contiene muchas piezas
-  parts       Part[]
-
-  @@map("boxes")
-}
-
-// ────────────────────────────────────────────────────────────
-// Part: Pieza mecánica almacenada en una caja
-//
-//  - code:     Código único de referencia de la pieza
-//  - quantity: Stock actual de unidades en la caja
-//  - photoUrl: URL de imagen de la pieza (local o CDN)
-//  - keywords: Array de alias/sinónimos para búsqueda por voz
-//              (Alexa puede decir "filtro de aceite" o "filtro")
-// ────────────────────────────────────────────────────────────
-model Part {
-  id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(150)
-
-  /// Código de catálogo único (ej: "FLT-OIL-001")
-  code        String   @unique @db.VarChar(50)
-
-  /// Stock actual de unidades
-  quantity    Int      @default(0)
-
-  /// Foto de la pieza (puede ser null si no tiene imagen aún)
-  photoUrl    String?  @map("photo_url") @db.VarChar(500)
-
-  /// Descripción técnica de la pieza
-  description String?  @db.Text
-
-  /// Palabras clave para búsqueda por voz con Alexa
-  /// Se almacena como array de strings en PostgreSQL
-  keywords    String[] @default([])
-
-  /// Stock mínimo antes de alertar reabastecimiento
-  minStock    Int      @default(1) @map("min_stock")
-
-  /// Precio unitario de referencia (en la moneda local)
-  unitPrice   Decimal? @map("unit_price") @db.Decimal(10, 2)
-
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  // Relación: Una pieza pertenece a una sola caja
-  boxId       Int      @map("box_id")
-  box         Box      @relation(fields: [boxId], references: [id], onDelete: Restrict)
-
-  @@index([name])
-  @@index([boxId])
-  @@map("parts")
-}
-
-// ────────────────────────────────────────────────────────────
-// SearchLog: Historial de búsquedas por voz (Alexa)
-//
-//  Registra cada vez que Alexa busca una pieza.
-//  Útil para analítica y depuración del Webhook.
-// ────────────────────────────────────────────────────────────
-model SearchLog {
-  id          Int      @id @default(autoincrement())
-
-  /// El texto que Alexa recibió del usuario
-  query       String   @db.VarChar(255)
-
-  /// La pieza encontrada (null si no se encontró)
-  partId      Int?     @map("part_id")
-
-  /// ¿Se encontró la pieza?
-  found       Boolean  @default(false)
-
-  /// Respuesta que se devolvió a Alexa (para auditoría)
-  alexaResponse String? @map("alexa_response") @db.Text
-
-  /// Usuario que realizó la búsqueda (null si fue Alexa directo)
-  userId      Int?     @map("user_id")
-  user        User?    @relation(fields: [userId], references: [id])
-
-  createdAt   DateTime @default(now()) @map("created_at")
-
-  @@index([query])
-  @@index([userId])
-  @@map("search_logs")
-}
 
 ================
 File: backend/prisma/seed.sql
@@ -635,6 +1208,37 @@ export class RegisterDto {
 }
 
 ================
+File: backend/src/auth/dto/update-user.dto.ts
+================
+import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Role } from '@prisma/client';
+
+export class UpdateUserDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  name?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password?: string;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+================
 File: backend/src/auth/guards/jwt-auth.guard.ts
 ================
 import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
@@ -794,107 +1398,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 }
 
 ================
-File: backend/src/auth/auth.controller.ts
-================
-import {
-  Controller,
-  Post,
-  Get,
-  Body,
-  Param,
-  Patch,
-  ParseIntPipe,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
-} from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { RolesGuard } from './guards/roles.guard';
-import { Roles, CurrentUser } from './decorators/auth.decorators';
-import { Role } from '@prisma/client';
-import { AuthenticatedUser } from './auth.types';
-
-@Controller('auth')
-export class AuthController {
-  constructor(private readonly authService: AuthService) {}
-
-  // ── Rutas públicas (sin autenticación) ────────────────────
-
-  /** POST /api/auth/login */
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
-  }
-
-  /**
-   * POST /api/auth/register
-   * Registro público: solo crea usuarios con rol CLIENTE.
-   * Para crear MECANICO/GERENTE usar el endpoint de admin.
-   */
-  @Post('register')
-  @HttpCode(HttpStatus.CREATED)
-  register(@Body() dto: RegisterDto) {
-    // Forzar CLIENTE en registro público
-    return this.authService.register({ ...dto, role: Role.CLIENTE });
-  }
-
-  // ── Rutas autenticadas ─────────────────────────────────────
-
-  /** GET /api/auth/me → Perfil del usuario logueado */
-  @Get('me')
-  @UseGuards(JwtAuthGuard)
-  getProfile(@CurrentUser() user: AuthenticatedUser) {
-    return { user };
-  }
-
-  // ── Rutas exclusivas del GERENTE ──────────────────────────
-
-  /** GET /api/auth/users → Lista todos los usuarios */
-  @Get('users')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.GERENTE)
-  findAllUsers() {
-    return this.authService.findAllUsers();
-  }
-
-  /**
-   * POST /api/auth/admin/create → El gerente crea usuarios con cualquier rol
-   */
-  @Post('admin/create')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.GERENTE)
-  @HttpCode(HttpStatus.CREATED)
-  adminCreateUser(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
-  }
-
-  /** PATCH /api/auth/users/:id/role → Cambiar rol de un usuario */
-  @Patch('users/:id/role')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.GERENTE)
-  changeRole(
-    @Param('id', ParseIntPipe) id: number,
-    @Body('role') role: Role,
-  ) {
-    return this.authService.changeUserRole(id, role);
-  }
-
-  /** PATCH /api/auth/users/:id/toggle → Activar/desactivar usuario */
-  @Patch('users/:id/toggle')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.GERENTE)
-  toggleActive(
-    @Param('id', ParseIntPipe) id: number,
-    @Body('isActive') isActive: boolean,
-  ) {
-    return this.authService.toggleUserActive(id, isActive);
-  }
-}
-
-================
 File: backend/src/auth/auth.module.ts
 ================
 import { Module } from '@nestjs/common';
@@ -955,6 +1458,142 @@ export interface AuthenticatedUser {
   email: string;
   role: Role;
   name: string;
+}
+
+================
+File: backend/src/client/dto/create-appointment.dto.ts
+================
+import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+
+export class CreateAppointmentDto {
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+}
+
+================
+File: backend/src/client/client.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { ClientService } from './client.service';
+
+@Controller('client')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.CLIENTE)
+export class ClientController {
+  constructor(private readonly clientService: ClientService) {}
+
+  @Get('vehicles')
+  findMyVehicles(@CurrentUser() user: AuthenticatedUser) {
+    return this.clientService.findMyVehicles(user.id);
+  }
+
+  @Post('appointments')
+  @HttpCode(HttpStatus.CREATED)
+  createAppointment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateAppointmentDto,
+  ) {
+    return this.clientService.createAppointment(user.id, dto);
+  }
+
+  @Get('work-orders')
+  findMyWorkOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.clientService.findMyWorkOrders(user.id);
+  }
+}
+
+================
+File: backend/src/client/client.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ClientController } from './client.controller';
+import { ClientService } from './client.service';
+
+@Module({
+  controllers: [ClientController],
+  providers: [ClientService],
+})
+export class ClientModule {}
+
+================
+File: backend/src/client/client.service.ts
+================
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateAppointmentDto } from './dto/create-appointment.dto';
+
+@Injectable()
+export class ClientService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findMyVehicles(ownerId: number) {
+    return this.prisma.vehicle.findMany({
+      where: { ownerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createAppointment(ownerId: number, dto: CreateAppointmentDto) {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id: dto.vehicleId, ownerId },
+    });
+    if (!vehicle) {
+      throw new NotFoundException('El vehículo no pertenece al cliente autenticado');
+    }
+
+    const scheduledAt = new Date(dto.scheduledAt);
+    if (scheduledAt <= new Date()) {
+      throw new BadRequestException('La cita debe agendarse para una fecha futura');
+    }
+
+    return this.prisma.appointment.create({
+      data: {
+        scheduledAt,
+        reason: dto.reason,
+        vehicleId: dto.vehicleId,
+      },
+      include: { vehicle: true },
+    });
+  }
+
+  findMyWorkOrders(ownerId: number) {
+    return this.prisma.workOrder.findMany({
+      where: { vehicle: { ownerId } },
+      include: {
+        vehicle: true,
+        mechanic: { select: { id: true, name: true, email: true } },
+        parts: { include: { part: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 }
 
 ================
@@ -1195,6 +1834,742 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleDestroy(): Promise<void> {
     await this.$disconnect();
     this.logger.log('🔌 Conexión a PostgreSQL cerrada');
+  }
+}
+
+================
+File: backend/src/service/dto/vehicle.dto.ts
+================
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+
+export class CreateVehicleDto {
+  @IsString()
+  @MaxLength(20)
+  plate: string;
+
+  @IsString()
+  @MaxLength(80)
+  make: string;
+
+  @IsString()
+  @MaxLength(80)
+  model: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1886)
+  @Max(2100)
+  year?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(17)
+  vin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  color?: string;
+
+  @IsInt()
+  @Min(1)
+  ownerId: number;
+}
+
+export class UpdateVehicleDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  plate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  make?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  model?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1886)
+  @Max(2100)
+  year?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(17)
+  vin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  color?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ownerId?: number;
+}
+
+================
+File: backend/src/service/dto/work-order.dto.ts
+================
+import { WorkOrderStatus } from '@prisma/client';
+import {
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class WorkOrderPartDto {
+  @IsInt()
+  @Min(1)
+  partId: number;
+
+  @IsInt()
+  @Min(1)
+  quantity: number;
+}
+
+export class CreateWorkOrderDto {
+  @IsString()
+  @MaxLength(30)
+  number: string;
+
+  @IsString()
+  description: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  estimatedCost?: number;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  mechanicId?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkOrderPartDto)
+  parts?: WorkOrderPartDto[];
+}
+
+export class UpdateWorkOrderStatusDto {
+  @IsEnum(WorkOrderStatus)
+  status: WorkOrderStatus;
+}
+
+export class DiagnoseWorkOrderDto {
+  @IsString()
+  diagnosis: string;
+}
+
+export class CloseWorkOrderDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  finalCost?: number;
+}
+
+================
+File: backend/src/service/service.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import {
+  CloseWorkOrderDto,
+  CreateWorkOrderDto,
+  DiagnoseWorkOrderDto,
+  UpdateWorkOrderStatusDto,
+} from './dto/work-order.dto';
+import { ServiceService } from './service.service';
+
+@Controller('service')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.MECANICO, Role.GERENTE)
+export class ServiceController {
+  constructor(private readonly serviceService: ServiceService) {}
+
+  @Get('vehicles')
+  findVehicles() {
+    return this.serviceService.findVehicles();
+  }
+
+  @Get('vehicles/:id')
+  findVehicle(@Param('id', ParseIntPipe) id: number) {
+    return this.serviceService.findVehicle(id);
+  }
+
+  @Post('vehicles')
+  @HttpCode(HttpStatus.CREATED)
+  createVehicle(@Body() dto: CreateVehicleDto) {
+    return this.serviceService.createVehicle(dto);
+  }
+
+  @Patch('vehicles/:id')
+  updateVehicle(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateVehicleDto,
+  ) {
+    return this.serviceService.updateVehicle(id, dto);
+  }
+
+  @Delete('vehicles/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeVehicle(@Param('id', ParseIntPipe) id: number) {
+    return this.serviceService.removeVehicle(id);
+  }
+
+  @Get('work-orders')
+  findWorkOrders() {
+    return this.serviceService.findWorkOrders();
+  }
+
+  @Post('work-orders')
+  @HttpCode(HttpStatus.CREATED)
+  createWorkOrder(@Body() dto: CreateWorkOrderDto) {
+    return this.serviceService.createWorkOrder(dto);
+  }
+
+  @Patch('work-orders/:id/status')
+  updateWorkOrderStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateWorkOrderStatusDto,
+  ) {
+    return this.serviceService.updateWorkOrderStatus(id, dto.status);
+  }
+
+  @Patch('work-orders/:id/diagnosis')
+  diagnoseWorkOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DiagnoseWorkOrderDto,
+  ) {
+    return this.serviceService.diagnoseWorkOrder(id, dto.diagnosis);
+  }
+
+  @Patch('work-orders/:id/close')
+  closeWorkOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CloseWorkOrderDto,
+  ) {
+    return this.serviceService.closeWorkOrder(id, dto.finalCost);
+  }
+}
+
+================
+File: backend/src/service/service.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ServiceController } from './service.controller';
+import { ServiceService } from './service.service';
+
+@Module({
+  controllers: [ServiceController],
+  providers: [ServiceService],
+})
+export class ServiceModule {}
+
+================
+File: backend/src/service/service.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, WorkOrderStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import { CreateWorkOrderDto } from './dto/work-order.dto';
+
+@Injectable()
+export class ServiceService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findVehicles() {
+    return this.prisma.vehicle.findMany({
+      include: { owner: { select: { id: true, name: true, email: true } } },
+      orderBy: { plate: 'asc' },
+    });
+  }
+
+  async findVehicle(id: number) {
+    const vehicle = await this.prisma.vehicle.findUnique({
+      where: { id },
+      include: { owner: true, workOrders: true, appointments: true },
+    });
+    if (!vehicle) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
+    return vehicle;
+  }
+
+  async createVehicle(dto: CreateVehicleDto) {
+    await this.ensureUser(dto.ownerId);
+    try {
+      return await this.prisma.vehicle.create({ data: dto });
+    } catch (error) {
+      this.throwUniqueVehicleError(error);
+      throw error;
+    }
+  }
+
+  async updateVehicle(id: number, dto: UpdateVehicleDto) {
+    await this.findVehicle(id);
+    if (dto.ownerId !== undefined) await this.ensureUser(dto.ownerId);
+    try {
+      return await this.prisma.vehicle.update({ where: { id }, data: dto });
+    } catch (error) {
+      this.throwUniqueVehicleError(error);
+      throw error;
+    }
+  }
+
+  async removeVehicle(id: number) {
+    await this.findVehicle(id);
+    try {
+      await this.prisma.vehicle.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw new ConflictException('No se puede eliminar un vehículo con órdenes o citas asociadas');
+      }
+      throw error;
+    }
+  }
+
+  findWorkOrders() {
+    return this.prisma.workOrder.findMany({
+      include: {
+        vehicle: true,
+        mechanic: { select: { id: true, name: true, email: true } },
+        parts: { include: { part: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createWorkOrder(dto: CreateWorkOrderDto) {
+    await this.findVehicle(dto.vehicleId);
+    if (dto.mechanicId !== undefined) await this.ensureMechanic(dto.mechanicId);
+    if (dto.parts) await this.ensureParts(dto.parts);
+
+    try {
+      return await this.prisma.workOrder.create({
+        data: {
+          number: dto.number,
+          description: dto.description,
+          estimatedCost: dto.estimatedCost,
+          vehicleId: dto.vehicleId,
+          mechanicId: dto.mechanicId,
+          parts: dto.parts
+            ? { create: dto.parts.map((part) => ({ partId: part.partId, quantity: part.quantity })) }
+            : undefined,
+        },
+        include: { vehicle: true, parts: { include: { part: true } } },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Ya existe una orden con el número "${dto.number}"`);
+      }
+      throw error;
+    }
+  }
+
+  async updateWorkOrderStatus(id: number, status: WorkOrderStatus) {
+    const order = await this.findWorkOrder(id);
+    if (order.status === WorkOrderStatus.CERRADA) {
+      throw new ConflictException('Una orden cerrada no puede cambiar de estado');
+    }
+    return this.prisma.workOrder.update({
+      where: { id },
+      data: {
+        status,
+        startedAt: status === WorkOrderStatus.EN_PROGRESO ? new Date() : undefined,
+      },
+      include: { vehicle: true, parts: { include: { part: true } } },
+    });
+  }
+
+  async diagnoseWorkOrder(id: number, diagnosis: string) {
+    await this.findWorkOrder(id);
+    return this.prisma.workOrder.update({
+      where: { id },
+      data: { diagnosis, status: WorkOrderStatus.EN_DIAGNOSTICO },
+      include: { vehicle: true, parts: { include: { part: true } } },
+    });
+  }
+
+  async closeWorkOrder(id: number, finalCost?: number) {
+    return this.prisma.$transaction(async (transaction) => {
+      const order = await transaction.workOrder.findUnique({
+        where: { id },
+        include: { parts: true },
+      });
+      if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
+      if (order.status === WorkOrderStatus.CERRADA) {
+        throw new ConflictException('La orden de trabajo ya está cerrada');
+      }
+
+      for (const item of order.parts) {
+        const updated = await transaction.part.updateMany({
+          where: { id: item.partId, quantity: { gte: item.quantity } },
+          data: { quantity: { decrement: item.quantity } },
+        });
+        if (updated.count !== 1) {
+          throw new ConflictException(`Stock insuficiente para el repuesto ${item.partId}`);
+        }
+      }
+
+      return transaction.workOrder.update({
+        where: { id },
+        data: {
+          status: WorkOrderStatus.CERRADA,
+          finalCost,
+          completedAt: new Date(),
+        },
+        include: { vehicle: true, parts: { include: { part: true } } },
+      });
+    });
+  }
+
+  private async findWorkOrder(id: number) {
+    const order = await this.prisma.workOrder.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
+    return order;
+  }
+
+  private async ensureUser(id: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+  }
+
+  private async ensureMechanic(id: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException(`Mecánico con id ${id} no encontrado`);
+    if (user.role !== 'MECANICO' && user.role !== 'GERENTE') {
+      throw new ConflictException('El usuario asignado no tiene rol de mecánico');
+    }
+  }
+
+  private async ensureParts(parts: { partId: number; quantity: number }[]) {
+    const ids = [...new Set(parts.map((part) => part.partId))];
+    const count = await this.prisma.part.count({ where: { id: { in: ids } } });
+    if (count !== ids.length) throw new NotFoundException('Una o más piezas no existen');
+  }
+
+  private throwUniqueVehicleError(error: unknown) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new ConflictException('La placa o VIN ya está registrado');
+    }
+  }
+}
+
+================
+File: backend/src/supplier/dto/purchase-order.dto.ts
+================
+import { IsArray, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class PurchaseOrderItemDto {
+  @IsInt()
+  @Min(1)
+  partId: number;
+
+  @IsInt()
+  @Min(1)
+  quantity: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  unitPrice?: number;
+}
+
+export class CreatePurchaseOrderDto {
+  @IsString()
+  @MaxLength(30)
+  number: string;
+
+  @IsInt()
+  @Min(1)
+  supplierId: number;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PurchaseOrderItemDto)
+  items: PurchaseOrderItemDto[];
+}
+
+export class CreateSupplierDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  taxId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  contactName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address?: string;
+}
+
+================
+File: backend/src/supplier/supplier.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import {
+  CreatePurchaseOrderDto,
+  CreateSupplierDto,
+} from './dto/purchase-order.dto';
+import { SupplierService } from './supplier.service';
+
+@Controller('suppliers')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class SupplierController {
+  constructor(private readonly supplierService: SupplierService) {}
+
+  @Get()
+  findSuppliers() {
+    return this.supplierService.findSuppliers();
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  createSupplier(@Body() dto: CreateSupplierDto) {
+    return this.supplierService.createSupplier(dto);
+  }
+
+  @Get('low-stock')
+  findLowStockParts() {
+    return this.supplierService.findLowStockParts();
+  }
+
+  @Get('purchase-orders')
+  findPurchaseOrders() {
+    return this.supplierService.findPurchaseOrders();
+  }
+
+  @Post('purchase-orders')
+  @HttpCode(HttpStatus.CREATED)
+  createPurchaseOrder(@Body() dto: CreatePurchaseOrderDto) {
+    return this.supplierService.createPurchaseOrder(dto);
+  }
+
+  @Post('purchase-orders/:id/receive')
+  receivePurchaseOrder(@Param('id', ParseIntPipe) id: number) {
+    return this.supplierService.receivePurchaseOrder(id);
+  }
+}
+
+================
+File: backend/src/supplier/supplier.module.ts
+================
+import { Module } from '@nestjs/common';
+import { SupplierController } from './supplier.controller';
+import { SupplierService } from './supplier.service';
+
+@Module({
+  controllers: [SupplierController],
+  providers: [SupplierService],
+})
+export class SupplierModule {}
+
+================
+File: backend/src/supplier/supplier.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, PurchaseOrderStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  CreatePurchaseOrderDto,
+  CreateSupplierDto,
+} from './dto/purchase-order.dto';
+
+@Injectable()
+export class SupplierService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findSuppliers() {
+    return this.prisma.supplier.findMany({
+      include: { _count: { select: { purchaseOrders: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createSupplier(dto: CreateSupplierDto) {
+    try {
+      return await this.prisma.supplier.create({ data: dto });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('El identificador fiscal ya está registrado');
+      }
+      throw error;
+    }
+  }
+
+  async findLowStockParts() {
+    const lowStock = await this.prisma.$queryRaw<
+      Array<{ id: number }>
+    >`SELECT id FROM parts WHERE quantity <= min_stock ORDER BY quantity ASC`;
+    if (lowStock.length === 0) return [];
+
+    return this.prisma.part.findMany({
+      where: { id: { in: lowStock.map((part) => part.id) } },
+      include: { box: true },
+      orderBy: { quantity: 'asc' },
+    });
+  }
+
+  findPurchaseOrders() {
+    return this.prisma.purchaseOrder.findMany({
+      include: { supplier: true, items: { include: { part: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createPurchaseOrder(dto: CreatePurchaseOrderDto) {
+    if (dto.items.length === 0) {
+      throw new ConflictException('El pedido debe contener al menos una pieza');
+    }
+    await this.ensureSupplier(dto.supplierId);
+    const partIds = [...new Set(dto.items.map((item) => item.partId))];
+    const parts = await this.prisma.part.findMany({
+      where: { id: { in: partIds } },
+      select: { id: true, quantity: true, minStock: true },
+    });
+    if (parts.length !== partIds.length) {
+      throw new NotFoundException('Una o más piezas no existen');
+    }
+    const partsById = new Map(parts.map((part) => [part.id, part]));
+    const invalidPart = dto.items.find((item) => {
+      const part = partsById.get(item.partId);
+      return part && part.quantity > part.minStock;
+    });
+    if (invalidPart) {
+      throw new ConflictException(
+        `La pieza ${invalidPart.partId} no está bajo su stock mínimo`,
+      );
+    }
+
+    try {
+      return await this.prisma.purchaseOrder.create({
+        data: {
+          number: dto.number,
+          supplierId: dto.supplierId,
+          items: {
+            create: dto.items.map((item) => ({
+              partId: item.partId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+            })),
+          },
+        },
+        include: { supplier: true, items: { include: { part: true } } },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Ya existe un pedido con el número "${dto.number}"`);
+      }
+      throw error;
+    }
+  }
+
+  async receivePurchaseOrder(id: number) {
+    return this.prisma.$transaction(async (transaction) => {
+      const order = await transaction.purchaseOrder.findUnique({
+        where: { id },
+        include: { items: true },
+      });
+      if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
+      if (order.status !== PurchaseOrderStatus.PENDIENTE) {
+        throw new ConflictException('Solo se pueden recibir pedidos pendientes');
+      }
+
+      for (const item of order.items) {
+        await transaction.part.update({
+          where: { id: item.partId },
+          data: { quantity: { increment: item.quantity } },
+        });
+      }
+
+      return transaction.purchaseOrder.update({
+        where: { id },
+        data: { status: PurchaseOrderStatus.RECIBIDA, receivedAt: new Date() },
+        include: { supplier: true, items: { include: { part: true } } },
+      });
+    });
+  }
+
+  private async ensureSupplier(id: number) {
+    const supplier = await this.prisma.supplier.findUnique({ where: { id } });
+    if (!supplier) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
   }
 }
 
@@ -2620,128 +3995,312 @@ File: package.json
 }
 
 ================
-File: backend/prisma/seed.ts
+File: backend/prisma/schema.prisma
 ================
-import { PrismaClient, Role } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
+// ============================================================
+// GearTrace - Prisma Schema
+// Base de datos: PostgreSQL 15
+// ORM: Prisma
+// ============================================================
 
-const prisma = new PrismaClient();
-const BCRYPT_ROUNDS = 10;
-
-async function main() {
-  console.log('🌱 Iniciando seedeo de la base de datos...');
-
-  // 1. Limpiar datos existentes (opcional, cuidado en producción)
-  // await prisma.searchLog.deleteMany();
-  // await prisma.part.deleteMany();
-  // await prisma.box.deleteMany();
-  // await prisma.user.deleteMany();
-
-  // 2. Crear Usuarios con sus roles (password: password123)
-  const defaultPassword = await bcrypt.hash('password123', BCRYPT_ROUNDS);
-
-  console.log('👤 Creando usuarios...');
-  
-  const gerente = await prisma.user.upsert({
-    where: { email: 'gerente@geartrace.com' },
-    update: { password: defaultPassword },
-    create: {
-      name: 'Gerente Principal',
-      email: 'gerente@geartrace.com',
-      password: defaultPassword,
-      role: Role.GERENTE,
-    },
-  });
-
-  const mecanico = await prisma.user.upsert({
-    where: { email: 'mecanico@geartrace.com' },
-    update: { password: defaultPassword },
-    create: {
-      name: 'Mecánico Jefe',
-      email: 'mecanico@geartrace.com',
-      password: defaultPassword,
-      role: Role.MECANICO,
-    },
-  });
-
-  const cliente = await prisma.user.upsert({
-    where: { email: 'cliente@geartrace.com' },
-    update: { password: defaultPassword },
-    create: {
-      name: 'Cliente Demo',
-      email: 'cliente@geartrace.com',
-      password: defaultPassword,
-      role: Role.CLIENTE,
-    },
-  });
-
-  console.log(`✅ Usuarios creados: ${gerente.email}, ${mecanico.email}, ${cliente.email}`);
-
-  // 3. Crear Cajas (solo si no existen)
-  console.log('📦 Creando cajas físicas...');
-  
-  const cajasData = [
-    { name: 'Caja A - Filtros', ledIndex: 0, location: 'Estante 1, Nivel A', colorHex: '#FF4500' },
-    { name: 'Caja B - Frenos', ledIndex: 1, location: 'Estante 1, Nivel B', colorHex: '#1E90FF' },
-    { name: 'Caja C - Correas', ledIndex: 2, location: 'Estante 2, Nivel A', colorHex: '#32CD32' },
-    { name: 'Caja D - Eléctrico', ledIndex: 3, location: 'Estante 2, Nivel B', colorHex: '#FFD700' },
-    { name: 'Caja E - Lubricantes', ledIndex: 4, location: 'Estante 3, Nivel A', colorHex: '#9400D3' },
-  ];
-
-  for (const c of cajasData) {
-    await prisma.box.upsert({
-      where: { ledIndex: c.ledIndex },
-      update: {},
-      create: c,
-    });
-  }
-
-  // 4. Crear Piezas
-  console.log('⚙️ Creando inventario de piezas...');
-  
-  // Buscar caja 1 y 2 para relacionar
-  const cajaA = await prisma.box.findUnique({ where: { ledIndex: 0 } });
-  const cajaB = await prisma.box.findUnique({ where: { ledIndex: 1 } });
-
-  if (cajaA && cajaB) {
-    await prisma.part.upsert({
-      where: { code: 'FLT-OIL-001' },
-      update: {},
-      create: {
-        name: 'Filtro de aceite Toyota',
-        code: 'FLT-OIL-001',
-        quantity: 15,
-        minStock: 3,
-        boxId: cajaA.id,
-        keywords: ['filtro aceite', 'filtro toyota', 'filtro'],
-      },
-    });
-
-    await prisma.part.upsert({
-      where: { code: 'BRK-PAD-001' },
-      update: {},
-      create: {
-        name: 'Pastillas de freno Brembo',
-        code: 'BRK-PAD-001',
-        quantity: 6,
-        minStock: 2,
-        boxId: cajaB.id,
-        keywords: ['pastillas', 'frenos', 'pastillas freno'],
-      },
-    });
-  }
-
-  console.log('🎉 ¡Seed finalizado exitosamente!');
+generator client {
+  provider = "prisma-client-js"
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────
+// Role: Roles del sistema
+//
+//  GERENTE  → Acceso total: inventario, LEDs, usuarios, reportes
+//  MECANICO → Acceso operativo: inventario + control de LEDs
+//  CLIENTE  → Acceso de solo lectura: consulta de piezas
+// ────────────────────────────────────────────────────────────
+enum Role {
+  GERENTE
+  MECANICO
+  CLIENTE
+}
+
+enum WorkOrderStatus {
+  PENDIENTE
+  EN_DIAGNOSTICO
+  EN_PROGRESO
+  CERRADA
+}
+
+enum AppointmentStatus {
+  AGENDADA
+  CONFIRMADA
+  COMPLETADA
+  CANCELADA
+}
+
+enum PurchaseOrderStatus {
+  PENDIENTE
+  RECIBIDA
+  CANCELADA
+}
+
+// ────────────────────────────────────────────────────────────
+// User: Usuarios del sistema GearTrace
+// ────────────────────────────────────────────────────────────
+model User {
+  id    Int    @id @default(autoincrement())
+  name  String @db.VarChar(150)
+  email String @unique @db.VarChar(255)
+
+  /// Contraseña hasheada con bcrypt (nunca texto plano)
+  password String @db.VarChar(255)
+
+  role     Role    @default(CLIENTE)
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  /// Historial de búsquedas realizadas por este usuario
+  searchLogs SearchLog[]
+  vehicles   Vehicle[]
+  workOrders WorkOrder[] @relation("AssignedMechanic")
+
+  @@map("users")
+}
+
+// ────────────────────────────────────────────────────────────
+// Box: Caja física en el almacén
+//
+//  - ledIndex: Índice del LED en la tira WS2812B (0-4).
+//              Cuando Alexa localiza una pieza, este índice
+//              determina qué LED se enciende físicamente.
+//  - location: Referencia textual adicional (ej: "Estante A, Nivel 2")
+// ────────────────────────────────────────────────────────────
+model Box {
+  id          Int     @id @default(autoincrement())
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
+
+  /// Índice del LED en la tira WS2812B (0 a 4, inclusive)
+  /// Debe ser único: cada caja tiene su propio LED
+  ledIndex Int @unique @map("led_index")
+
+  location String? @db.VarChar(150)
+  colorHex String  @default("#FF6600") @map("color_hex") @db.VarChar(7)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relación: Una caja contiene muchas piezas
+  parts Part[]
+
+  @@map("boxes")
+}
+
+// ────────────────────────────────────────────────────────────
+// Part: Pieza mecánica almacenada en una caja
+//
+//  - code:     Código único de referencia de la pieza
+//  - quantity: Stock actual de unidades en la caja
+//  - photoUrl: URL de imagen de la pieza (local o CDN)
+//  - keywords: Array de alias/sinónimos para búsqueda por voz
+//              (Alexa puede decir "filtro de aceite" o "filtro")
+// ────────────────────────────────────────────────────────────
+model Part {
+  id   Int    @id @default(autoincrement())
+  name String @db.VarChar(150)
+
+  /// Código de catálogo único (ej: "FLT-OIL-001")
+  code String @unique @db.VarChar(50)
+
+  /// Stock actual de unidades
+  quantity Int @default(0)
+
+  /// Foto de la pieza (puede ser null si no tiene imagen aún)
+  photoUrl String? @map("photo_url") @db.VarChar(500)
+
+  /// Descripción técnica de la pieza
+  description String? @db.Text
+
+  /// Palabras clave para búsqueda por voz con Alexa
+  /// Se almacena como array de strings en PostgreSQL
+  keywords String[] @default([])
+
+  /// Stock mínimo antes de alertar reabastecimiento
+  minStock Int @default(1) @map("min_stock")
+
+  /// Precio unitario de referencia (en la moneda local)
+  unitPrice Decimal? @map("unit_price") @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relación: Una pieza pertenece a una sola caja
+  boxId              Int                 @map("box_id")
+  box                Box                 @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  purchaseOrderItems PurchaseOrderItem[]
+  workOrderItems     WorkOrderItem[]
+
+  @@index([name])
+  @@index([boxId])
+  @@map("parts")
+}
+
+// ────────────────────────────────────────────────────────────
+// SearchLog: Historial de búsquedas por voz (Alexa)
+//
+//  Registra cada vez que Alexa busca una pieza.
+//  Útil para analítica y depuración del Webhook.
+// ────────────────────────────────────────────────────────────
+model SearchLog {
+  id Int @id @default(autoincrement())
+
+  /// El texto que Alexa recibió del usuario
+  query String @db.VarChar(255)
+
+  /// La pieza encontrada (null si no se encontró)
+  partId Int? @map("part_id")
+
+  /// ¿Se encontró la pieza?
+  found Boolean @default(false)
+
+  /// Respuesta que se devolvió a Alexa (para auditoría)
+  alexaResponse String? @map("alexa_response") @db.Text
+
+  /// Usuario que realizó la búsqueda (null si fue Alexa directo)
+  userId Int?  @map("user_id")
+  user   User? @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([query])
+  @@index([userId])
+  @@map("search_logs")
+}
+
+model Vehicle {
+  id      Int     @id @default(autoincrement())
+  plate   String  @unique @db.VarChar(20)
+  make    String  @db.VarChar(80)
+  model   String  @db.VarChar(80)
+  year    Int?
+  vin     String? @unique @db.VarChar(17)
+  color   String? @db.VarChar(50)
+  ownerId Int     @map("owner_id")
+  owner   User    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  workOrders   WorkOrder[]
+  appointments Appointment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@map("vehicles")
+}
+
+model WorkOrder {
+  id            Int             @id @default(autoincrement())
+  number        String          @unique @db.VarChar(30)
+  description   String          @db.Text
+  diagnosis     String?         @db.Text
+  status        WorkOrderStatus @default(PENDIENTE)
+  estimatedCost Decimal?        @map("estimated_cost") @db.Decimal(10, 2)
+  finalCost     Decimal?        @map("final_cost") @db.Decimal(10, 2)
+  vehicleId     Int             @map("vehicle_id")
+  mechanicId    Int?            @map("mechanic_id")
+  vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
+  parts         WorkOrderItem[]
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([vehicleId])
+  @@index([mechanicId])
+  @@index([status])
+  @@map("work_orders")
+}
+
+model Appointment {
+  id          Int               @id @default(autoincrement())
+  scheduledAt DateTime          @map("scheduled_at")
+  reason      String?           @db.VarChar(255)
+  status      AppointmentStatus @default(AGENDADA)
+  vehicleId   Int               @map("vehicle_id")
+  vehicle     Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([vehicleId, scheduledAt])
+  @@map("appointments")
+}
+
+model WorkOrderItem {
+  id          Int       @id @default(autoincrement())
+  quantity    Int
+  workOrderId Int       @map("work_order_id")
+  partId      Int       @map("part_id")
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  part        Part      @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([workOrderId, partId])
+  @@index([partId])
+  @@map("work_order_items")
+}
+
+model Supplier {
+  id             Int             @id @default(autoincrement())
+  name           String          @db.VarChar(150)
+  taxId          String?         @unique @map("tax_id") @db.VarChar(50)
+  contactName    String?         @map("contact_name") @db.VarChar(150)
+  email          String?         @db.VarChar(255)
+  phone          String?         @db.VarChar(50)
+  address        String?         @db.VarChar(255)
+  purchaseOrders PurchaseOrder[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id         Int                 @id @default(autoincrement())
+  number     String              @unique @db.VarChar(30)
+  status     PurchaseOrderStatus @default(PENDIENTE)
+  orderedAt  DateTime            @default(now()) @map("ordered_at")
+  receivedAt DateTime?           @map("received_at")
+  supplierId Int                 @map("supplier_id")
+  supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items      PurchaseOrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              Int           @id @default(autoincrement())
+  quantity        Int
+  unitPrice       Decimal?      @map("unit_price") @db.Decimal(10, 2)
+  purchaseOrderId Int           @map("purchase_order_id")
+  partId          Int           @map("part_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  part            Part          @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([purchaseOrderId, partId])
+  @@index([partId])
+  @@map("purchase_order_items")
+}
 
 ================
 File: backend/src/alexa/alexa.controller.ts
@@ -3147,488 +4706,117 @@ export class AlexaService {
 }
 
 ================
-File: backend/src/auth/auth.service.ts
+File: backend/src/auth/auth.controller.ts
 ================
 import {
-  Injectable,
-  UnauthorizedException,
-  ConflictException,
-  Logger,
+  Controller,
+  Post,
+  Get,
+  Body,
+  Param,
+  Patch,
+  ParseIntPipe,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
-import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../prisma/prisma.service';
+import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
-import { JwtPayload } from './auth.types';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RolesGuard } from './guards/roles.guard';
+import { Roles, CurrentUser } from './decorators/auth.decorators';
 import { Role } from '@prisma/client';
+import { AuthenticatedUser } from './auth.types';
 
-const BCRYPT_ROUNDS = 10;
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
 
-@Injectable()
-export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
+  // ── Rutas públicas (sin autenticación) ────────────────────
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly jwt: JwtService,
-    private readonly config: ConfigService,
-  ) {}
-
-  // ──────────────────────────────────────────────────────────
-  // REGISTER
-  // ──────────────────────────────────────────────────────────
-
-  async register(dto: RegisterDto) {
-    // Verificar que el correo no esté en uso
-    const exists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-    if (exists) {
-      throw new ConflictException(
-        `El correo "${dto.email}" ya está registrado`,
-      );
-    }
-
-    // Hashear la contraseña con bcrypt
-    const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-
-    const user = await this.prisma.user.create({
-      data: {
-        name: dto.name,
-        email: dto.email,
-        password: hashedPassword,
-        role: dto.role ?? Role.CLIENTE,
-      },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    });
-
-    this.logger.log(`✅ Usuario registrado: ${user.email} (${user.role})`);
-
-    return {
-      message: 'Usuario registrado exitosamente',
-      user,
-      ...this.generateTokens(user),
-    };
+  /** POST /api/auth/login */
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  login(@Body() dto: LoginDto) {
+    return this.authService.login(dto);
   }
-
-  // ──────────────────────────────────────────────────────────
-  // LOGIN
-  // ──────────────────────────────────────────────────────────
-
-  async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-    // Mensaje genérico para no revelar si el email existe
-    const invalidMsg = 'Correo o contraseña incorrectos';
-
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException(invalidMsg);
-    }
-
-    const passwordMatch = await bcrypt.compare(dto.password, user.password);
-    if (!passwordMatch) {
-      this.logger.warn(`Login fallido para: ${dto.email}`);
-      throw new UnauthorizedException(invalidMsg);
-    }
-
-    this.logger.log(`🔑 Login exitoso: ${user.email} (${user.role})`);
-
-    return {
-      message: 'Login exitoso',
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-      ...this.generateTokens(user),
-    };
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // GESTIÓN DE USUARIOS (solo GERENTE)
-  // ──────────────────────────────────────────────────────────
-
-  async findAllUsers() {
-    return this.prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-  }
-
-  async toggleUserActive(userId: number, isActive: boolean) {
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { isActive },
-      select: { id: true, name: true, email: true, role: true, isActive: true },
-    });
-  }
-
-  async changeUserRole(userId: number, role: Role) {
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { role },
-      select: { id: true, name: true, email: true, role: true },
-    });
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // JWT helpers
-  // ──────────────────────────────────────────────────────────
-
-  private generateTokens(user: {
-    id: number;
-    email: string;
-    role: Role;
-    name: string;
-  }) {
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.name,
-    };
-
-    const accessToken = this.jwt.sign(payload);
-
-    return { accessToken };
-  }
-}
-
-================
-File: backend/src/led/led.gateway.ts
-================
-import {
-  WebSocketGateway,
-  WebSocketServer,
-  OnGatewayInit,
-  OnGatewayConnection,
-  OnGatewayDisconnect,
-  SubscribeMessage,
-  MessageBody,
-  ConnectedSocket,
-} from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
-import { Logger } from '@nestjs/common';
-import { LedControllerService } from './led-controller.service';
-
-// ══════════════════════════════════════════════════════════════════════════
-// Eventos Socket.io — GearTrace
-//
-// SERVIDOR → CLIENTE (emitidos por NestJS al Dashboard de React):
-//   led:activated   Alexa encontró una pieza y encendió el LED
-//   led:off         El LED fue apagado (timeout o manual)
-//   led:status      Estado inicial al conectarse un cliente nuevo
-//   hw:status       Info del modo hardware (real vs simulado)
-//
-// CLIENTE → SERVIDOR (recibidos desde el Dashboard):
-//   led:turnOff     El operador apaga el LED manualmente desde el dashboard
-//   led:test        El operador prueba un LED específico
-// ══════════════════════════════════════════════════════════════════════════
-export const SOCKET_EVENTS = {
-  // Server → Client
-  LED_ACTIVATED : 'led:activated',
-  LED_OFF       : 'led:off',
-  LED_STATUS    : 'led:status',
-  HW_STATUS     : 'hw:status',
-  // Client → Server
-  LED_TURN_OFF  : 'led:turnOff',
-  LED_TEST      : 'led:test',
-} as const;
-
-/** Payload que el servidor emite cuando un LED se activa */
-export interface LedActivatedPayload {
-  ledIndex : number;
-  partName : string;
-  colorHex : string;
-  timestamp: string;
-  simulated: boolean;  // true si estamos en modo sin hardware
-}
-
-@WebSocketGateway({
-  cors: { origin: '*' },
-  namespace: '/',
-  transports: ['websocket', 'polling'],
-})
-export class LedGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
-{
-  @WebSocketServer()
-  server: Server;
-
-  private readonly logger = new Logger(LedGateway.name);
-
-  /** Mapa de timeouts activos por ledIndex → para poder cancelarlos */
-  private activeTimeouts = new Map<number, NodeJS.Timeout>();
-
-  constructor(private readonly ledService: LedControllerService) {}
-
-  // ──────────────────────────────────────────────────────────
-  // Ciclo de vida del Gateway
-  // ──────────────────────────────────────────────────────────
-
-  afterInit(): void {
-    this.logger.log('🔌 Socket.io Gateway inicializado y escuchando');
-  }
-
-  handleConnection(client: Socket): void {
-    this.logger.log(`📲 Cliente conectado: ${client.id}`);
-
-    // Al conectar, enviar al cliente el estado del hardware
-    const hwStatus = this.ledService.getStatus();
-    client.emit(SOCKET_EVENTS.HW_STATUS, hwStatus);
-  }
-
-  handleDisconnect(client: Socket): void {
-    this.logger.log(`🔴 Cliente desconectado: ${client.id}`);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // Mensajes recibidos DESDE el cliente (Dashboard React)
-  // ──────────────────────────────────────────────────────────
-
-  /** El operador apaga un LED manualmente desde el Dashboard */
-  @SubscribeMessage(SOCKET_EVENTS.LED_TURN_OFF)
-  handleManualOff(
-    @MessageBody() data: { ledIndex: number },
-    @ConnectedSocket() client: Socket,
-  ): void {
-    const { ledIndex } = data;
-    this.logger.log(`🖱️  Apagado manual solicitado por cliente ${client.id} → LED ${ledIndex}`);
-
-    // Cancelar el timeout automático si existe
-    this.cancelAutoOff(ledIndex);
-
-    this.ledService.turnOff(ledIndex);
-    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, manual: true });
-  }
-
-  /** El operador prueba un LED específico desde el Dashboard */
-  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
-  async handleLedTest(
-    @MessageBody() data: { ledIndex: number; colorHex?: string },
-    @ConnectedSocket() client: Socket,
-  ): Promise<void> {
-    const { ledIndex, colorHex } = data;
-    this.logger.log(`🧪 Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
-
-    // Efecto de parpadeo para testeo visual
-    await this.ledService.blink(ledIndex, 3, colorHex);
-
-    const payload: LedActivatedPayload = {
-      ledIndex,
-      partName : `[TEST] LED ${ledIndex}`,
-      colorHex: colorHex ?? '#FFFFFF',
-      timestamp: new Date().toISOString(),
-      simulated: this.ledService.getStatus().simulationMode,
-    };
-    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
-
-    // Auto-apagar tras 5s en modo test
-    this.scheduleAutoOff(ledIndex, 5_000);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // API pública — llamada desde AlexaController
-  // ──────────────────────────────────────────────────────────
 
   /**
-   * Enciende el LED correspondiente a la pieza encontrada por Alexa,
-   * emite el evento a todos los clientes del Dashboard y programa
-   * el apagado automático tras 10 segundos.
-   *
-   * @param ledIndex  Índice del LED en la tira (0-4)
-   * @param partName  Nombre de la pieza encontrada (para el dashboard)
-   * @param colorHex  Color del LED (viene de Box.colorHex en la BD)
+   * POST /api/auth/register
+   * Registro público: solo crea usuarios con rol CLIENTE.
+   * Para crear MECANICO/GERENTE usar el endpoint de admin.
    */
-  async triggerLed(
-    ledIndex: number,
-    partName: string,
-    colorHex?: string,
-  ): Promise<void> {
-    // Cancelar timeout previo si el mismo LED ya estaba encendido
-    this.cancelAutoOff(ledIndex);
-
-    // Parpadeo inicial para llamar la atención y luego dejarlo encendido
-    await this.ledService.blink(ledIndex, 2, colorHex);
-
-    // Construir y emitir el payload al Dashboard
-    const payload: LedActivatedPayload = {
-      ledIndex,
-      partName,
-      colorHex: colorHex ?? '#FFFFFF',
-      timestamp: new Date().toISOString(),
-      simulated: this.ledService.getStatus().simulationMode,
-    };
-
-    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
-
-    this.logger.log(
-      `📡 Evento "${SOCKET_EVENTS.LED_ACTIVATED}" emitido → LED ${ledIndex} | "${partName}"`,
-    );
-
-    // Programar apagado automático a los 10 segundos
-    this.scheduleAutoOff(ledIndex, 10_000);
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  register(@Body() dto: RegisterDto) {
+    // Forzar CLIENTE en registro público
+    return this.authService.register({ ...dto, role: Role.CLIENTE });
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Helpers privados
-  // ──────────────────────────────────────────────────────────
+  // ── Rutas autenticadas ─────────────────────────────────────
 
-  private scheduleAutoOff(ledIndex: number, delayMs: number): void {
-    const timeout = setTimeout(() => {
-      this.ledService.turnOff(ledIndex);
-      this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, auto: true });
-      this.activeTimeouts.delete(ledIndex);
-      this.logger.log(`💤 LED ${ledIndex} apagado automáticamente (${delayMs / 1000}s)`);
-    }, delayMs);
-
-    this.activeTimeouts.set(ledIndex, timeout);
+  /** GET /api/auth/me → Perfil del usuario logueado */
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  getProfile(@CurrentUser() user: AuthenticatedUser) {
+    return { user };
   }
 
-  private cancelAutoOff(ledIndex: number): void {
-    const existing = this.activeTimeouts.get(ledIndex);
-    if (existing) {
-      clearTimeout(existing);
-      this.activeTimeouts.delete(ledIndex);
-    }
+  // ── Rutas exclusivas del GERENTE ──────────────────────────
+
+  /** GET /api/auth/users → Lista todos los usuarios */
+  @Get('users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  findAllUsers() {
+    return this.authService.findAllUsers();
+  }
+
+  /**
+   * POST /api/auth/admin/create → El gerente crea usuarios con cualquier rol
+   */
+  @Post('admin/create')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  @HttpCode(HttpStatus.CREATED)
+  adminCreateUser(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  /** PATCH /api/auth/users/:id/role → Cambiar rol de un usuario */
+  @Patch('users/:id/role')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  changeRole(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('role') role: Role,
+  ) {
+    return this.authService.changeUserRole(id, role);
+  }
+
+  /** PATCH /api/auth/users/:id → Editar el perfil completo de un usuario */
+  @Patch('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  updateUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateUserDto,
+  ) {
+    return this.authService.updateUser(id, dto);
+  }
+
+  /** PATCH /api/auth/users/:id/toggle → Activar/desactivar usuario */
+  @Patch('users/:id/toggle')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  toggleActive(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('isActive') isActive: boolean,
+  ) {
+    return this.authService.toggleUserActive(id, isActive);
   }
 }
-
-================
-File: backend/src/app.module.ts
-================
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'node:path';
-import { PrismaModule } from './prisma/prisma.module';
-import { InventoryModule } from './inventory/inventory.module';
-import { AlexaModule } from './alexa/alexa.module';
-import { LedModule } from './led/led.module';
-import { AuthModule } from './auth/auth.module';
-import { SearchLogModule } from './logs/search-log.module';
-
-@Module({
-  imports: [
-    // Carga variables de entorno desde .env de forma global
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
-    }),
-    ServeStaticModule.forRoot({
-      rootPath: join(process.cwd(), 'uploads'),
-      serveRoot: '/uploads',
-    }),
-
-    // Módulos de la aplicación
-    PrismaModule,
-    AuthModule,
-    InventoryModule,
-    AlexaModule,
-    LedModule,
-    SearchLogModule,
-  ],
-})
-export class AppModule {}
-
-================
-File: backend/src/main.ts
-================
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
-import { AppModule } from './app.module';
-
-async function bootstrap() {
-  const logger = new Logger('GearTrace');
-  const app = await NestFactory.create(AppModule);
-
-  // Prefijo global de la API REST
-  app.setGlobalPrefix('api');
-
-  // Validación automática de DTOs con class-validator
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,       // Elimina campos no declarados en el DTO
-      forbidNonWhitelisted: true,
-      transform: true,       // Transforma payloads al tipo del DTO
-    }),
-  );
-
-  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
-  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const defaultAllowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3000',
-    'http://geartrace.local',
-    ...configuredOrigins,
-  ];
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
-      if (defaultAllowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // 3. Despliegues en Vercel (*.vercel.app y subdominios)
-      if (/^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // 4. Dominios de túnel Ngrok (*.ngrok-free.app, *.ngrok.app)
-      if (/^https:\/\/([a-zA-Z0-9-]+\.)*ngrok(-free)?\.app$/.test(origin)) {
-        return callback(null, true);
-      }
-
-      // 5. Red local (Raspberry Pi y clientes LAN: 192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-      if (
-        /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
-          origin,
-        )
-      ) {
-        return callback(null, true);
-      }
-
-      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
-      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-    credentials: true,
-  });
-
-  const port = process.env.PORT ?? 3000;
-  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
-  await app.listen(port, '0.0.0.0');
-
-  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
-  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
-  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
-}
-
-bootstrap();
 
 ================
 File: backend/.env.example
@@ -3671,49 +4859,6 @@ SIMULATE_HARDWARE=true
 # ─── Alexa Webhook ──────────────────────────────────────────────────────────
 # Skill ID de tu Alexa Custom Skill (opcional para desarrollo, validado en prod si es un ID real)
 ALEXA_SKILL_ID=amzn1.ask.skill.XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
-
-================
-File: frontend/src/api/axios.ts
-================
-import axios from 'axios';
-
-// Obtener la URL base desde la variable de entorno o usar fallback por defecto
-const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-
-// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
-const baseURL = rawApiUrl.endsWith('/api')
-  ? rawApiUrl
-  : `${rawApiUrl.replace(/\/$/, '')}/api`;
-
-// Instancia de axios preconfigurada
-const api = axios.create({
-  baseURL,
-});
-
-// Interceptor para inyectar el token JWT en cada request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('geartrace_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Interceptor para manejar errores globalmente (ej. 401 Unauthorized)
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      // Si el token expira, limpiamos localstorage y forzamos login
-      localStorage.removeItem('geartrace_token');
-      localStorage.removeItem('geartrace_user');
-      window.dispatchEvent(new Event('auth:unauthorized'));
-    }
-    return Promise.reject(error);
-  }
-);
-
-export default api;
 
 ================
 File: frontend/tsconfig.json
@@ -4018,6 +5163,414 @@ Tras ejecutar `npm run prisma:seed`, tienes a disposición los siguientes usuari
 | **Prisma Generate** | `npm run prisma:generate` | N/A |
 | **Prisma Migraciones** | `npm run prisma:migrate` | N/A |
 | **Cargar Datos Demo** | `npm run prisma:seed` | N/A |
+
+================
+File: backend/prisma/seed.ts
+================
+import { PrismaClient, Role, WorkOrderStatus } from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+
+const prisma = new PrismaClient();
+const BCRYPT_ROUNDS = 10;
+
+async function main() {
+  console.log('🌱 Iniciando seedeo de la base de datos...');
+
+  // 1. Limpiar datos existentes (opcional, cuidado en producción)
+  // await prisma.searchLog.deleteMany();
+  // await prisma.part.deleteMany();
+  // await prisma.box.deleteMany();
+  // await prisma.user.deleteMany();
+
+  // 2. Crear Usuarios con sus roles (password: password123)
+  const defaultPassword = await bcrypt.hash('password123', BCRYPT_ROUNDS);
+
+  console.log('👤 Creando usuarios...');
+  
+  const gerente = await prisma.user.upsert({
+    where: { email: 'gerente@geartrace.com' },
+    update: { password: defaultPassword },
+    create: {
+      name: 'Gerente Principal',
+      email: 'gerente@geartrace.com',
+      password: defaultPassword,
+      role: Role.GERENTE,
+    },
+  });
+
+  const mecanico = await prisma.user.upsert({
+    where: { email: 'mecanico@geartrace.com' },
+    update: { password: defaultPassword },
+    create: {
+      name: 'Mecánico Jefe',
+      email: 'mecanico@geartrace.com',
+      password: defaultPassword,
+      role: Role.MECANICO,
+    },
+  });
+
+  const cliente = await prisma.user.upsert({
+    where: { email: 'cliente@geartrace.com' },
+    update: { password: defaultPassword },
+    create: {
+      name: 'Cliente Demo',
+      email: 'cliente@geartrace.com',
+      password: defaultPassword,
+      role: Role.CLIENTE,
+    },
+  });
+
+  console.log(`✅ Usuarios creados: ${gerente.email}, ${mecanico.email}, ${cliente.email}`);
+
+  // 3. Crear vehículos de prueba
+  console.log('🚗 Creando vehículos de prueba...');
+
+  const vehiculoCliente = await prisma.vehicle.upsert({
+    where: { plate: 'ABC-123' },
+    update: { ownerId: cliente.id },
+    create: {
+      plate: 'ABC-123',
+      make: 'Toyota',
+      model: 'Corolla',
+      year: 2020,
+      color: 'Blanco',
+      ownerId: cliente.id,
+    },
+  });
+
+  const vehiculoEmpresa = await prisma.vehicle.upsert({
+    where: { plate: 'GTR-456' },
+    update: { ownerId: cliente.id },
+    create: {
+      plate: 'GTR-456',
+      make: 'Chevrolet',
+      model: 'D-Max',
+      year: 2021,
+      color: 'Gris',
+      ownerId: cliente.id,
+    },
+  });
+
+  // 4. Crear proveedor de prueba
+  const proveedor = await prisma.supplier.upsert({
+    where: { taxId: '0999999999001' },
+    update: {},
+    create: {
+      name: 'Autopartes Andinas',
+      taxId: '0999999999001',
+      contactName: 'Laura Mera',
+      email: 'ventas@autopartesandinas.com',
+      phone: '0999999999',
+    },
+  });
+
+  console.log(`✅ Vehículos y proveedor creados: ${vehiculoCliente.plate}, ${vehiculoEmpresa.plate}, ${proveedor.name}`);
+
+  // 5. Crear Cajas (solo si no existen)
+  console.log('📦 Creando cajas físicas...');
+  
+  const cajasData = [
+    { name: 'Caja A - Filtros', ledIndex: 0, location: 'Estante 1, Nivel A', colorHex: '#FF4500' },
+    { name: 'Caja B - Frenos', ledIndex: 1, location: 'Estante 1, Nivel B', colorHex: '#1E90FF' },
+    { name: 'Caja C - Correas', ledIndex: 2, location: 'Estante 2, Nivel A', colorHex: '#32CD32' },
+    { name: 'Caja D - Eléctrico', ledIndex: 3, location: 'Estante 2, Nivel B', colorHex: '#FFD700' },
+    { name: 'Caja E - Lubricantes', ledIndex: 4, location: 'Estante 3, Nivel A', colorHex: '#9400D3' },
+  ];
+
+  for (const c of cajasData) {
+    await prisma.box.upsert({
+      where: { ledIndex: c.ledIndex },
+      update: {},
+      create: c,
+    });
+  }
+
+  // 6. Crear Piezas
+  console.log('⚙️ Creando inventario de piezas...');
+  
+  // Buscar caja 1 y 2 para relacionar
+  const cajaA = await prisma.box.findUnique({ where: { ledIndex: 0 } });
+  const cajaB = await prisma.box.findUnique({ where: { ledIndex: 1 } });
+
+  if (cajaA && cajaB) {
+    const filtroAceite = await prisma.part.upsert({
+      where: { code: 'FLT-OIL-001' },
+      update: {},
+      create: {
+        name: 'Filtro de aceite Toyota',
+        code: 'FLT-OIL-001',
+        quantity: 15,
+        minStock: 3,
+        boxId: cajaA.id,
+        keywords: ['filtro aceite', 'filtro toyota', 'filtro'],
+      },
+    });
+
+    const pastillasFreno = await prisma.part.upsert({
+      where: { code: 'BRK-PAD-001' },
+      update: {},
+      create: {
+        name: 'Pastillas de freno Brembo',
+        code: 'BRK-PAD-001',
+        quantity: 6,
+        minStock: 2,
+        boxId: cajaB.id,
+        keywords: ['pastillas', 'frenos', 'pastillas freno'],
+      },
+    });
+
+    await prisma.purchaseOrder.upsert({
+      where: { number: 'PO-0001' },
+      update: { supplierId: proveedor.id },
+      create: {
+        number: 'PO-0001',
+        supplierId: proveedor.id,
+        items: {
+          create: [
+            { partId: filtroAceite.id, quantity: 20, unitPrice: 8.5 },
+            { partId: pastillasFreno.id, quantity: 10, unitPrice: 25 },
+          ],
+        },
+      },
+    });
+  }
+
+  // 7. Crear órdenes de trabajo ficticias
+  await prisma.workOrder.upsert({
+    where: { number: 'OT-0001' },
+    update: {},
+    create: {
+      number: 'OT-0001',
+      description: 'Cambio de aceite y filtro',
+      status: WorkOrderStatus.CERRADA,
+      finalCost: 45,
+      vehicleId: vehiculoCliente.id,
+      mechanicId: mecanico.id,
+      completedAt: new Date(),
+    },
+  });
+
+  await prisma.workOrder.upsert({
+    where: { number: 'OT-0002' },
+    update: {},
+    create: {
+      number: 'OT-0002',
+      description: 'Revisión del sistema de frenos',
+      status: WorkOrderStatus.EN_DIAGNOSTICO,
+      vehicleId: vehiculoEmpresa.id,
+      mechanicId: mecanico.id,
+    },
+  });
+
+  console.log('🎉 ¡Seed finalizado exitosamente!');
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
+
+================
+File: backend/src/auth/auth.service.ts
+================
+import {
+  Injectable,
+  UnauthorizedException,
+  ConflictException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcryptjs';
+import { PrismaService } from '../prisma/prisma.service';
+import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { JwtPayload } from './auth.types';
+import { Prisma, Role } from '@prisma/client';
+import { UpdateUserDto } from './dto/update-user.dto';
+
+const BCRYPT_ROUNDS = 10;
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwt: JwtService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // ──────────────────────────────────────────────────────────
+  // REGISTER
+  // ──────────────────────────────────────────────────────────
+
+  async register(dto: RegisterDto) {
+    // Verificar que el correo no esté en uso
+    const exists = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+    if (exists) {
+      throw new ConflictException(
+        `El correo "${dto.email}" ya está registrado`,
+      );
+    }
+
+    // Hashear la contraseña con bcrypt
+    const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+
+    const user = await this.prisma.user.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        password: hashedPassword,
+        role: dto.role ?? Role.CLIENTE,
+      },
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+    });
+
+    this.logger.log(`✅ Usuario registrado: ${user.email} (${user.role})`);
+
+    return {
+      message: 'Usuario registrado exitosamente',
+      user,
+      ...this.generateTokens(user),
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // LOGIN
+  // ──────────────────────────────────────────────────────────
+
+  async login(dto: LoginDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+
+    // Mensaje genérico para no revelar si el email existe
+    const invalidMsg = 'Correo o contraseña incorrectos';
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException(invalidMsg);
+    }
+
+    const passwordMatch = await bcrypt.compare(dto.password, user.password);
+    if (!passwordMatch) {
+      this.logger.warn(`Login fallido para: ${dto.email}`);
+      throw new UnauthorizedException(invalidMsg);
+    }
+
+    this.logger.log(`🔑 Login exitoso: ${user.email} (${user.role})`);
+
+    return {
+      message: 'Login exitoso',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      ...this.generateTokens(user),
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // GESTIÓN DE USUARIOS (solo GERENTE)
+  // ──────────────────────────────────────────────────────────
+
+  async findAllUsers() {
+    return this.prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async toggleUserActive(userId: number, isActive: boolean) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive },
+      select: { id: true, name: true, email: true, role: true, isActive: true },
+    });
+  }
+
+  async changeUserRole(userId: number, role: Role) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { role },
+      select: { id: true, name: true, email: true, role: true },
+    });
+  }
+
+  async updateUser(userId: number, dto: UpdateUserDto) {
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const data = {
+      ...dto,
+      password: dto.password
+        ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
+        : undefined,
+    };
+
+    try {
+      return await this.prisma.user.update({
+        where: { id: userId },
+        data,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          isActive: true,
+          updatedAt: true,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('El correo electrónico ya está registrado');
+      }
+      throw error;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // JWT helpers
+  // ──────────────────────────────────────────────────────────
+
+  private generateTokens(user: {
+    id: number;
+    email: string;
+    role: Role;
+    name: string;
+  }) {
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+    };
+
+    const accessToken = this.jwt.sign(payload);
+
+    return { accessToken };
+  }
+}
 
 ================
 File: backend/src/inventory/inventory.controller.ts
@@ -4739,273 +6292,167 @@ export class LedControllerService implements OnModuleInit, OnModuleDestroy {
 }
 
 ================
-File: frontend/src/components/Dashboard.tsx
+File: backend/src/app.module.ts
 ================
-import { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
-import { useAuth } from '../contexts/AuthContext';
-import api from '../api/axios';
-import { Cpu, Package, Server, AlertCircle } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'node:path';
+import { PrismaModule } from './prisma/prisma.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { AlexaModule } from './alexa/alexa.module';
+import { LedModule } from './led/led.module';
+import { AuthModule } from './auth/auth.module';
+import { SearchLogModule } from './logs/search-log.module';
+import { ClientModule } from './client/client.module';
+import { ServiceModule } from './service/service.module';
+import { SupplierModule } from './supplier/supplier.module';
 
-interface HwStatus {
-  simulationMode: boolean;
-  ledCount: number;
-  gpioPin: number;
-}
+@Module({
+  imports: [
+    // Carga variables de entorno desde .env de forma global
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
 
-interface LedState {
-  index: number;
-  isActive: boolean;
-  color?: string;
-  partName?: string;
-}
+    // Módulos de la aplicación
+    PrismaModule,
+    AuthModule,
+    InventoryModule,
+    AlexaModule,
+    LedModule,
+    SearchLogModule,
+    ClientModule,
+    ServiceModule,
+    SupplierModule,
+  ],
+})
+export class AppModule {}
 
-export default function Dashboard() {
-  const { user } = useAuth();
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [hwStatus, setHwStatus] = useState<HwStatus | null>(null);
-  const [leds, setLeds] = useState<LedState[]>(Array.from({ length: 5 }, (_, i) => ({ index: i, isActive: false })));
-  const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });
+================
+File: frontend/src/api/axios.ts
+================
+import axios from 'axios';
+axios.defaults.headers.common['ngrok-skip-browser-warning'] = '69420';
+// Obtener la URL base desde la variable de entorno o usar fallback por defecto
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-  useEffect(() => {
-    // 1. Cargar estadísticas iniciales
-    const loadStats = async () => {
-      try {
-        const [boxesRes, partsRes, lowStockRes] = await Promise.all([
-          api.get('/inventory/boxes'),
-          api.get('/inventory/parts'),
-          api.get('/inventory/parts/low-stock')
-        ]);
-        setStats({
-          boxes: boxesRes.data.length,
-          parts: partsRes.data.length,
-          lowStock: lowStockRes.data.length
-        });
-      } catch (error) {
-        console.error("Error al cargar estadísticas", error);
-      }
-    };
-    loadStats();
+// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
+const baseURL = rawApiUrl.endsWith('/api')
+  ? rawApiUrl
+  : `${rawApiUrl.replace(/\/$/, '')}/api`;
 
-    // 2. Conectar a Socket.io usando VITE_SOCKET_URL con fallback a http://localhost:3000
-    const socketUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000';
-    const newSocket = io(socketUrl);
-    setSocket(newSocket);
+// Instancia de axios preconfigurada
+const api = axios.create({
+  baseURL,
+});
 
-    newSocket.on('connect', () => {
-      console.log('✅ Conectado al Socket de GearTrace');
-    });
+// Interceptor para inyectar el token JWT en cada request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('geartrace_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
-    newSocket.on('hw:status', (status: HwStatus) => {
-      setHwStatus(status);
-      // Ajustar cantidad de LEDs según el hardware
-      setLeds(Array.from({ length: status.ledCount }, (_, i) => ({ index: i, isActive: false })));
-    });
-
-    newSocket.on('led:activated', (data: { ledIndex: number, partName: string, colorHex?: string }) => {
-      toast.custom((t) => (
-        <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-slate-800 shadow-[0_0_20px_rgba(249,115,22,0.3)] rounded-xl pointer-events-auto flex ring-1 ring-brand-500/50`}>
-          <div className="flex-1 w-0 p-4">
-            <div className="flex items-start">
-              <div className="flex-shrink-0 pt-0.5">
-                <div className="h-10 w-10 rounded-lg bg-brand-500/20 flex items-center justify-center text-brand-500 animate-pulse-slow">
-                <Cpu size={24} />
-                </div>
-              </div>
-              <div className="ml-3 flex-1">
-                <p className="text-sm font-medium text-white">
-                  Alexa activó LED {data.ledIndex}
-                </p>
-                <p className="mt-1 text-sm text-slate-400">
-                  Encontró: <span className="text-brand-400 font-semibold">{data.partName}</span>
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      ));
-
-      setLeds(prev => prev.map(l => 
-        l.index === data.ledIndex ? { ...l, isActive: true, partName: data.partName, color: data.colorHex || '#F97316' } : l
-      ));
-    });
-
-    newSocket.on('led:off', (data: { ledIndex: number, manual?: boolean }) => {
-      if (data.manual) {
-        toast.success(`LED ${data.ledIndex} apagado manualmente`);
-      }
-      setLeds(prev => prev.map(l => 
-        l.index === data.ledIndex ? { ...l, isActive: false, partName: undefined } : l
-      ));
-    });
-
-    return () => {
-      newSocket.disconnect();
-    };
-  }, []);
-
-  const handleTurnOffLed = (index: number) => {
-    if (socket) {
-      socket.emit('led:turnOff', { ledIndex: index });
+// Interceptor para manejar errores globalmente (ej. 401 Unauthorized)
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Si el token expira, limpiamos localstorage y forzamos login
+      localStorage.removeItem('geartrace_token');
+      localStorage.removeItem('geartrace_user');
+      window.dispatchEvent(new Event('auth:unauthorized'));
     }
-  };
+    return Promise.reject(error);
+  }
+);
 
-  const handleTestLed = (index: number) => {
-    if (socket) {
-      socket.emit('led:test', { ledIndex: index, colorHex: '#38BDF8' });
-    }
-  };
-
-  const isOperative = user?.role === 'GERENTE' || user?.role === 'MECANICO';
-
-  return (
-    <div className="space-y-6">
-      {/* Cards de Resumen */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex items-center gap-4 hover:border-brand-500/50 transition-colors">
-          <div className="p-4 bg-blue-500/10 text-blue-400 rounded-xl">
-            <Package size={28} />
-          </div>
-          <div>
-            <p className="text-slate-400 text-sm font-medium">Total Cajas</p>
-            <p className="text-3xl font-bold">{stats.boxes}</p>
-          </div>
-        </div>
-
-        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex items-center gap-4 hover:border-brand-500/50 transition-colors">
-          <div className="p-4 bg-emerald-500/10 text-emerald-400 rounded-xl">
-            <Server size={28} />
-          </div>
-          <div>
-            <p className="text-slate-400 text-sm font-medium">Tipos de Piezas</p>
-            <p className="text-3xl font-bold">{stats.parts}</p>
-          </div>
-        </div>
-
-        <div className="bg-slate-800/50 border border-slate-700 p-6 rounded-2xl flex items-center gap-4 hover:border-brand-500/50 transition-colors">
-          <div className="p-4 bg-rose-500/10 text-rose-400 rounded-xl">
-            <AlertCircle size={28} />
-          </div>
-          <div>
-            <p className="text-slate-400 text-sm font-medium">Stock Bajo</p>
-            <p className="text-3xl font-bold">{stats.lowStock}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Panel de LEDs */}
-        <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden flex flex-col">
-          <div className="p-6 border-b border-slate-700 flex justify-between items-center">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <span className="h-3 w-3 rounded-sm bg-brand-500 shadow-[0_0_12px_rgba(249,115,22,0.8)]" /> Control de Tira WS2812B
-            </h2>
-            {hwStatus?.simulationMode && (
-              <span className="px-3 py-1 bg-amber-500/10 text-amber-500 text-xs font-semibold rounded-full border border-amber-500/20 flex items-center gap-1.5">
-                <Cpu size={12} /> MODO SIMULACIÓN
-              </span>
-            )}
-          </div>
-          
-          <div className="p-8 flex-1 flex flex-col justify-center">
-            <div className="rounded-2xl border border-slate-700 bg-slate-950/80 p-4 shadow-[inset_0_2px_12px_rgba(0,0,0,0.45)]">
-              <div className="flex items-stretch overflow-x-auto rounded-lg bg-slate-900 p-1">
-                {leds.map((led) => (
-                  <div key={led.index} className="group relative min-w-[92px] flex-1 border-r border-slate-800 last:border-r-0">
-                    <div
-                      className={`relative mx-1 h-20 rounded-sm border transition-all duration-300 ${
-                        led.isActive
-                          ? 'border-white/80'
-                          : 'border-slate-800 bg-slate-950'
-                      }`}
-                      style={led.isActive ? {
-                        backgroundColor: led.color,
-                        boxShadow: `0 0 12px ${led.color}, 0 0 30px ${led.color}99, inset 0 0 12px rgba(255,255,255,0.7)`,
-                      } : undefined}
-                      title={led.isActive ? led.partName : `LED ${led.index} apagado`}
-                    >
-                      <span className="absolute inset-x-2 top-2 h-px bg-white/40" />
-                      <span className="absolute bottom-2 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-slate-700" />
-                    </div>
-                    <div className="absolute inset-x-0 top-full z-10 mt-2 text-center opacity-0 transition-opacity group-hover:opacity-100">
-                      <div className="truncate px-1 text-xs font-semibold text-slate-300">
-                        LED {led.index}
-                      </div>
-                      <div className="truncate px-1 text-[11px] text-slate-500">
-                        {led.isActive ? led.partName : 'Apagado'}
-                      </div>
-                      {isOperative && (
-                        <button
-                          onClick={() => led.isActive ? handleTurnOffLed(led.index) : handleTestLed(led.index)}
-                          className={`mt-2 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                            led.isActive
-                              ? 'border border-red-500/30 bg-red-500/20 text-red-400 hover:bg-red-500/40'
-                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                          }`}
-                        >
-                          {led.isActive ? 'Apagar' : 'Test'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Panel de Info Hardware */}
-        <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-6">
-          <h2 className="text-lg font-semibold flex items-center gap-2 mb-6">
-            <Cpu className="text-slate-400" /> Estado del Hardware
-          </h2>
-          
-          {hwStatus ? (
-            <div className="space-y-4">
-              <div className="p-4 bg-slate-900/50 rounded-xl border border-slate-700/50 flex justify-between items-center">
-                <span className="text-slate-400 text-sm">Modo de Operación</span>
-                {hwStatus.simulationMode ? (
-                  <span className="text-amber-400 text-sm font-semibold flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-amber-400"></div> Software (Simulado)</span>
-                ) : (
-                  <span className="text-emerald-400 text-sm font-semibold flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-400"></div> GPIO Real Activo</span>
-                )}
-              </div>
-              
-              <div className="p-4 bg-slate-900/50 rounded-xl border border-slate-700/50 flex justify-between items-center">
-                <span className="text-slate-400 text-sm">LEDs Configurados</span>
-                <span className="text-white font-medium">{hwStatus.ledCount} (WS2812B)</span>
-              </div>
-              
-              <div className="p-4 bg-slate-900/50 rounded-xl border border-slate-700/50 flex justify-between items-center">
-                <span className="text-slate-400 text-sm">Pin GPIO</span>
-                <span className="text-white font-medium">Pin {hwStatus.gpioPin}</span>
-              </div>
-              
-              <div className="mt-8 p-4 bg-brand-500/10 border border-brand-500/20 rounded-xl">
-                <h3 className="text-brand-400 text-sm font-semibold mb-2">Simulación de Alexa</h3>
-                <p className="text-slate-400 text-xs leading-relaxed">
-                  Puedes probar la integración enviando un POST a <code className="bg-slate-900 px-1 py-0.5 rounded text-brand-300">/api/webhook/alexa</code> simulando el payload de Amazon.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-slate-500"></div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+export default api;
 
 ================
 File: frontend/src/components/Layout.tsx
 ================
 import { NavLink, Outlet } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { LogOut, LayoutDashboard, Package, Users, Wrench } from 'lucide-react';
+import { Role, useAuth } from '../contexts/AuthContext';
+import {
+  ClipboardList,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  Receipt,
+  Truck,
+  Users,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
+
+interface NavigationItem {
+  label: string;
+  path: string;
+  icon: LucideIcon;
+  roles: Role[];
+  disabled?: boolean;
+}
+
+const navigationItems: NavigationItem[] = [
+  {
+    label: 'Dashboard',
+    path: '/dashboard',
+    icon: LayoutDashboard,
+    roles: ['GERENTE', 'MECANICO'],
+  },
+  {
+    label: 'Mi Vehículo',
+    path: '/dashboard#vehicles',
+    icon: LayoutDashboard,
+    roles: ['CLIENTE'],
+  },
+  {
+    label: 'Citas',
+    path: '/dashboard#appointments',
+    icon: ClipboardList,
+    roles: ['CLIENTE'],
+  },
+  {
+    label: 'Inventario',
+    path: '/inventory',
+    icon: Package,
+    roles: ['GERENTE', 'MECANICO'],
+  },
+  {
+    label: 'Órdenes de trabajo',
+    path: '/work-orders',
+    icon: ClipboardList,
+    roles: ['GERENTE', 'MECANICO'],
+  },
+  {
+    label: 'Usuarios',
+    path: '/users',
+    icon: Users,
+    roles: ['GERENTE'],
+  },
+  {
+    label: 'Proveedores',
+    path: '/suppliers',
+    icon: Truck,
+    roles: ['GERENTE'],
+  },
+  {
+    label: 'Facturación',
+    path: '/billing',
+    icon: Receipt,
+    roles: ['GERENTE'],
+    disabled: true,
+  },
+];
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -5035,21 +6482,23 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <NavLink to="/dashboard" className={navLinkClass} end>
-            <LayoutDashboard size={20} /> Dashboard
-          </NavLink>
-          
-          {(user?.role === 'GERENTE' || user?.role === 'MECANICO') && (
-            <NavLink to="/inventory" className={navLinkClass}>
-              <Package size={20} /> Inventario
-            </NavLink>
-          )}
-          
-          {user?.role === 'GERENTE' && (
-            <NavLink to="/users" className={navLinkClass}>
-              <Users size={20} /> Usuarios
-            </NavLink>
-          )}
+          {navigationItems
+            .filter((item) => user?.role && item.roles.includes(user.role))
+            .map(({ label, path, icon: Icon, disabled }) =>
+              disabled ? (
+                <span
+                  key={label}
+                  title="Módulo próximamente disponible"
+                  className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2.5 font-medium text-slate-600"
+                >
+                  <Icon size={20} /> {label}
+                </span>
+              ) : (
+                <NavLink key={label} to={path} className={navLinkClass} end={path === '/dashboard'}>
+                  <Icon size={20} /> {label}
+                </NavLink>
+              ),
+            )}
         </nav>
 
         <div className="p-4 border-t border-slate-700">
@@ -5088,8 +6537,11 @@ import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
 import InventoryList from './components/Inventory/InventoryList'
-import UsersManagement from './components/Users/UsersManagement'
+import UsersList from './components/Users/UsersList'
+import SuppliersList from './components/Suppliers/SuppliersList'
+import WorkOrdersBoard from './components/WorkOrders/WorkOrdersBoard'
 import AuditLogs from './components/AuditLogs'
+import RoleProtectedRoute from './components/RoleProtectedRoute'
 
 function App() {
   const { isAuthenticated, isLoading, user } = useAuth()
@@ -5115,16 +6567,29 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="inventory" element={<InventoryList />} />
+        <Route
+          path="inventory"
+          element={
+            <RoleProtectedRoute allowedRoles={['GERENTE', 'MECANICO']}>
+              <InventoryList />
+            </RoleProtectedRoute>
+          }
+        />
         <Route path="logs" element={<AuditLogs />} />
+        <Route
+          path="suppliers"
+          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <SuppliersList /> : <Navigate to="/dashboard" replace />}
+        />
+        <Route
+          path="work-orders"
+          element={user?.role === 'GERENTE' || user?.role === 'MECANICO' ? <WorkOrdersBoard /> : <Navigate to="/dashboard" replace />}
+        />
         <Route
           path="users"
           element={
-            user?.role === 'GERENTE' ? (
-              <UsersManagement />
-            ) : (
-              <Navigate to="/dashboard" replace />
-            )
+            <RoleProtectedRoute allowedRoles={['GERENTE']}>
+              <UsersList />
+            </RoleProtectedRoute>
           }
         />
       </Route>
@@ -5135,6 +6600,347 @@ function App() {
 }
 
 export default App
+
+================
+File: backend/src/led/led.gateway.ts
+================
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  OnGatewayInit,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { Logger } from '@nestjs/common';
+import { LedControllerService } from './led-controller.service';
+
+// ══════════════════════════════════════════════════════════════════════════
+// Eventos Socket.io — GearTrace
+//
+// SERVIDOR → CLIENTE (emitidos por NestJS al Dashboard de React):
+//   led:activated   Alexa encontró una pieza y encendió el LED
+//   led:off         El LED fue apagado (timeout o manual)
+//   led:status      Estado inicial al conectarse un cliente nuevo
+//   hw:status       Info del modo hardware (real vs simulado)
+//
+// CLIENTE → SERVIDOR (recibidos desde el Dashboard):
+//   led:turnOff     El operador apaga el LED manualmente desde el dashboard
+//   led:test        El operador prueba un LED específico
+// ══════════════════════════════════════════════════════════════════════════
+export const SOCKET_EVENTS = {
+  // Server → Client
+  LED_ACTIVATED : 'led:activated',
+  LED_OFF       : 'led:off',
+  LED_STATUS    : 'led:status',
+  HW_STATUS     : 'hw:status',
+  // Client → Server
+  LED_TURN_OFF  : 'led:turnOff',
+  LED_TEST      : 'led:test',
+} as const;
+
+/** Payload que el servidor emite cuando un LED se activa */
+export interface LedActivatedPayload {
+  ledIndex : number;
+  partName : string;
+  colorHex : string;
+  timestamp: string;
+  simulated: boolean;  // true si estamos en modo sin hardware
+}
+
+@WebSocketGateway({
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      try {
+        const { hostname, protocol } = new URL(origin);
+        const normalizedHostname = hostname.toLowerCase();
+        const isVercel = normalizedHostname.endsWith('.vercel.app');
+        const isNgrok = normalizedHostname.includes('ngrok');
+        const isLocalhost =
+          normalizedHostname === 'localhost' ||
+          normalizedHostname === '127.0.0.1' ||
+          normalizedHostname === '::1';
+        const isPrivateNetwork =
+          /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
+          /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
+
+        if (
+          (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
+          (protocol === 'http:' || protocol === 'https:')
+        ) {
+          return callback(null, true);
+        }
+      } catch {
+        // Socket.io rechazará el origen con formato inválido.
+      }
+
+      return callback(new Error(`Origen WebSocket no permitido: ${origin}`), false);
+    },
+    credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'ngrok-skip-browser-warning',
+    ],
+  },
+  namespace: '/',
+  transports: ['websocket', 'polling'],
+})
+export class LedGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  @WebSocketServer()
+  server: Server;
+
+  private readonly logger = new Logger(LedGateway.name);
+
+  /** Mapa de timeouts activos por ledIndex → para poder cancelarlos */
+  private activeTimeouts = new Map<number, NodeJS.Timeout>();
+
+  constructor(private readonly ledService: LedControllerService) {}
+
+  // ──────────────────────────────────────────────────────────
+  // Ciclo de vida del Gateway
+  // ──────────────────────────────────────────────────────────
+
+  afterInit(): void {
+    this.logger.log('🔌 Socket.io Gateway inicializado y escuchando');
+  }
+
+  handleConnection(client: Socket): void {
+    this.logger.log(`📲 Cliente conectado: ${client.id}`);
+
+    // Al conectar, enviar al cliente el estado del hardware
+    const hwStatus = this.ledService.getStatus();
+    client.emit(SOCKET_EVENTS.HW_STATUS, hwStatus);
+  }
+
+  handleDisconnect(client: Socket): void {
+    this.logger.log(`🔴 Cliente desconectado: ${client.id}`);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Mensajes recibidos DESDE el cliente (Dashboard React)
+  // ──────────────────────────────────────────────────────────
+
+  /** El operador apaga un LED manualmente desde el Dashboard */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TURN_OFF)
+  handleManualOff(
+    @MessageBody() data: { ledIndex: number },
+    @ConnectedSocket() client: Socket,
+  ): void {
+    const { ledIndex } = data;
+    this.logger.log(`🖱️  Apagado manual solicitado por cliente ${client.id} → LED ${ledIndex}`);
+
+    // Cancelar el timeout automático si existe
+    this.cancelAutoOff(ledIndex);
+
+    this.ledService.turnOff(ledIndex);
+    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, manual: true });
+  }
+
+  /** El operador prueba un LED específico desde el Dashboard */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
+  async handleLedTest(
+    @MessageBody() data: { ledIndex: number; colorHex?: string },
+    @ConnectedSocket() client: Socket,
+  ): Promise<void> {
+    const { ledIndex, colorHex } = data;
+    this.logger.log(`🧪 Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
+
+    // Efecto de parpadeo para testeo visual
+    await this.ledService.blink(ledIndex, 3, colorHex);
+
+    const payload: LedActivatedPayload = {
+      ledIndex,
+      partName : `[TEST] LED ${ledIndex}`,
+      colorHex: colorHex ?? '#FFFFFF',
+      timestamp: new Date().toISOString(),
+      simulated: this.ledService.getStatus().simulationMode,
+    };
+    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
+
+    // Auto-apagar tras 5s en modo test
+    this.scheduleAutoOff(ledIndex, 5_000);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // API pública — llamada desde AlexaController
+  // ──────────────────────────────────────────────────────────
+
+  /**
+   * Enciende el LED correspondiente a la pieza encontrada por Alexa,
+   * emite el evento a todos los clientes del Dashboard y programa
+   * el apagado automático tras 10 segundos.
+   *
+   * @param ledIndex  Índice del LED en la tira (0-4)
+   * @param partName  Nombre de la pieza encontrada (para el dashboard)
+   * @param colorHex  Color del LED (viene de Box.colorHex en la BD)
+   */
+  async triggerLed(
+    ledIndex: number,
+    partName: string,
+    colorHex?: string,
+  ): Promise<void> {
+    // Cancelar timeout previo si el mismo LED ya estaba encendido
+    this.cancelAutoOff(ledIndex);
+
+    // Parpadeo inicial para llamar la atención y luego dejarlo encendido
+    await this.ledService.blink(ledIndex, 2, colorHex);
+
+    // Construir y emitir el payload al Dashboard
+    const payload: LedActivatedPayload = {
+      ledIndex,
+      partName,
+      colorHex: colorHex ?? '#FFFFFF',
+      timestamp: new Date().toISOString(),
+      simulated: this.ledService.getStatus().simulationMode,
+    };
+
+    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
+
+    this.logger.log(
+      `📡 Evento "${SOCKET_EVENTS.LED_ACTIVATED}" emitido → LED ${ledIndex} | "${partName}"`,
+    );
+
+    // Programar apagado automático a los 10 segundos
+    this.scheduleAutoOff(ledIndex, 10_000);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  // Helpers privados
+  // ──────────────────────────────────────────────────────────
+
+  private scheduleAutoOff(ledIndex: number, delayMs: number): void {
+    const timeout = setTimeout(() => {
+      this.ledService.turnOff(ledIndex);
+      this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, auto: true });
+      this.activeTimeouts.delete(ledIndex);
+      this.logger.log(`💤 LED ${ledIndex} apagado automáticamente (${delayMs / 1000}s)`);
+    }, delayMs);
+
+    this.activeTimeouts.set(ledIndex, timeout);
+  }
+
+  private cancelAutoOff(ledIndex: number): void {
+    const existing = this.activeTimeouts.get(ledIndex);
+    if (existing) {
+      clearTimeout(existing);
+      this.activeTimeouts.delete(ledIndex);
+    }
+  }
+}
+
+================
+File: backend/src/main.ts
+================
+import { NestFactory } from '@nestjs/core';
+import { ValidationPipe, Logger } from '@nestjs/common';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const logger = new Logger('GearTrace');
+  const app = await NestFactory.create(AppModule);
+
+  // Prefijo global de la API REST
+  app.setGlobalPrefix('api');
+
+  // Validación automática de DTOs con class-validator
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,       // Elimina campos no declarados en el DTO
+      forbidNonWhitelisted: true,
+      transform: true,       // Transforma payloads al tipo del DTO
+    }),
+  );
+
+  // CORS dinámico para desarrollo local, Vercel, túneles Ngrok y red local (Raspberry Pi)
+  const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:3000',
+    'http://geartrace.local',
+    ...configuredOrigins,
+  ];
+
+  const isAllowedDynamicOrigin = (origin: string): boolean => {
+    try {
+      const { hostname, protocol } = new URL(origin);
+      const normalizedHostname = hostname.toLowerCase();
+
+      const isVercel = normalizedHostname.endsWith('.vercel.app');
+      const isNgrok = normalizedHostname.includes('ngrok');
+      const isLocalhost =
+        normalizedHostname === 'localhost' ||
+        normalizedHostname === '127.0.0.1' ||
+        normalizedHostname === '::1';
+      const isPrivateNetwork =
+        /^(192\.168|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname) ||
+        /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(normalizedHostname);
+
+      return (
+        (isVercel || isNgrok || isLocalhost || isPrivateNetwork) &&
+        (protocol === 'http:' || protocol === 'https:')
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      // 1. Permitir peticiones sin header Origin (Alexa Skills Kit, curl, Postman, llamadas internas)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // 2. Orígenes estáticos permitidos (localhost, dominios definidos)
+      if (defaultAllowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // Vercel, túneles Ngrok, localhost y direcciones privadas de la red local.
+      if (isAllowedDynamicOrigin(origin)) {
+        return callback(null, true);
+      }
+
+      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
+      return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'ngrok-skip-browser-warning',
+    ],
+    credentials: true,
+  });
+
+  const port = process.env.PORT ?? 3000;
+  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
+  await app.listen(port, '0.0.0.0');
+
+  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
+  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
+  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
+}
+
+bootstrap();
 
 ================
 File: backend/package.json
@@ -5235,6 +7041,29 @@ File: backend/package.json
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
+  }
+}
+
+================
+File: frontend/src/components/Dashboard.tsx
+================
+import { useAuth } from '../contexts/AuthContext';
+import ClienteDashboard from './ClienteDashboard';
+import GerenteDashboard from './GerenteDashboard';
+import MecanicoDashboard from './MecanicoDashboard';
+
+export default function Dashboard() {
+  const { user } = useAuth();
+
+  switch (user?.role) {
+    case 'GERENTE':
+      return <GerenteDashboard />;
+    case 'MECANICO':
+      return <MecanicoDashboard />;
+    case 'CLIENTE':
+      return <ClienteDashboard />;
+    default:
+      return <p className="text-slate-400">No se pudo determinar el rol del usuario.</p>;
   }
 }
 
