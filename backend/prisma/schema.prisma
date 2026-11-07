@@ -26,25 +26,47 @@ enum Role {
   CLIENTE
 }
 
+enum WorkOrderStatus {
+  PENDIENTE
+  EN_DIAGNOSTICO
+  EN_PROGRESO
+  CERRADA
+}
+
+enum AppointmentStatus {
+  AGENDADA
+  CONFIRMADA
+  COMPLETADA
+  CANCELADA
+}
+
+enum PurchaseOrderStatus {
+  PENDIENTE
+  RECIBIDA
+  CANCELADA
+}
+
 // ────────────────────────────────────────────────────────────
 // User: Usuarios del sistema GearTrace
 // ────────────────────────────────────────────────────────────
 model User {
-  id           Int      @id @default(autoincrement())
-  name         String   @db.VarChar(150)
-  email        String   @unique @db.VarChar(255)
+  id    Int    @id @default(autoincrement())
+  name  String @db.VarChar(150)
+  email String @unique @db.VarChar(255)
 
   /// Contraseña hasheada con bcrypt (nunca texto plano)
-  password     String   @db.VarChar(255)
+  password String @db.VarChar(255)
 
-  role         Role     @default(CLIENTE)
-  isActive     Boolean  @default(true) @map("is_active")
+  role     Role    @default(CLIENTE)
+  isActive Boolean @default(true) @map("is_active")
 
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   /// Historial de búsquedas realizadas por este usuario
-  searchLogs   SearchLog[]
+  searchLogs SearchLog[]
+  vehicles   Vehicle[]
+  workOrders WorkOrder[] @relation("AssignedMechanic")
 
   @@map("users")
 }
@@ -58,22 +80,22 @@ model User {
 //  - location: Referencia textual adicional (ej: "Estante A, Nivel 2")
 // ────────────────────────────────────────────────────────────
 model Box {
-  id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(100)
-  description String?  @db.VarChar(255)
+  id          Int     @id @default(autoincrement())
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
 
   /// Índice del LED en la tira WS2812B (0 a 4, inclusive)
   /// Debe ser único: cada caja tiene su propio LED
-  ledIndex    Int      @unique @map("led_index")
+  ledIndex Int @unique @map("led_index")
 
-  location    String?  @db.VarChar(150)
-  colorHex    String   @default("#FF6600") @map("color_hex") @db.VarChar(7)
+  location String? @db.VarChar(150)
+  colorHex String  @default("#FF6600") @map("color_hex") @db.VarChar(7)
 
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relación: Una caja contiene muchas piezas
-  parts       Part[]
+  parts Part[]
 
   @@map("boxes")
 }
@@ -88,37 +110,39 @@ model Box {
 //              (Alexa puede decir "filtro de aceite" o "filtro")
 // ────────────────────────────────────────────────────────────
 model Part {
-  id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(150)
+  id   Int    @id @default(autoincrement())
+  name String @db.VarChar(150)
 
   /// Código de catálogo único (ej: "FLT-OIL-001")
-  code        String   @unique @db.VarChar(50)
+  code String @unique @db.VarChar(50)
 
   /// Stock actual de unidades
-  quantity    Int      @default(0)
+  quantity Int @default(0)
 
   /// Foto de la pieza (puede ser null si no tiene imagen aún)
-  photoUrl    String?  @map("photo_url") @db.VarChar(500)
+  photoUrl String? @map("photo_url") @db.VarChar(500)
 
   /// Descripción técnica de la pieza
-  description String?  @db.Text
+  description String? @db.Text
 
   /// Palabras clave para búsqueda por voz con Alexa
   /// Se almacena como array de strings en PostgreSQL
-  keywords    String[] @default([])
+  keywords String[] @default([])
 
   /// Stock mínimo antes de alertar reabastecimiento
-  minStock    Int      @default(1) @map("min_stock")
+  minStock Int @default(1) @map("min_stock")
 
   /// Precio unitario de referencia (en la moneda local)
-  unitPrice   Decimal? @map("unit_price") @db.Decimal(10, 2)
+  unitPrice Decimal? @map("unit_price") @db.Decimal(10, 2)
 
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relación: Una pieza pertenece a una sola caja
-  boxId       Int      @map("box_id")
-  box         Box      @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  boxId              Int                 @map("box_id")
+  box                Box                 @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  purchaseOrderItems PurchaseOrderItem[]
+  workOrderItems     WorkOrderItem[]
 
   @@index([name])
   @@index([boxId])
@@ -132,27 +156,149 @@ model Part {
 //  Útil para analítica y depuración del Webhook.
 // ────────────────────────────────────────────────────────────
 model SearchLog {
-  id          Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   /// El texto que Alexa recibió del usuario
-  query       String   @db.VarChar(255)
+  query String @db.VarChar(255)
 
   /// La pieza encontrada (null si no se encontró)
-  partId      Int?     @map("part_id")
+  partId Int? @map("part_id")
 
   /// ¿Se encontró la pieza?
-  found       Boolean  @default(false)
+  found Boolean @default(false)
 
   /// Respuesta que se devolvió a Alexa (para auditoría)
   alexaResponse String? @map("alexa_response") @db.Text
 
   /// Usuario que realizó la búsqueda (null si fue Alexa directo)
-  userId      Int?     @map("user_id")
-  user        User?    @relation(fields: [userId], references: [id])
+  userId Int?  @map("user_id")
+  user   User? @relation(fields: [userId], references: [id])
 
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([query])
   @@index([userId])
   @@map("search_logs")
+}
+
+model Vehicle {
+  id      Int     @id @default(autoincrement())
+  plate   String  @unique @db.VarChar(20)
+  make    String  @db.VarChar(80)
+  model   String  @db.VarChar(80)
+  year    Int?
+  vin     String? @unique @db.VarChar(17)
+  color   String? @db.VarChar(50)
+  ownerId Int     @map("owner_id")
+  owner   User    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  workOrders   WorkOrder[]
+  appointments Appointment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@map("vehicles")
+}
+
+model WorkOrder {
+  id            Int             @id @default(autoincrement())
+  number        String          @unique @db.VarChar(30)
+  description   String          @db.Text
+  diagnosis     String?         @db.Text
+  status        WorkOrderStatus @default(PENDIENTE)
+  estimatedCost Decimal?        @map("estimated_cost") @db.Decimal(10, 2)
+  finalCost     Decimal?        @map("final_cost") @db.Decimal(10, 2)
+  vehicleId     Int             @map("vehicle_id")
+  mechanicId    Int?            @map("mechanic_id")
+  vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
+  parts         WorkOrderItem[]
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([vehicleId])
+  @@index([mechanicId])
+  @@index([status])
+  @@map("work_orders")
+}
+
+model Appointment {
+  id          Int               @id @default(autoincrement())
+  scheduledAt DateTime          @map("scheduled_at")
+  reason      String?           @db.VarChar(255)
+  status      AppointmentStatus @default(AGENDADA)
+  vehicleId   Int               @map("vehicle_id")
+  vehicle     Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([vehicleId, scheduledAt])
+  @@map("appointments")
+}
+
+model WorkOrderItem {
+  id          Int       @id @default(autoincrement())
+  quantity    Int
+  workOrderId Int       @map("work_order_id")
+  partId      Int       @map("part_id")
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  part        Part      @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([workOrderId, partId])
+  @@index([partId])
+  @@map("work_order_items")
+}
+
+model Supplier {
+  id             Int             @id @default(autoincrement())
+  name           String          @db.VarChar(150)
+  taxId          String?         @unique @map("tax_id") @db.VarChar(50)
+  contactName    String?         @map("contact_name") @db.VarChar(150)
+  email          String?         @db.VarChar(255)
+  phone          String?         @db.VarChar(50)
+  address        String?         @db.VarChar(255)
+  purchaseOrders PurchaseOrder[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id         Int                 @id @default(autoincrement())
+  number     String              @unique @db.VarChar(30)
+  status     PurchaseOrderStatus @default(PENDIENTE)
+  orderedAt  DateTime            @default(now()) @map("ordered_at")
+  receivedAt DateTime?           @map("received_at")
+  supplierId Int                 @map("supplier_id")
+  supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items      PurchaseOrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              Int           @id @default(autoincrement())
+  quantity        Int
+  unitPrice       Decimal?      @map("unit_price") @db.Decimal(10, 2)
+  purchaseOrderId Int           @map("purchase_order_id")
+  partId          Int           @map("part_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  part            Part          @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([purchaseOrderId, partId])
+  @@index([partId])
+  @@map("purchase_order_items")
 }

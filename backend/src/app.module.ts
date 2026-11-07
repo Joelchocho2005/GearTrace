@@ -8,6 +8,9 @@ import { AlexaModule } from './alexa/alexa.module';
 import { LedModule } from './led/led.module';
 import { AuthModule } from './auth/auth.module';
 import { SearchLogModule } from './logs/search-log.module';
+import { ClientModule } from './client/client.module';
+import { ServiceModule } from './service/service.module';
+import { SupplierModule } from './supplier/supplier.module';
 
 @Module({
   imports: [
@@ -28,6 +31,9 @@ import { SearchLogModule } from './logs/search-log.module';
     AlexaModule,
     LedModule,
     SearchLogModule,
+    ClientModule,
+    ServiceModule,
+    SupplierModule,
   ],
 })
 export class AppModule {}

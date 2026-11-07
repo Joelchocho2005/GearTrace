@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -10,7 +11,8 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
 import { JwtPayload } from './auth.types';
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -129,6 +131,43 @@ export class AuthService {
       data: { role },
       select: { id: true, name: true, email: true, role: true },
     });
+  }
+
+  async updateUser(userId: number, dto: UpdateUserDto) {
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const data = {
+      ...dto,
+      password: dto.password
+        ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
+        : undefined,
+    };
+
+    try {
+      return await this.prisma.user.update({
+        where: { id: userId },
+        data,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          isActive: true,
+          updatedAt: true,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('El correo electrónico ya está registrado');
+      }
+      throw error;
+    }
   }
 
   // ──────────────────────────────────────────────────────────

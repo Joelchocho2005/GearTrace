@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles, CurrentUser } from './decorators/auth.decorators';
@@ -82,6 +83,17 @@ export class AuthController {
     @Body('role') role: Role,
   ) {
     return this.authService.changeUserRole(id, role);
+  }
+
+  /** PATCH /api/auth/users/:id → Editar el perfil completo de un usuario */
+  @Patch('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  updateUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateUserDto,
+  ) {
+    return this.authService.updateUser(id, dto);
   }
 
   /** PATCH /api/auth/users/:id/toggle → Activar/desactivar usuario */

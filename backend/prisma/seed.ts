@@ -1,4 +1,4 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient, Role, WorkOrderStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -53,7 +53,51 @@ async function main() {
 
   console.log(`✅ Usuarios creados: ${gerente.email}, ${mecanico.email}, ${cliente.email}`);
 
-  // 3. Crear Cajas (solo si no existen)
+  // 3. Crear vehículos de prueba
+  console.log('🚗 Creando vehículos de prueba...');
+
+  const vehiculoCliente = await prisma.vehicle.upsert({
+    where: { plate: 'ABC-123' },
+    update: { ownerId: cliente.id },
+    create: {
+      plate: 'ABC-123',
+      make: 'Toyota',
+      model: 'Corolla',
+      year: 2020,
+      color: 'Blanco',
+      ownerId: cliente.id,
+    },
+  });
+
+  const vehiculoEmpresa = await prisma.vehicle.upsert({
+    where: { plate: 'GTR-456' },
+    update: { ownerId: cliente.id },
+    create: {
+      plate: 'GTR-456',
+      make: 'Chevrolet',
+      model: 'D-Max',
+      year: 2021,
+      color: 'Gris',
+      ownerId: cliente.id,
+    },
+  });
+
+  // 4. Crear proveedor de prueba
+  const proveedor = await prisma.supplier.upsert({
+    where: { taxId: '0999999999001' },
+    update: {},
+    create: {
+      name: 'Autopartes Andinas',
+      taxId: '0999999999001',
+      contactName: 'Laura Mera',
+      email: 'ventas@autopartesandinas.com',
+      phone: '0999999999',
+    },
+  });
+
+  console.log(`✅ Vehículos y proveedor creados: ${vehiculoCliente.plate}, ${vehiculoEmpresa.plate}, ${proveedor.name}`);
+
+  // 5. Crear Cajas (solo si no existen)
   console.log('📦 Creando cajas físicas...');
   
   const cajasData = [
@@ -72,7 +116,7 @@ async function main() {
     });
   }
 
-  // 4. Crear Piezas
+  // 6. Crear Piezas
   console.log('⚙️ Creando inventario de piezas...');
   
   // Buscar caja 1 y 2 para relacionar
@@ -80,7 +124,7 @@ async function main() {
   const cajaB = await prisma.box.findUnique({ where: { ledIndex: 1 } });
 
   if (cajaA && cajaB) {
-    await prisma.part.upsert({
+    const filtroAceite = await prisma.part.upsert({
       where: { code: 'FLT-OIL-001' },
       update: {},
       create: {
@@ -93,7 +137,7 @@ async function main() {
       },
     });
 
-    await prisma.part.upsert({
+    const pastillasFreno = await prisma.part.upsert({
       where: { code: 'BRK-PAD-001' },
       update: {},
       create: {
@@ -105,7 +149,49 @@ async function main() {
         keywords: ['pastillas', 'frenos', 'pastillas freno'],
       },
     });
+
+    await prisma.purchaseOrder.upsert({
+      where: { number: 'PO-0001' },
+      update: { supplierId: proveedor.id },
+      create: {
+        number: 'PO-0001',
+        supplierId: proveedor.id,
+        items: {
+          create: [
+            { partId: filtroAceite.id, quantity: 20, unitPrice: 8.5 },
+            { partId: pastillasFreno.id, quantity: 10, unitPrice: 25 },
+          ],
+        },
+      },
+    });
   }
+
+  // 7. Crear órdenes de trabajo ficticias
+  await prisma.workOrder.upsert({
+    where: { number: 'OT-0001' },
+    update: {},
+    create: {
+      number: 'OT-0001',
+      description: 'Cambio de aceite y filtro',
+      status: WorkOrderStatus.CERRADA,
+      finalCost: 45,
+      vehicleId: vehiculoCliente.id,
+      mechanicId: mecanico.id,
+      completedAt: new Date(),
+    },
+  });
+
+  await prisma.workOrder.upsert({
+    where: { number: 'OT-0002' },
+    update: {},
+    create: {
+      number: 'OT-0002',
+      description: 'Revisión del sistema de frenos',
+      status: WorkOrderStatus.EN_DIAGNOSTICO,
+      vehicleId: vehiculoEmpresa.id,
+      mechanicId: mecanico.id,
+    },
+  });
 
   console.log('🎉 ¡Seed finalizado exitosamente!');
 }

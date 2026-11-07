@@ -51,6 +51,10 @@ prisma/
   migrations/
     20260930141834_init/
       migration.sql
+    20261107210444_add_service_and_supply_models/
+      migration.sql
+    20261107210844_add_work_order_parts/
+      migration.sql
   schema.prisma
   seed.sql
   seed.ts
@@ -65,6 +69,7 @@ src/
       auth.decorators.ts
     dto/
       auth.dto.ts
+      update-user.dto.ts
     guards/
       jwt-auth.guard.ts
       roles.guard.ts
@@ -74,6 +79,12 @@ src/
     auth.module.ts
     auth.service.ts
     auth.types.ts
+  client/
+    dto/
+      create-appointment.dto.ts
+    client.controller.ts
+    client.module.ts
+    client.service.ts
   inventory/
     dto/
       create-box.dto.ts
@@ -94,6 +105,19 @@ src/
   prisma/
     prisma.module.ts
     prisma.service.ts
+  service/
+    dto/
+      vehicle.dto.ts
+      work-order.dto.ts
+    service.controller.ts
+    service.module.ts
+    service.service.ts
+  supplier/
+    dto/
+      purchase-order.dto.ts
+    supplier.controller.ts
+    supplier.module.ts
+    supplier.service.ts
   app.module.ts
   main.ts
 .env.example
@@ -199,6 +223,194 @@ ALTER TABLE "parts" ADD CONSTRAINT "parts_box_id_fkey" FOREIGN KEY ("box_id") RE
 ALTER TABLE "search_logs" ADD CONSTRAINT "search_logs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 ================
+File: prisma/migrations/20261107210444_add_service_and_supply_models/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "WorkOrderStatus" AS ENUM ('PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA');
+
+-- CreateEnum
+CREATE TYPE "AppointmentStatus" AS ENUM ('AGENDADA', 'CONFIRMADA', 'COMPLETADA', 'CANCELADA');
+
+-- CreateEnum
+CREATE TYPE "PurchaseOrderStatus" AS ENUM ('PENDIENTE', 'RECIBIDA', 'CANCELADA');
+
+-- CreateTable
+CREATE TABLE "vehicles" (
+    "id" SERIAL NOT NULL,
+    "plate" VARCHAR(20) NOT NULL,
+    "make" VARCHAR(80) NOT NULL,
+    "model" VARCHAR(80) NOT NULL,
+    "year" INTEGER,
+    "vin" VARCHAR(17),
+    "color" VARCHAR(50),
+    "owner_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "vehicles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "work_orders" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "description" TEXT NOT NULL,
+    "diagnosis" TEXT,
+    "status" "WorkOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "estimated_cost" DECIMAL(10,2),
+    "final_cost" DECIMAL(10,2),
+    "vehicle_id" INTEGER NOT NULL,
+    "mechanic_id" INTEGER,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "started_at" TIMESTAMP(3),
+    "completed_at" TIMESTAMP(3),
+
+    CONSTRAINT "work_orders_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "appointments" (
+    "id" SERIAL NOT NULL,
+    "scheduled_at" TIMESTAMP(3) NOT NULL,
+    "reason" VARCHAR(255),
+    "status" "AppointmentStatus" NOT NULL DEFAULT 'AGENDADA',
+    "vehicle_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "appointments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "suppliers" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "tax_id" VARCHAR(50),
+    "contact_name" VARCHAR(150),
+    "email" VARCHAR(255),
+    "phone" VARCHAR(50),
+    "address" VARCHAR(255),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "suppliers_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "purchase_orders" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "status" "PurchaseOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "ordered_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "received_at" TIMESTAMP(3),
+    "supplier_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "purchase_orders_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "purchase_order_items" (
+    "id" SERIAL NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "unit_price" DECIMAL(10,2),
+    "purchase_order_id" INTEGER NOT NULL,
+    "part_id" INTEGER NOT NULL,
+
+    CONSTRAINT "purchase_order_items_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "vehicles_plate_key" ON "vehicles"("plate");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "vehicles_vin_key" ON "vehicles"("vin");
+
+-- CreateIndex
+CREATE INDEX "vehicles_owner_id_idx" ON "vehicles"("owner_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_orders_number_key" ON "work_orders"("number");
+
+-- CreateIndex
+CREATE INDEX "work_orders_vehicle_id_idx" ON "work_orders"("vehicle_id");
+
+-- CreateIndex
+CREATE INDEX "work_orders_mechanic_id_idx" ON "work_orders"("mechanic_id");
+
+-- CreateIndex
+CREATE INDEX "work_orders_status_idx" ON "work_orders"("status");
+
+-- CreateIndex
+CREATE INDEX "appointments_vehicle_id_scheduled_at_idx" ON "appointments"("vehicle_id", "scheduled_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "suppliers_tax_id_key" ON "suppliers"("tax_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "purchase_orders_number_key" ON "purchase_orders"("number");
+
+-- CreateIndex
+CREATE INDEX "purchase_orders_supplier_id_idx" ON "purchase_orders"("supplier_id");
+
+-- CreateIndex
+CREATE INDEX "purchase_orders_status_idx" ON "purchase_orders"("status");
+
+-- CreateIndex
+CREATE INDEX "purchase_order_items_part_id_idx" ON "purchase_order_items"("part_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "purchase_order_items_purchase_order_id_part_id_key" ON "purchase_order_items"("purchase_order_id", "part_id");
+
+-- AddForeignKey
+ALTER TABLE "vehicles" ADD CONSTRAINT "vehicles_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_mechanic_id_fkey" FOREIGN KEY ("mechanic_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "appointments" ADD CONSTRAINT "appointments_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_orders" ADD CONSTRAINT "purchase_orders_supplier_id_fkey" FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
+File: prisma/migrations/20261107210844_add_work_order_parts/migration.sql
+================
+-- CreateTable
+CREATE TABLE "work_order_items" (
+    "id" SERIAL NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "work_order_id" INTEGER NOT NULL,
+    "part_id" INTEGER NOT NULL,
+
+    CONSTRAINT "work_order_items_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE INDEX "work_order_items_part_id_idx" ON "work_order_items"("part_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_order_items_work_order_id_part_id_key" ON "work_order_items"("work_order_id", "part_id");
+
+-- AddForeignKey
+ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
 File: prisma/schema.prisma
 ================
 // ============================================================
@@ -229,25 +441,47 @@ enum Role {
   CLIENTE
 }
 
+enum WorkOrderStatus {
+  PENDIENTE
+  EN_DIAGNOSTICO
+  EN_PROGRESO
+  CERRADA
+}
+
+enum AppointmentStatus {
+  AGENDADA
+  CONFIRMADA
+  COMPLETADA
+  CANCELADA
+}
+
+enum PurchaseOrderStatus {
+  PENDIENTE
+  RECIBIDA
+  CANCELADA
+}
+
 // ────────────────────────────────────────────────────────────
 // User: Usuarios del sistema GearTrace
 // ────────────────────────────────────────────────────────────
 model User {
-  id           Int      @id @default(autoincrement())
-  name         String   @db.VarChar(150)
-  email        String   @unique @db.VarChar(255)
+  id    Int    @id @default(autoincrement())
+  name  String @db.VarChar(150)
+  email String @unique @db.VarChar(255)
 
   /// Contraseña hasheada con bcrypt (nunca texto plano)
-  password     String   @db.VarChar(255)
+  password String @db.VarChar(255)
 
-  role         Role     @default(CLIENTE)
-  isActive     Boolean  @default(true) @map("is_active")
+  role     Role    @default(CLIENTE)
+  isActive Boolean @default(true) @map("is_active")
 
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   /// Historial de búsquedas realizadas por este usuario
-  searchLogs   SearchLog[]
+  searchLogs SearchLog[]
+  vehicles   Vehicle[]
+  workOrders WorkOrder[] @relation("AssignedMechanic")
 
   @@map("users")
 }
@@ -261,22 +495,22 @@ model User {
 //  - location: Referencia textual adicional (ej: "Estante A, Nivel 2")
 // ────────────────────────────────────────────────────────────
 model Box {
-  id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(100)
-  description String?  @db.VarChar(255)
+  id          Int     @id @default(autoincrement())
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
 
   /// Índice del LED en la tira WS2812B (0 a 4, inclusive)
   /// Debe ser único: cada caja tiene su propio LED
-  ledIndex    Int      @unique @map("led_index")
+  ledIndex Int @unique @map("led_index")
 
-  location    String?  @db.VarChar(150)
-  colorHex    String   @default("#FF6600") @map("color_hex") @db.VarChar(7)
+  location String? @db.VarChar(150)
+  colorHex String  @default("#FF6600") @map("color_hex") @db.VarChar(7)
 
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relación: Una caja contiene muchas piezas
-  parts       Part[]
+  parts Part[]
 
   @@map("boxes")
 }
@@ -291,37 +525,39 @@ model Box {
 //              (Alexa puede decir "filtro de aceite" o "filtro")
 // ────────────────────────────────────────────────────────────
 model Part {
-  id          Int      @id @default(autoincrement())
-  name        String   @db.VarChar(150)
+  id   Int    @id @default(autoincrement())
+  name String @db.VarChar(150)
 
   /// Código de catálogo único (ej: "FLT-OIL-001")
-  code        String   @unique @db.VarChar(50)
+  code String @unique @db.VarChar(50)
 
   /// Stock actual de unidades
-  quantity    Int      @default(0)
+  quantity Int @default(0)
 
   /// Foto de la pieza (puede ser null si no tiene imagen aún)
-  photoUrl    String?  @map("photo_url") @db.VarChar(500)
+  photoUrl String? @map("photo_url") @db.VarChar(500)
 
   /// Descripción técnica de la pieza
-  description String?  @db.Text
+  description String? @db.Text
 
   /// Palabras clave para búsqueda por voz con Alexa
   /// Se almacena como array de strings en PostgreSQL
-  keywords    String[] @default([])
+  keywords String[] @default([])
 
   /// Stock mínimo antes de alertar reabastecimiento
-  minStock    Int      @default(1) @map("min_stock")
+  minStock Int @default(1) @map("min_stock")
 
   /// Precio unitario de referencia (en la moneda local)
-  unitPrice   Decimal? @map("unit_price") @db.Decimal(10, 2)
+  unitPrice Decimal? @map("unit_price") @db.Decimal(10, 2)
 
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relación: Una pieza pertenece a una sola caja
-  boxId       Int      @map("box_id")
-  box         Box      @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  boxId              Int                 @map("box_id")
+  box                Box                 @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  purchaseOrderItems PurchaseOrderItem[]
+  workOrderItems     WorkOrderItem[]
 
   @@index([name])
   @@index([boxId])
@@ -335,29 +571,151 @@ model Part {
 //  Útil para analítica y depuración del Webhook.
 // ────────────────────────────────────────────────────────────
 model SearchLog {
-  id          Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   /// El texto que Alexa recibió del usuario
-  query       String   @db.VarChar(255)
+  query String @db.VarChar(255)
 
   /// La pieza encontrada (null si no se encontró)
-  partId      Int?     @map("part_id")
+  partId Int? @map("part_id")
 
   /// ¿Se encontró la pieza?
-  found       Boolean  @default(false)
+  found Boolean @default(false)
 
   /// Respuesta que se devolvió a Alexa (para auditoría)
   alexaResponse String? @map("alexa_response") @db.Text
 
   /// Usuario que realizó la búsqueda (null si fue Alexa directo)
-  userId      Int?     @map("user_id")
-  user        User?    @relation(fields: [userId], references: [id])
+  userId Int?  @map("user_id")
+  user   User? @relation(fields: [userId], references: [id])
 
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([query])
   @@index([userId])
   @@map("search_logs")
+}
+
+model Vehicle {
+  id      Int     @id @default(autoincrement())
+  plate   String  @unique @db.VarChar(20)
+  make    String  @db.VarChar(80)
+  model   String  @db.VarChar(80)
+  year    Int?
+  vin     String? @unique @db.VarChar(17)
+  color   String? @db.VarChar(50)
+  ownerId Int     @map("owner_id")
+  owner   User    @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  workOrders   WorkOrder[]
+  appointments Appointment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@map("vehicles")
+}
+
+model WorkOrder {
+  id            Int             @id @default(autoincrement())
+  number        String          @unique @db.VarChar(30)
+  description   String          @db.Text
+  diagnosis     String?         @db.Text
+  status        WorkOrderStatus @default(PENDIENTE)
+  estimatedCost Decimal?        @map("estimated_cost") @db.Decimal(10, 2)
+  finalCost     Decimal?        @map("final_cost") @db.Decimal(10, 2)
+  vehicleId     Int             @map("vehicle_id")
+  mechanicId    Int?            @map("mechanic_id")
+  vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
+  parts         WorkOrderItem[]
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([vehicleId])
+  @@index([mechanicId])
+  @@index([status])
+  @@map("work_orders")
+}
+
+model Appointment {
+  id          Int               @id @default(autoincrement())
+  scheduledAt DateTime          @map("scheduled_at")
+  reason      String?           @db.VarChar(255)
+  status      AppointmentStatus @default(AGENDADA)
+  vehicleId   Int               @map("vehicle_id")
+  vehicle     Vehicle           @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([vehicleId, scheduledAt])
+  @@map("appointments")
+}
+
+model WorkOrderItem {
+  id          Int       @id @default(autoincrement())
+  quantity    Int
+  workOrderId Int       @map("work_order_id")
+  partId      Int       @map("part_id")
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  part        Part      @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([workOrderId, partId])
+  @@index([partId])
+  @@map("work_order_items")
+}
+
+model Supplier {
+  id             Int             @id @default(autoincrement())
+  name           String          @db.VarChar(150)
+  taxId          String?         @unique @map("tax_id") @db.VarChar(50)
+  contactName    String?         @map("contact_name") @db.VarChar(150)
+  email          String?         @db.VarChar(255)
+  phone          String?         @db.VarChar(50)
+  address        String?         @db.VarChar(255)
+  purchaseOrders PurchaseOrder[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id         Int                 @id @default(autoincrement())
+  number     String              @unique @db.VarChar(30)
+  status     PurchaseOrderStatus @default(PENDIENTE)
+  orderedAt  DateTime            @default(now()) @map("ordered_at")
+  receivedAt DateTime?           @map("received_at")
+  supplierId Int                 @map("supplier_id")
+  supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items      PurchaseOrderItem[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([supplierId])
+  @@index([status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              Int           @id @default(autoincrement())
+  quantity        Int
+  unitPrice       Decimal?      @map("unit_price") @db.Decimal(10, 2)
+  purchaseOrderId Int           @map("purchase_order_id")
+  partId          Int           @map("part_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  part            Part          @relation(fields: [partId], references: [id], onDelete: Restrict)
+
+  @@unique([purchaseOrderId, partId])
+  @@index([partId])
+  @@map("purchase_order_items")
 }
 
 ================
@@ -397,7 +755,7 @@ ON CONFLICT DO NOTHING;
 ================
 File: prisma/seed.ts
 ================
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient, Role, WorkOrderStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -452,7 +810,51 @@ async function main() {
 
   console.log(`✅ Usuarios creados: ${gerente.email}, ${mecanico.email}, ${cliente.email}`);
 
-  // 3. Crear Cajas (solo si no existen)
+  // 3. Crear vehículos de prueba
+  console.log('🚗 Creando vehículos de prueba...');
+
+  const vehiculoCliente = await prisma.vehicle.upsert({
+    where: { plate: 'ABC-123' },
+    update: { ownerId: cliente.id },
+    create: {
+      plate: 'ABC-123',
+      make: 'Toyota',
+      model: 'Corolla',
+      year: 2020,
+      color: 'Blanco',
+      ownerId: cliente.id,
+    },
+  });
+
+  const vehiculoEmpresa = await prisma.vehicle.upsert({
+    where: { plate: 'GTR-456' },
+    update: { ownerId: cliente.id },
+    create: {
+      plate: 'GTR-456',
+      make: 'Chevrolet',
+      model: 'D-Max',
+      year: 2021,
+      color: 'Gris',
+      ownerId: cliente.id,
+    },
+  });
+
+  // 4. Crear proveedor de prueba
+  const proveedor = await prisma.supplier.upsert({
+    where: { taxId: '0999999999001' },
+    update: {},
+    create: {
+      name: 'Autopartes Andinas',
+      taxId: '0999999999001',
+      contactName: 'Laura Mera',
+      email: 'ventas@autopartesandinas.com',
+      phone: '0999999999',
+    },
+  });
+
+  console.log(`✅ Vehículos y proveedor creados: ${vehiculoCliente.plate}, ${vehiculoEmpresa.plate}, ${proveedor.name}`);
+
+  // 5. Crear Cajas (solo si no existen)
   console.log('📦 Creando cajas físicas...');
   
   const cajasData = [
@@ -471,7 +873,7 @@ async function main() {
     });
   }
 
-  // 4. Crear Piezas
+  // 6. Crear Piezas
   console.log('⚙️ Creando inventario de piezas...');
   
   // Buscar caja 1 y 2 para relacionar
@@ -479,7 +881,7 @@ async function main() {
   const cajaB = await prisma.box.findUnique({ where: { ledIndex: 1 } });
 
   if (cajaA && cajaB) {
-    await prisma.part.upsert({
+    const filtroAceite = await prisma.part.upsert({
       where: { code: 'FLT-OIL-001' },
       update: {},
       create: {
@@ -492,7 +894,7 @@ async function main() {
       },
     });
 
-    await prisma.part.upsert({
+    const pastillasFreno = await prisma.part.upsert({
       where: { code: 'BRK-PAD-001' },
       update: {},
       create: {
@@ -504,7 +906,49 @@ async function main() {
         keywords: ['pastillas', 'frenos', 'pastillas freno'],
       },
     });
+
+    await prisma.purchaseOrder.upsert({
+      where: { number: 'PO-0001' },
+      update: { supplierId: proveedor.id },
+      create: {
+        number: 'PO-0001',
+        supplierId: proveedor.id,
+        items: {
+          create: [
+            { partId: filtroAceite.id, quantity: 20, unitPrice: 8.5 },
+            { partId: pastillasFreno.id, quantity: 10, unitPrice: 25 },
+          ],
+        },
+      },
+    });
   }
+
+  // 7. Crear órdenes de trabajo ficticias
+  await prisma.workOrder.upsert({
+    where: { number: 'OT-0001' },
+    update: {},
+    create: {
+      number: 'OT-0001',
+      description: 'Cambio de aceite y filtro',
+      status: WorkOrderStatus.CERRADA,
+      finalCost: 45,
+      vehicleId: vehiculoCliente.id,
+      mechanicId: mecanico.id,
+      completedAt: new Date(),
+    },
+  });
+
+  await prisma.workOrder.upsert({
+    where: { number: 'OT-0002' },
+    update: {},
+    create: {
+      number: 'OT-0002',
+      description: 'Revisión del sistema de frenos',
+      status: WorkOrderStatus.EN_DIAGNOSTICO,
+      vehicleId: vehiculoEmpresa.id,
+      mechanicId: mecanico.id,
+    },
+  });
 
   console.log('🎉 ¡Seed finalizado exitosamente!');
 }
@@ -1117,6 +1561,37 @@ export class RegisterDto {
 }
 
 ================
+File: src/auth/dto/update-user.dto.ts
+================
+import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Role } from '@prisma/client';
+
+export class UpdateUserDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  name?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password?: string;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+================
 File: src/auth/guards/jwt-auth.guard.ts
 ================
 import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
@@ -1292,6 +1767,7 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles, CurrentUser } from './decorators/auth.decorators';
@@ -1364,6 +1840,17 @@ export class AuthController {
     return this.authService.changeUserRole(id, role);
   }
 
+  /** PATCH /api/auth/users/:id → Editar el perfil completo de un usuario */
+  @Patch('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.GERENTE)
+  updateUser(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateUserDto,
+  ) {
+    return this.authService.updateUser(id, dto);
+  }
+
   /** PATCH /api/auth/users/:id/toggle → Activar/desactivar usuario */
   @Patch('users/:id/toggle')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -1419,6 +1906,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -1427,7 +1915,8 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
 import { JwtPayload } from './auth.types';
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -1548,6 +2037,43 @@ export class AuthService {
     });
   }
 
+  async updateUser(userId: number, dto: UpdateUserDto) {
+    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const data = {
+      ...dto,
+      password: dto.password
+        ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
+        : undefined,
+    };
+
+    try {
+      return await this.prisma.user.update({
+        where: { id: userId },
+        data,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          isActive: true,
+          updatedAt: true,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('El correo electrónico ya está registrado');
+      }
+      throw error;
+    }
+  }
+
   // ──────────────────────────────────────────────────────────
   // JWT helpers
   // ──────────────────────────────────────────────────────────
@@ -1596,6 +2122,142 @@ export interface AuthenticatedUser {
   email: string;
   role: Role;
   name: string;
+}
+
+================
+File: src/client/dto/create-appointment.dto.ts
+================
+import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+
+export class CreateAppointmentDto {
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+}
+
+================
+File: src/client/client.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { ClientService } from './client.service';
+
+@Controller('client')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.CLIENTE)
+export class ClientController {
+  constructor(private readonly clientService: ClientService) {}
+
+  @Get('vehicles')
+  findMyVehicles(@CurrentUser() user: AuthenticatedUser) {
+    return this.clientService.findMyVehicles(user.id);
+  }
+
+  @Post('appointments')
+  @HttpCode(HttpStatus.CREATED)
+  createAppointment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateAppointmentDto,
+  ) {
+    return this.clientService.createAppointment(user.id, dto);
+  }
+
+  @Get('work-orders')
+  findMyWorkOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.clientService.findMyWorkOrders(user.id);
+  }
+}
+
+================
+File: src/client/client.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ClientController } from './client.controller';
+import { ClientService } from './client.service';
+
+@Module({
+  controllers: [ClientController],
+  providers: [ClientService],
+})
+export class ClientModule {}
+
+================
+File: src/client/client.service.ts
+================
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateAppointmentDto } from './dto/create-appointment.dto';
+
+@Injectable()
+export class ClientService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findMyVehicles(ownerId: number) {
+    return this.prisma.vehicle.findMany({
+      where: { ownerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createAppointment(ownerId: number, dto: CreateAppointmentDto) {
+    const vehicle = await this.prisma.vehicle.findFirst({
+      where: { id: dto.vehicleId, ownerId },
+    });
+    if (!vehicle) {
+      throw new NotFoundException('El vehículo no pertenece al cliente autenticado');
+    }
+
+    const scheduledAt = new Date(dto.scheduledAt);
+    if (scheduledAt <= new Date()) {
+      throw new BadRequestException('La cita debe agendarse para una fecha futura');
+    }
+
+    return this.prisma.appointment.create({
+      data: {
+        scheduledAt,
+        reason: dto.reason,
+        vehicleId: dto.vehicleId,
+      },
+      include: { vehicle: true },
+    });
+  }
+
+  findMyWorkOrders(ownerId: number) {
+    return this.prisma.workOrder.findMany({
+      where: { vehicle: { ownerId } },
+      include: {
+        vehicle: true,
+        mechanic: { select: { id: true, name: true, email: true } },
+        parts: { include: { part: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 }
 
 ================
@@ -2493,7 +3155,8 @@ export interface LedActivatedPayload {
 }
 
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: { origin: ['https://gear-trace.vercel.app', 'http://localhost:5173'],
+    credentials: true,},
   namespace: '/',
   transports: ['websocket', 'polling'],
 })
@@ -2759,6 +3422,742 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 }
 
 ================
+File: src/service/dto/vehicle.dto.ts
+================
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+
+export class CreateVehicleDto {
+  @IsString()
+  @MaxLength(20)
+  plate: string;
+
+  @IsString()
+  @MaxLength(80)
+  make: string;
+
+  @IsString()
+  @MaxLength(80)
+  model: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1886)
+  @Max(2100)
+  year?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(17)
+  vin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  color?: string;
+
+  @IsInt()
+  @Min(1)
+  ownerId: number;
+}
+
+export class UpdateVehicleDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  plate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  make?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  model?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1886)
+  @Max(2100)
+  year?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(17)
+  vin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  color?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  ownerId?: number;
+}
+
+================
+File: src/service/dto/work-order.dto.ts
+================
+import { WorkOrderStatus } from '@prisma/client';
+import {
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class WorkOrderPartDto {
+  @IsInt()
+  @Min(1)
+  partId: number;
+
+  @IsInt()
+  @Min(1)
+  quantity: number;
+}
+
+export class CreateWorkOrderDto {
+  @IsString()
+  @MaxLength(30)
+  number: string;
+
+  @IsString()
+  description: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  estimatedCost?: number;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  mechanicId?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkOrderPartDto)
+  parts?: WorkOrderPartDto[];
+}
+
+export class UpdateWorkOrderStatusDto {
+  @IsEnum(WorkOrderStatus)
+  status: WorkOrderStatus;
+}
+
+export class DiagnoseWorkOrderDto {
+  @IsString()
+  diagnosis: string;
+}
+
+export class CloseWorkOrderDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  finalCost?: number;
+}
+
+================
+File: src/service/service.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import {
+  CloseWorkOrderDto,
+  CreateWorkOrderDto,
+  DiagnoseWorkOrderDto,
+  UpdateWorkOrderStatusDto,
+} from './dto/work-order.dto';
+import { ServiceService } from './service.service';
+
+@Controller('service')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.MECANICO, Role.GERENTE)
+export class ServiceController {
+  constructor(private readonly serviceService: ServiceService) {}
+
+  @Get('vehicles')
+  findVehicles() {
+    return this.serviceService.findVehicles();
+  }
+
+  @Get('vehicles/:id')
+  findVehicle(@Param('id', ParseIntPipe) id: number) {
+    return this.serviceService.findVehicle(id);
+  }
+
+  @Post('vehicles')
+  @HttpCode(HttpStatus.CREATED)
+  createVehicle(@Body() dto: CreateVehicleDto) {
+    return this.serviceService.createVehicle(dto);
+  }
+
+  @Patch('vehicles/:id')
+  updateVehicle(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateVehicleDto,
+  ) {
+    return this.serviceService.updateVehicle(id, dto);
+  }
+
+  @Delete('vehicles/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeVehicle(@Param('id', ParseIntPipe) id: number) {
+    return this.serviceService.removeVehicle(id);
+  }
+
+  @Get('work-orders')
+  findWorkOrders() {
+    return this.serviceService.findWorkOrders();
+  }
+
+  @Post('work-orders')
+  @HttpCode(HttpStatus.CREATED)
+  createWorkOrder(@Body() dto: CreateWorkOrderDto) {
+    return this.serviceService.createWorkOrder(dto);
+  }
+
+  @Patch('work-orders/:id/status')
+  updateWorkOrderStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateWorkOrderStatusDto,
+  ) {
+    return this.serviceService.updateWorkOrderStatus(id, dto.status);
+  }
+
+  @Patch('work-orders/:id/diagnosis')
+  diagnoseWorkOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DiagnoseWorkOrderDto,
+  ) {
+    return this.serviceService.diagnoseWorkOrder(id, dto.diagnosis);
+  }
+
+  @Patch('work-orders/:id/close')
+  closeWorkOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CloseWorkOrderDto,
+  ) {
+    return this.serviceService.closeWorkOrder(id, dto.finalCost);
+  }
+}
+
+================
+File: src/service/service.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ServiceController } from './service.controller';
+import { ServiceService } from './service.service';
+
+@Module({
+  controllers: [ServiceController],
+  providers: [ServiceService],
+})
+export class ServiceModule {}
+
+================
+File: src/service/service.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, WorkOrderStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
+import { CreateWorkOrderDto } from './dto/work-order.dto';
+
+@Injectable()
+export class ServiceService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findVehicles() {
+    return this.prisma.vehicle.findMany({
+      include: { owner: { select: { id: true, name: true, email: true } } },
+      orderBy: { plate: 'asc' },
+    });
+  }
+
+  async findVehicle(id: number) {
+    const vehicle = await this.prisma.vehicle.findUnique({
+      where: { id },
+      include: { owner: true, workOrders: true, appointments: true },
+    });
+    if (!vehicle) throw new NotFoundException(`Vehículo con id ${id} no encontrado`);
+    return vehicle;
+  }
+
+  async createVehicle(dto: CreateVehicleDto) {
+    await this.ensureUser(dto.ownerId);
+    try {
+      return await this.prisma.vehicle.create({ data: dto });
+    } catch (error) {
+      this.throwUniqueVehicleError(error);
+      throw error;
+    }
+  }
+
+  async updateVehicle(id: number, dto: UpdateVehicleDto) {
+    await this.findVehicle(id);
+    if (dto.ownerId !== undefined) await this.ensureUser(dto.ownerId);
+    try {
+      return await this.prisma.vehicle.update({ where: { id }, data: dto });
+    } catch (error) {
+      this.throwUniqueVehicleError(error);
+      throw error;
+    }
+  }
+
+  async removeVehicle(id: number) {
+    await this.findVehicle(id);
+    try {
+      await this.prisma.vehicle.delete({ where: { id } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
+        throw new ConflictException('No se puede eliminar un vehículo con órdenes o citas asociadas');
+      }
+      throw error;
+    }
+  }
+
+  findWorkOrders() {
+    return this.prisma.workOrder.findMany({
+      include: {
+        vehicle: true,
+        mechanic: { select: { id: true, name: true, email: true } },
+        parts: { include: { part: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createWorkOrder(dto: CreateWorkOrderDto) {
+    await this.findVehicle(dto.vehicleId);
+    if (dto.mechanicId !== undefined) await this.ensureMechanic(dto.mechanicId);
+    if (dto.parts) await this.ensureParts(dto.parts);
+
+    try {
+      return await this.prisma.workOrder.create({
+        data: {
+          number: dto.number,
+          description: dto.description,
+          estimatedCost: dto.estimatedCost,
+          vehicleId: dto.vehicleId,
+          mechanicId: dto.mechanicId,
+          parts: dto.parts
+            ? { create: dto.parts.map((part) => ({ partId: part.partId, quantity: part.quantity })) }
+            : undefined,
+        },
+        include: { vehicle: true, parts: { include: { part: true } } },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Ya existe una orden con el número "${dto.number}"`);
+      }
+      throw error;
+    }
+  }
+
+  async updateWorkOrderStatus(id: number, status: WorkOrderStatus) {
+    const order = await this.findWorkOrder(id);
+    if (order.status === WorkOrderStatus.CERRADA) {
+      throw new ConflictException('Una orden cerrada no puede cambiar de estado');
+    }
+    return this.prisma.workOrder.update({
+      where: { id },
+      data: {
+        status,
+        startedAt: status === WorkOrderStatus.EN_PROGRESO ? new Date() : undefined,
+      },
+      include: { vehicle: true, parts: { include: { part: true } } },
+    });
+  }
+
+  async diagnoseWorkOrder(id: number, diagnosis: string) {
+    await this.findWorkOrder(id);
+    return this.prisma.workOrder.update({
+      where: { id },
+      data: { diagnosis, status: WorkOrderStatus.EN_DIAGNOSTICO },
+      include: { vehicle: true, parts: { include: { part: true } } },
+    });
+  }
+
+  async closeWorkOrder(id: number, finalCost?: number) {
+    return this.prisma.$transaction(async (transaction) => {
+      const order = await transaction.workOrder.findUnique({
+        where: { id },
+        include: { parts: true },
+      });
+      if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
+      if (order.status === WorkOrderStatus.CERRADA) {
+        throw new ConflictException('La orden de trabajo ya está cerrada');
+      }
+
+      for (const item of order.parts) {
+        const updated = await transaction.part.updateMany({
+          where: { id: item.partId, quantity: { gte: item.quantity } },
+          data: { quantity: { decrement: item.quantity } },
+        });
+        if (updated.count !== 1) {
+          throw new ConflictException(`Stock insuficiente para el repuesto ${item.partId}`);
+        }
+      }
+
+      return transaction.workOrder.update({
+        where: { id },
+        data: {
+          status: WorkOrderStatus.CERRADA,
+          finalCost,
+          completedAt: new Date(),
+        },
+        include: { vehicle: true, parts: { include: { part: true } } },
+      });
+    });
+  }
+
+  private async findWorkOrder(id: number) {
+    const order = await this.prisma.workOrder.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException(`Orden de trabajo con id ${id} no encontrada`);
+    return order;
+  }
+
+  private async ensureUser(id: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+  }
+
+  private async ensureMechanic(id: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException(`Mecánico con id ${id} no encontrado`);
+    if (user.role !== 'MECANICO' && user.role !== 'GERENTE') {
+      throw new ConflictException('El usuario asignado no tiene rol de mecánico');
+    }
+  }
+
+  private async ensureParts(parts: { partId: number; quantity: number }[]) {
+    const ids = [...new Set(parts.map((part) => part.partId))];
+    const count = await this.prisma.part.count({ where: { id: { in: ids } } });
+    if (count !== ids.length) throw new NotFoundException('Una o más piezas no existen');
+  }
+
+  private throwUniqueVehicleError(error: unknown) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new ConflictException('La placa o VIN ya está registrado');
+    }
+  }
+}
+
+================
+File: src/supplier/dto/purchase-order.dto.ts
+================
+import { IsArray, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class PurchaseOrderItemDto {
+  @IsInt()
+  @Min(1)
+  partId: number;
+
+  @IsInt()
+  @Min(1)
+  quantity: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  unitPrice?: number;
+}
+
+export class CreatePurchaseOrderDto {
+  @IsString()
+  @MaxLength(30)
+  number: string;
+
+  @IsInt()
+  @Min(1)
+  supplierId: number;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PurchaseOrderItemDto)
+  items: PurchaseOrderItemDto[];
+}
+
+export class CreateSupplierDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  taxId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  contactName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address?: string;
+}
+
+================
+File: src/supplier/supplier.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import {
+  CreatePurchaseOrderDto,
+  CreateSupplierDto,
+} from './dto/purchase-order.dto';
+import { SupplierService } from './supplier.service';
+
+@Controller('suppliers')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
+export class SupplierController {
+  constructor(private readonly supplierService: SupplierService) {}
+
+  @Get()
+  findSuppliers() {
+    return this.supplierService.findSuppliers();
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  createSupplier(@Body() dto: CreateSupplierDto) {
+    return this.supplierService.createSupplier(dto);
+  }
+
+  @Get('low-stock')
+  findLowStockParts() {
+    return this.supplierService.findLowStockParts();
+  }
+
+  @Get('purchase-orders')
+  findPurchaseOrders() {
+    return this.supplierService.findPurchaseOrders();
+  }
+
+  @Post('purchase-orders')
+  @HttpCode(HttpStatus.CREATED)
+  createPurchaseOrder(@Body() dto: CreatePurchaseOrderDto) {
+    return this.supplierService.createPurchaseOrder(dto);
+  }
+
+  @Post('purchase-orders/:id/receive')
+  receivePurchaseOrder(@Param('id', ParseIntPipe) id: number) {
+    return this.supplierService.receivePurchaseOrder(id);
+  }
+}
+
+================
+File: src/supplier/supplier.module.ts
+================
+import { Module } from '@nestjs/common';
+import { SupplierController } from './supplier.controller';
+import { SupplierService } from './supplier.service';
+
+@Module({
+  controllers: [SupplierController],
+  providers: [SupplierService],
+})
+export class SupplierModule {}
+
+================
+File: src/supplier/supplier.service.ts
+================
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, PurchaseOrderStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import {
+  CreatePurchaseOrderDto,
+  CreateSupplierDto,
+} from './dto/purchase-order.dto';
+
+@Injectable()
+export class SupplierService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findSuppliers() {
+    return this.prisma.supplier.findMany({
+      include: { _count: { select: { purchaseOrders: true } } },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async createSupplier(dto: CreateSupplierDto) {
+    try {
+      return await this.prisma.supplier.create({ data: dto });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('El identificador fiscal ya está registrado');
+      }
+      throw error;
+    }
+  }
+
+  async findLowStockParts() {
+    const lowStock = await this.prisma.$queryRaw<
+      Array<{ id: number }>
+    >`SELECT id FROM parts WHERE quantity <= min_stock ORDER BY quantity ASC`;
+    if (lowStock.length === 0) return [];
+
+    return this.prisma.part.findMany({
+      where: { id: { in: lowStock.map((part) => part.id) } },
+      include: { box: true },
+      orderBy: { quantity: 'asc' },
+    });
+  }
+
+  findPurchaseOrders() {
+    return this.prisma.purchaseOrder.findMany({
+      include: { supplier: true, items: { include: { part: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async createPurchaseOrder(dto: CreatePurchaseOrderDto) {
+    if (dto.items.length === 0) {
+      throw new ConflictException('El pedido debe contener al menos una pieza');
+    }
+    await this.ensureSupplier(dto.supplierId);
+    const partIds = [...new Set(dto.items.map((item) => item.partId))];
+    const parts = await this.prisma.part.findMany({
+      where: { id: { in: partIds } },
+      select: { id: true, quantity: true, minStock: true },
+    });
+    if (parts.length !== partIds.length) {
+      throw new NotFoundException('Una o más piezas no existen');
+    }
+    const partsById = new Map(parts.map((part) => [part.id, part]));
+    const invalidPart = dto.items.find((item) => {
+      const part = partsById.get(item.partId);
+      return part && part.quantity > part.minStock;
+    });
+    if (invalidPart) {
+      throw new ConflictException(
+        `La pieza ${invalidPart.partId} no está bajo su stock mínimo`,
+      );
+    }
+
+    try {
+      return await this.prisma.purchaseOrder.create({
+        data: {
+          number: dto.number,
+          supplierId: dto.supplierId,
+          items: {
+            create: dto.items.map((item) => ({
+              partId: item.partId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+            })),
+          },
+        },
+        include: { supplier: true, items: { include: { part: true } } },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException(`Ya existe un pedido con el número "${dto.number}"`);
+      }
+      throw error;
+    }
+  }
+
+  async receivePurchaseOrder(id: number) {
+    return this.prisma.$transaction(async (transaction) => {
+      const order = await transaction.purchaseOrder.findUnique({
+        where: { id },
+        include: { items: true },
+      });
+      if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
+      if (order.status !== PurchaseOrderStatus.PENDIENTE) {
+        throw new ConflictException('Solo se pueden recibir pedidos pendientes');
+      }
+
+      for (const item of order.items) {
+        await transaction.part.update({
+          where: { id: item.partId },
+          data: { quantity: { increment: item.quantity } },
+        });
+      }
+
+      return transaction.purchaseOrder.update({
+        where: { id },
+        data: { status: PurchaseOrderStatus.RECIBIDA, receivedAt: new Date() },
+        include: { supplier: true, items: { include: { part: true } } },
+      });
+    });
+  }
+
+  private async ensureSupplier(id: number) {
+    const supplier = await this.prisma.supplier.findUnique({ where: { id } });
+    if (!supplier) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
+  }
+}
+
+================
 File: src/app.module.ts
 ================
 import { Module } from '@nestjs/common';
@@ -2771,6 +4170,9 @@ import { AlexaModule } from './alexa/alexa.module';
 import { LedModule } from './led/led.module';
 import { AuthModule } from './auth/auth.module';
 import { SearchLogModule } from './logs/search-log.module';
+import { ClientModule } from './client/client.module';
+import { ServiceModule } from './service/service.module';
+import { SupplierModule } from './supplier/supplier.module';
 
 @Module({
   imports: [
@@ -2791,6 +4193,9 @@ import { SearchLogModule } from './logs/search-log.module';
     AlexaModule,
     LedModule,
     SearchLogModule,
+    ClientModule,
+    ServiceModule,
+    SupplierModule,
   ],
 })
 export class AppModule {}
@@ -2868,7 +4273,7 @@ async function bootstrap() {
       return callback(new Error(`Origen ${origin} no permitido por CORS`), false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept','ngrok-skip-browser-warning'],
     credentials: true,
   });
 
