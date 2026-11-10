@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { AlertCircle, Eye, Inbox, Pencil, RotateCw, Trash2 } from 'lucide-react';
+import { AlertCircle, Eye, Inbox, Pencil, RotateCw, Trash2, type LucideIcon } from 'lucide-react';
 
 export interface Column<T> {
   key: string;
@@ -9,6 +9,24 @@ export interface Column<T> {
   hideOnMobile?: boolean;
   align?: 'left' | 'right';
 }
+
+/** Acción adicional de una fila (p. ej. "Recibir pedido", "Marcar pagada"). */
+export interface RowAction {
+  key: string;
+  label: string;
+  /** Texto visible del botón (≥ sm); `label` queda como tooltip y para lectores de pantalla. */
+  shortLabel: string;
+  icon: LucideIcon;
+  tone?: 'brand' | 'success' | 'danger';
+  onClick: () => void;
+}
+
+/** Acciones de negocio: botón con ícono + texto, coloreado según su efecto. */
+const actionTone: Record<NonNullable<RowAction['tone']>, string> = {
+  brand: 'border-brand-400/25 bg-brand-500/10 text-brand-300 hover:bg-brand-500/20',
+  success: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20',
+  danger: 'border-red-400/25 bg-red-500/10 text-red-300 hover:bg-red-500/20',
+};
 
 interface DataTableProps<T extends { id: number }> {
   columns: Column<T>[];
@@ -20,13 +38,17 @@ interface DataTableProps<T extends { id: number }> {
   onView?: (row: T) => void;
   onEdit?: (row: T) => void;
   onDelete?: (row: T) => void;
+  /** Si se define, Editar solo aparece en las filas que lo cumplan. */
+  isEditable?: (row: T) => boolean;
+  /** Acciones adicionales por fila; se muestran antes de Ver/Editar/Eliminar. */
+  rowActions?: (row: T) => RowAction[];
 }
 
 const SKELETON_ROWS = 5;
 
 function cellClass(column: { hideOnMobile?: boolean; align?: 'left' | 'right' }): string {
   return [
-    'px-4 py-3 sm:px-6',
+    'whitespace-nowrap px-4 py-3 sm:px-6',
     column.hideOnMobile ? 'hidden md:table-cell' : '',
     column.align === 'right' ? 'text-right' : 'text-left',
   ].join(' ');
@@ -45,8 +67,10 @@ export default function DataTable<T extends { id: number }>({
   onView,
   onEdit,
   onDelete,
+  isEditable,
+  rowActions,
 }: DataTableProps<T>) {
-  const hasActions = Boolean(onView || onEdit || onDelete);
+  const hasActions = Boolean(onView || onEdit || onDelete || rowActions);
 
   if (error && !isLoading) {
     return (
@@ -56,7 +80,7 @@ export default function DataTable<T extends { id: number }>({
         <button
           type="button"
           onClick={onRetry}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/50"
+          className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm text-slate-200 btn-secondary"
         >
           <RotateCw size={16} /> Reintentar
         </button>
@@ -66,8 +90,8 @@ export default function DataTable<T extends { id: number }>({
 
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-slate-700 text-sm">
-        <thead className="bg-slate-800 text-xs uppercase tracking-wider text-slate-400">
+      <table className="min-w-full divide-y divide-white/5 text-sm">
+        <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-slate-400">
           <tr>
             {columns.map((column) => (
               <th key={column.key} scope="col" className={`${cellClass(column)} font-semibold`}>
@@ -81,18 +105,18 @@ export default function DataTable<T extends { id: number }>({
             )}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-700/80" aria-busy={isLoading}>
+        <tbody className="divide-y divide-white/5" aria-busy={isLoading}>
           {isLoading &&
             Array.from({ length: SKELETON_ROWS }, (_, index) => (
               <tr key={index} className="animate-pulse">
                 {columns.map((column) => (
                   <td key={column.key} className={cellClass(column)}>
-                    <div className="h-4 w-3/4 rounded bg-slate-700/60" />
+                    <div className="h-4 w-3/4 rounded bg-white/10" />
                   </td>
                 ))}
                 {hasActions && (
                   <td className="px-4 py-3 sm:px-6">
-                    <div className="ml-auto h-4 w-16 rounded bg-slate-700/60" />
+                    <div className="ml-auto h-4 w-16 rounded bg-white/10" />
                   </td>
                 )}
               </tr>
@@ -111,7 +135,7 @@ export default function DataTable<T extends { id: number }>({
 
           {!isLoading &&
             rows.map((row) => (
-              <tr key={row.id} className="text-slate-300 hover:bg-slate-700/20">
+              <tr key={row.id} className="text-slate-300 transition-colors hover:bg-white/5">
                 {columns.map((column) => (
                   <td key={column.key} className={cellClass(column)}>
                     {column.render(row)}
@@ -119,18 +143,31 @@ export default function DataTable<T extends { id: number }>({
                 ))}
                 {hasActions && (
                   <td className="whitespace-nowrap px-4 py-2 text-right sm:px-6">
+                    {rowActions?.(row).map(({ key, label, shortLabel, icon: Icon, tone = 'brand', onClick }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        title={label}
+                        aria-label={label}
+                        onClick={onClick}
+                        className={`mr-1 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${actionTone[tone]}`}
+                      >
+                        <Icon size={15} />
+                        <span className="hidden sm:inline">{shortLabel}</span>
+                      </button>
+                    ))}
                     {onView && (
                       <button
                         type="button"
                         title="Ver detalles"
                         aria-label="Ver detalles"
                         onClick={() => onView(row)}
-                        className={`${actionButton} hover:bg-slate-700/60 hover:text-white`}
+                        className={`${actionButton} hover:bg-white/5 hover:text-white`}
                       >
                         <Eye size={17} />
                       </button>
                     )}
-                    {onEdit && (
+                    {onEdit && (!isEditable || isEditable(row)) && (
                       <button
                         type="button"
                         title="Editar"

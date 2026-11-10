@@ -34,3 +34,9 @@ export class CreateUserDto {
 }
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {}
+
+/** GET /api/users/lookup?role=CLIENTE → selectores de formularios. */
+export class UserLookupQueryDto {
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  role: Role;
+}

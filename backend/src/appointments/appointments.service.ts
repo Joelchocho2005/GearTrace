@@ -12,6 +12,7 @@ const APPOINTMENT_INCLUDE = {
   vehicle: {
     include: { owner: { select: { id: true, name: true, email: true } } },
   },
+  workOrder: { select: { id: true, number: true, status: true } },
 } as const;
 
 const FINAL_STATUSES: AppointmentStatus[] = [

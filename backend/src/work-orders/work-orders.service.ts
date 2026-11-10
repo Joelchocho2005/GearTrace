@@ -5,13 +5,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Role, WorkOrderStatus } from '@prisma/client';
+import { AppointmentStatus, Prisma, Role, WorkOrderStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { isPrismaError } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AddUsedPartDto,
   CreateWorkOrderDto,
+  CreateWorkOrderFromAppointmentDto,
   UpdateWorkOrderDto,
   WorkOrderPartDto,
 } from './dto/work-order.dto';
@@ -58,8 +59,10 @@ export class WorkOrdersService {
    * RF-SER-05: el código OT-YYYY-NNN se genera en la misma transacción que la orden.
    * RF-INV-13: los repuestos iniciales descuentan stock en esa misma transacción;
    * si alguno no alcanza, no se crea nada.
+   * `appointmentId` (uso interno, ver createFromAppointment): vincula la cita y
+   * la marca COMPLETADA en la misma transacción.
    */
-  async create(dto: CreateWorkOrderDto, user: AuthenticatedUser) {
+  async create(dto: CreateWorkOrderDto, user: AuthenticatedUser, appointmentId?: number) {
     const mechanicId = this.resolveMechanicId(dto.mechanicId, user);
     await this.ensureVehicle(dto.vehicleId);
     if (mechanicId !== undefined) await this.ensureMechanic(mechanicId);
@@ -76,9 +79,16 @@ export class WorkOrdersService {
             mileage: dto.mileage,
             vehicleId: dto.vehicleId,
             mechanicId,
+            appointmentId,
           },
           select: { id: true },
         });
+        if (appointmentId !== undefined) {
+          await tx.appointment.update({
+            where: { id: appointmentId },
+            data: { status: AppointmentStatus.COMPLETADA },
+          });
+        }
         for (const { partId, quantity } of dto.parts ?? []) {
           await this.consumePart(tx, order.id, partId, quantity);
         }
@@ -89,10 +99,51 @@ export class WorkOrdersService {
       });
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException('No se pudo generar un código de orden único; intenta de nuevo');
+        throw new ConflictException(
+          appointmentId !== undefined
+            ? 'La cita ya generó una orden de trabajo'
+            : 'No se pudo generar un código de orden único; intenta de nuevo',
+        );
       }
       throw error;
     }
+  }
+
+  /**
+   * Flujo cita → OT: el vehículo y el motivo salen de la cita; la cita queda
+   * COMPLETADA y vinculada (una cita genera como máximo una OT).
+   */
+  async createFromAppointment(
+    appointmentId: number,
+    dto: CreateWorkOrderFromAppointmentDto,
+    user: AuthenticatedUser,
+  ) {
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      include: { workOrder: { select: { number: true } } },
+    });
+    if (!appointment) throw new NotFoundException(`Cita con id ${appointmentId} no encontrada`);
+    if (appointment.workOrder) {
+      throw new ConflictException(`La cita ya generó la orden ${appointment.workOrder.number}`);
+    }
+    if (
+      appointment.status === AppointmentStatus.CANCELADA ||
+      appointment.status === AppointmentStatus.COMPLETADA
+    ) {
+      throw new ConflictException('Solo una cita agendada o confirmada puede generar una orden');
+    }
+
+    return this.create(
+      {
+        description: dto.description?.trim() || appointment.reason || 'Servicio agendado',
+        vehicleId: appointment.vehicleId,
+        mileage: dto.mileage,
+        estimatedCost: dto.estimatedCost,
+        mechanicId: dto.mechanicId,
+      },
+      user,
+      appointmentId,
+    );
   }
 
   async update(id: number, dto: UpdateWorkOrderDto, user: AuthenticatedUser) {
@@ -139,6 +190,39 @@ export class WorkOrdersService {
       }
 
       await this.consumePart(tx, id, dto.partId, dto.quantity);
+
+      return tx.workOrder.findUniqueOrThrow({ where: { id }, include: WORK_ORDER_INCLUDE });
+    });
+  }
+
+  /**
+   * Quita un repuesto de la orden y devuelve su cantidad al inventario, en una
+   * transacción. No aplica a órdenes concluidas.
+   */
+  async removeUsedPart(id: number, partId: number, user: AuthenticatedUser) {
+    await this.findOne(id, user); // alcance del usuario: orden ajena → 404
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
+      const order = await tx.workOrder.findUniqueOrThrow({
+        where: { id },
+        select: { status: true },
+      });
+      if (order.status === WorkOrderStatus.CONCLUIDO) {
+        throw new ConflictException('No se pueden quitar repuestos de una orden concluida');
+      }
+      const usedPart = await tx.usedPart.findUnique({
+        where: { workOrderId_partId: { workOrderId: id, partId } },
+      });
+      if (!usedPart) {
+        throw new NotFoundException('El repuesto no está registrado en esta orden');
+      }
+
+      await tx.part.update({
+        where: { id: partId },
+        data: { quantity: { increment: usedPart.quantity } },
+      });
+      await tx.usedPart.delete({ where: { id: usedPart.id } });
 
       return tx.workOrder.findUniqueOrThrow({ where: { id }, include: WORK_ORDER_INCLUDE });
     });
@@ -197,11 +281,11 @@ export class WorkOrdersService {
       where: { id: partId, quantity: { gte: quantity } },
       data: { quantity: { decrement: quantity } },
     });
+    const part = await tx.part.findUnique({
+      where: { id: partId },
+      select: { name: true, quantity: true, unitPrice: true },
+    });
     if (updated.count === 0) {
-      const part = await tx.part.findUnique({
-        where: { id: partId },
-        select: { name: true, quantity: true },
-      });
       if (!part) throw new NotFoundException(`Repuesto con id ${partId} no encontrado`);
       throw new ConflictException(
         `Stock insuficiente para "${part.name}": disponible ${part.quantity}, solicitado ${quantity}`,
@@ -210,7 +294,8 @@ export class WorkOrdersService {
 
     await tx.usedPart.upsert({
       where: { workOrderId_partId: { workOrderId, partId } },
-      create: { workOrderId, partId, quantity },
+      // Precio congelado al primer consumo; sumar cantidad no lo cambia.
+      create: { workOrderId, partId, quantity, unitPrice: part?.unitPrice ?? null },
       update: { quantity: { increment: quantity } },
     });
   }

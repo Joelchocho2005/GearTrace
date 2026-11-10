@@ -25,6 +25,31 @@ export class WorkOrderPartDto {
 export class AddUsedPartDto extends WorkOrderPartDto {}
 
 /**
+ * Cita → OT. Vehículo y motivo salen de la cita; `description` permite
+ * reemplazar el motivo. El mecánico sigue las reglas de create().
+ */
+export class CreateWorkOrderFromAppointmentDto {
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  mileage?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  estimatedCost?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  mechanicId?: number;
+}
+
+/**
  * El código `number` (OT-YYYY-NNN) lo genera el servidor (RF-SER-05); si el
  * cliente lo envía, la validación global lo rechaza (forbidNonWhitelisted).
  */

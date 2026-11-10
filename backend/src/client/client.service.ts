@@ -20,7 +20,7 @@ export class ClientService {
   findMyAppointments(ownerId: number) {
     return this.prisma.appointment.findMany({
       where: { vehicle: { ownerId } },
-      include: { vehicle: true },
+      include: { vehicle: true, workOrder: { select: { id: true, number: true, status: true } } },
       orderBy: { scheduledAt: 'desc' },
     });
   }

@@ -50,7 +50,7 @@ function OrderCard({ order, onOpen }: { order: WorkOrder; onOpen: () => void }) 
     <button
       type="button"
       onClick={onOpen}
-      className="group w-full rounded-xl border border-slate-700 bg-slate-900/70 p-4 text-left transition-colors hover:border-brand-500/50 hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+      className="glass-inset glass-hover group w-full rounded-xl p-4 text-left"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -62,7 +62,7 @@ function OrderCard({ order, onOpen }: { order: WorkOrder; onOpen: () => void }) 
         </span>
       </div>
       <p className="mt-3 line-clamp-2 text-sm text-slate-300">{order.description}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-700/70 pt-3 text-xs text-slate-400">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 pt-3 text-xs text-slate-400">
         <span className="inline-flex items-center gap-1">
           <Wrench size={13} /> {order.mechanic?.name ?? 'Sin asignar'}
         </span>
@@ -144,7 +144,7 @@ export default function WorkOrdersList() {
     <section className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <div className="rounded-xl p-3 icon-badge">
             <ClipboardList size={24} />
           </div>
           <div>
@@ -165,13 +165,13 @@ export default function WorkOrdersList() {
               onChange={(event) => setFilter(event.target.value)}
               placeholder="Filtrar por OT, placa, cliente…"
               aria-label="Filtrar órdenes"
-              className="w-full rounded-xl border border-slate-700 bg-slate-800/60 py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-brand-500 sm:w-72"
+              className="glass w-full rounded-xl py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 sm:w-72"
             />
           </div>
           <button
             type="button"
             onClick={() => setIsCreating(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] hover:bg-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+            className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 btn-primary"
           >
             <Plus size={18} /> Nueva Orden
           </button>
@@ -179,13 +179,13 @@ export default function WorkOrdersList() {
       </header>
 
       {error && !isLoading ? (
-        <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-800/50 p-10 text-center backdrop-blur-md">
+        <div className="glass flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
           <AlertCircle className="text-red-400" size={28} />
           <p className="text-slate-300">{error}</p>
           <button
             type="button"
             onClick={() => void load()}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/50"
+            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm text-slate-200 btn-secondary"
           >
             <RotateCw size={16} /> Reintentar
           </button>
@@ -195,12 +195,12 @@ export default function WorkOrdersList() {
           {columns.map(({ status, orders: columnOrders }) => (
             <div
               key={status}
-              className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-md"
+              className="glass flex flex-col rounded-2xl p-4"
             >
               <h3 className="mb-4 flex items-center gap-2 font-semibold text-slate-200">
                 <span className={`h-2.5 w-2.5 rounded-full ${columnAccent[status]}`} />
                 {WORK_ORDER_STATUS[status].label}
-                <span className="ml-auto rounded-full bg-slate-700/60 px-2 py-0.5 text-xs text-slate-300">
+                <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300">
                   {isLoading ? '…' : columnOrders.length}
                 </span>
               </h3>
@@ -208,10 +208,10 @@ export default function WorkOrdersList() {
               <div className="space-y-3" aria-busy={isLoading}>
                 {isLoading &&
                   Array.from({ length: 2 }, (_, index) => (
-                    <div key={index} className="h-32 animate-pulse rounded-xl border border-slate-700 bg-slate-900/50" />
+                    <div key={index} className="h-32 animate-pulse rounded-xl glass-inset" />
                   ))}
                 {!isLoading && columnOrders.length === 0 && (
-                  <p className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-sm text-slate-500">
+                  <p className="rounded-xl border border-dashed border-white/10 p-4 text-center text-sm text-slate-500">
                     {term ? 'Sin coincidencias' : 'Sin órdenes'}
                   </p>
                 )}

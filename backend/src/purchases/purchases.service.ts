@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PurchaseOrderStatus } from '@prisma/client';
-import { isPrismaError } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupplierService } from '../supplier/supplier.service';
 import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
@@ -55,18 +54,11 @@ export class PurchasesService {
     }
     if (dto.supplierId !== undefined) await this.ensureSupplier(dto.supplierId);
 
-    try {
-      return await this.prisma.purchaseOrder.update({
-        where: { id },
-        data: dto,
-        include: PURCHASE_INCLUDE,
-      });
-    } catch (error) {
-      if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException(`Ya existe un pedido con el número "${dto.number}"`);
-      }
-      throw error;
-    }
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: dto,
+      include: PURCHASE_INCLUDE,
+    });
   }
 
   async remove(id: number) {

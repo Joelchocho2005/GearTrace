@@ -1,7 +1,10 @@
 import api from './axios';
 import { createCrudApi } from './crud';
+import type { Role } from '../contexts/AuthContext';
 import type {
   AddUsedPartPayload,
+  CreateWorkOrderFromAppointmentPayload,
+  UserLookup,
   AppUser,
   InventoryPart,
   Appointment,
@@ -33,7 +36,11 @@ import type {
  *  - DELETE en todos: GERENTE
  */
 
-export const usersApi = createCrudApi<AppUser, CreateUserPayload, UpdateUserPayload>('/users');
+export const usersApi = {
+  ...createCrudApi<AppUser, CreateUserPayload, UpdateUserPayload>('/users'),
+  /** Usuarios activos de un rol (id, nombre, correo). Disponible para GERENTE y MECANICO. */
+  lookup: async (role: Role) => (await api.get<UserLookup[]>('/users/lookup', { params: { role } })).data,
+};
 
 export const vehiclesApi = createCrudApi<Vehicle, CreateVehiclePayload, UpdateVehiclePayload>(
   '/vehicles',
@@ -44,6 +51,12 @@ export const appointmentsApi = createCrudApi<
   CreateAppointmentPayload,
   UpdateAppointmentPayload
 >('/appointments');
+
+/** Flujo cita → OT (GERENTE, MECANICO). */
+export const appointmentActionsApi = {
+  createWorkOrder: async (id: number, payload: CreateWorkOrderFromAppointmentPayload = {}) =>
+    (await api.post<WorkOrder>(`/appointments/${id}/work-order`, payload)).data,
+};
 
 export const workOrdersApi = createCrudApi<
   WorkOrder,
@@ -78,6 +91,8 @@ export const clientApi = {
 export const inventoryApi = {
   searchParts: async (query: string) =>
     (await api.get<InventoryPart[]>(`/inventory/search/${encodeURIComponent(query)}`)).data,
+  /** Piezas en o bajo su stock mínimo (candidatas a orden de compra). */
+  lowStockParts: async () => (await api.get<InventoryPart[]>('/inventory/parts/low-stock')).data,
 };
 
 /** Acciones operativas de una orden que no son CRUD. */
@@ -85,6 +100,9 @@ export const workOrderActionsApi = {
   /** RF-INV-13: registra el repuesto y descuenta stock en una transacción (409 si no alcanza). */
   addUsedPart: async (id: number, payload: AddUsedPartPayload) =>
     (await api.post<WorkOrder>(`/work-orders/${id}/parts`, payload)).data,
+  /** Quita el repuesto y devuelve su stock (transacción). */
+  removeUsedPart: async (id: number, partId: number) =>
+    (await api.delete<WorkOrder>(`/work-orders/${id}/parts/${partId}`)).data,
   /** Pasa la orden a CONCLUIDO; no toca inventario. Responde sin mecánico/factura: recargar con workOrdersApi.get. */
   conclude: async (id: number, finalCost?: number) =>
     (await api.patch<WorkOrder>(`/service/work-orders/${id}/close`, { finalCost })).data,

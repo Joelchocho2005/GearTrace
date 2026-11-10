@@ -1,6 +1,7 @@
 import {
   IsString,
   IsInt,
+  IsNumber,
   IsOptional,
   IsUrl,
   IsArray,
@@ -46,4 +47,10 @@ export class CreatePartDto {
   @IsInt()
   @Min(0)
   minStock?: number;
+
+  /** Precio unitario de referencia; se congela en UsedPart al consumir la pieza. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  unitPrice?: number;
 }

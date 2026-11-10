@@ -15,6 +15,8 @@ export interface PartFormValues {
   quantity: number;
   boxId: number;
   minStock: number;
+  /** '' = sin precio. Se congela en cada OT al consumir la pieza. */
+  unitPrice: string;
   keywords: string[];
 }
 
@@ -31,6 +33,7 @@ const emptyForm: PartFormValues = {
   quantity: 0,
   boxId: 0,
   minStock: 1,
+  unitPrice: '',
   keywords: [],
 };
 
@@ -91,6 +94,7 @@ export default function PartFormModal({
       quantity: form.quantity,
       boxId: form.boxId,
       minStock: form.minStock,
+      unitPrice: form.unitPrice.trim() === '' ? undefined : Number(form.unitPrice),
       keywords: keywordsText
         .split(',')
         .map((keyword) => keyword.trim())
@@ -118,20 +122,20 @@ export default function PartFormModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 glass-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="part-form-title"
     >
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-800 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-700 px-6 py-4">
+      <div className="glass-strong max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl shadow-2xl">
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
           <h2 id="part-form-title" className="text-xl font-bold text-white">
             {part ? 'Editar pieza' : 'Nueva pieza'}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white"
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
             aria-label="Cerrar modal"
           >
             <X size={20} />
@@ -147,7 +151,7 @@ export default function PartFormModal({
                 maxLength={150}
                 value={form.name}
                 onChange={(event) => updateField('name', event.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -158,7 +162,7 @@ export default function PartFormModal({
                 maxLength={50}
                 value={form.code}
                 onChange={(event) => updateField('code', event.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -170,7 +174,7 @@ export default function PartFormModal({
                 type="number"
                 value={form.quantity}
                 onChange={(event) => updateField('quantity', Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -182,7 +186,21 @@ export default function PartFormModal({
                 type="number"
                 value={form.minStock}
                 onChange={(event) => updateField('minStock', Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              Precio unitario
+              <input
+                min={0}
+                step="0.01"
+                type="number"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={form.unitPrice}
+                onChange={(event) => updateField('unitPrice', event.target.value)}
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -193,7 +211,7 @@ export default function PartFormModal({
                 value={form.boxId || ''}
                 disabled={isLoadingBoxes}
                 onChange={(event) => updateField('boxId', Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               >
                 <option value="" disabled>
                   {isLoadingBoxes ? 'Cargando cajas...' : 'Selecciona una caja'}
@@ -212,7 +230,7 @@ export default function PartFormModal({
                 value={keywordsText}
                 onChange={(event) => setKeywordsText(event.target.value)}
                 placeholder="filtro, aceite, motor"
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none placeholder:text-slate-500 focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
               <span className="block text-xs text-slate-500">
                 Separa las palabras clave con comas.
@@ -220,18 +238,18 @@ export default function PartFormModal({
             </label>
           </div>
 
-          <div className="flex justify-end gap-3 border-t border-slate-700 pt-5">
+          <div className="flex justify-end gap-3 border-t border-white/10 pt-5">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl px-4 py-2.5 font-semibold text-slate-300 transition-colors hover:bg-slate-700"
+              className="rounded-xl px-4 py-2.5 font-semibold text-slate-300 transition-colors hover:bg-white/5"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={isSubmitting || isLoadingBoxes}
-              className="rounded-xl bg-brand-500 px-5 py-2.5 font-semibold text-white transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-xl px-5 py-2.5 font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60 btn-primary"
             >
               {isSubmitting ? 'Guardando...' : 'Guardar pieza'}
             </button>

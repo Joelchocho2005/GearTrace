@@ -2,9 +2,98 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ══════════════════════════════════════════════════════════════════════════
+   GearTrace — Sistema visual "glass" (glassmorphism)
+   Paleta: slate (superficies) + brand naranja (acento). Las superficies son
+   translúcidas con desenfoque; el fondo aporta luces de color que se ven a
+   través del vidrio. Usar SIEMPRE estas clases en lugar de combinar a mano
+   bg-slate-800/xx + border-slate-700.
+   ══════════════════════════════════════════════════════════════════════════ */
+
 @layer base {
+  html {
+    color-scheme: dark;
+  }
+
   body {
-    @apply bg-slate-900 text-slate-100 antialiased;
+    @apply min-h-screen bg-slate-950 text-slate-100 antialiased;
+    /* Luces de fondo fijas: naranja (marca) y azul/índigo (contraste frío). */
+    background-image:
+      radial-gradient(55rem 38rem at 105% -5%, rgba(249, 115, 22, 0.32), transparent 60%),
+      radial-gradient(45rem 35rem at -5% 105%, rgba(56, 189, 248, 0.18), transparent 60%),
+      radial-gradient(35rem 28rem at 45% 45%, rgba(99, 102, 241, 0.12), transparent 70%),
+      linear-gradient(180deg, #0b1120 0%, #020617 100%);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    @apply bg-brand-500/40 text-white;
+  }
+
+  /* Foco visible y consistente para navegación con teclado. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-400/70 ring-offset-0;
+  }
+
+  /* Scrollbars discretas sobre vidrio. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+  }
+}
+
+@layer components {
+  /* Superficie principal: paneles, tarjetas, tablas. */
+  .glass {
+    @apply border border-white/10 bg-slate-900/40 backdrop-blur-xl;
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01));
+    box-shadow:
+      0 10px 40px -12px rgba(2, 6, 23, 0.7),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* Superficie elevada y más opaca: modales, paneles laterales, sidebar. */
+  .glass-strong {
+    @apply border border-white/10 bg-slate-900/75 backdrop-blur-2xl;
+    background-image: linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.0) 40%);
+    box-shadow:
+      0 25px 60px -15px rgba(2, 6, 23, 0.85),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
+  }
+
+  /* Elemento anidado dentro de una superficie glass (ítems, filas, chips). */
+  .glass-inset {
+    @apply border border-white/[0.06] bg-slate-950/35;
+  }
+
+  /* Tarjeta interactiva: realce sutil al pasar el cursor. */
+  .glass-hover {
+    @apply transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-400/30 hover:bg-slate-900/60 motion-reduce:transform-none;
+  }
+
+  /* Campos de formulario. */
+  .glass-input {
+    @apply border border-white/10 bg-slate-950/40 text-white placeholder:text-slate-500 outline-none backdrop-blur-sm transition-colors focus:border-brand-400/60 focus:bg-slate-950/60 focus:ring-2 focus:ring-brand-500/20 disabled:opacity-50;
+  }
+
+  /* Capa detrás de modales. */
+  .glass-overlay {
+    @apply bg-slate-950/60 backdrop-blur-md;
+  }
+
+  /* Botón principal: degradado naranja con brillo. */
+  .btn-primary {
+    @apply bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_8px_24px_-8px_rgba(249,115,22,0.6)] transition-all duration-200 hover:from-brand-500 hover:to-brand-700 hover:shadow-[0_10px_30px_-8px_rgba(249,115,22,0.75)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none motion-reduce:transform-none;
+  }
+
+  /* Botón secundario: vidrio. */
+  .btn-secondary {
+    @apply border border-white/10 bg-white/5 text-slate-200 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Ícono destacado de encabezado de página/sección. */
+  .icon-badge {
+    @apply rounded-xl border border-brand-400/20 bg-gradient-to-br from-brand-500/25 to-brand-500/5 text-brand-300 shadow-[0_0_20px_-6px_rgba(249,115,22,0.6)];
   }
 }
 

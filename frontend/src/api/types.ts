@@ -13,6 +13,9 @@ export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANC
 export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
 export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
 
+/** Respuesta de GET /users/lookup?role= (selectores de formularios). */
+export type UserLookup = Pick<UserSummary, 'id' | 'name' | 'email'>;
+
 export interface UserSummary {
   id: number;
   name: string;
@@ -70,8 +73,18 @@ export interface Appointment {
   status: AppointmentStatus;
   vehicleId: number;
   vehicle?: Vehicle;
+  /** OT generada desde esta cita (flujo cita → OT). */
+  workOrder?: { id: number; number: string; status: WorkOrderStatus } | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
+}
+
+/** POST /appointments/:id/work-order — vehículo y motivo salen de la cita. */
+export interface CreateWorkOrderFromAppointmentPayload {
+  description?: string;
+  mileage?: number;
+  estimatedCost?: number;
+  mechanicId?: number;
 }
 
 export interface CreateAppointmentPayload {
@@ -105,6 +118,8 @@ export interface AddUsedPartPayload {
 export interface UsedPart {
   id: number;
   quantity: number;
+  /** Precio unitario congelado al consumir la pieza. */
+  unitPrice: DecimalString | null;
   partId: number;
   part?: { id: number; name: string; code: string; quantity: number };
 }
@@ -120,6 +135,7 @@ export interface WorkOrder {
   finalCost: DecimalString | null;
   vehicleId: number;
   mechanicId: number | null;
+  appointmentId: number | null;
   vehicle?: Vehicle;
   mechanic?: UserSummary | null;
   parts?: UsedPart[];
@@ -196,15 +212,14 @@ export interface PurchaseOrder {
   updatedAt: ISODateString;
 }
 
+/** `number` (OC-YYYY-NNN) lo genera el backend. */
 export interface CreatePurchasePayload {
-  number: string;
   supplierId: number;
   items: { partId: number; quantity: number; unitPrice?: number }[];
 }
 
 /** `RECIBIDA` no se acepta aquí: la recepción usa /suppliers/purchase-orders/:id/receive. */
 export interface UpdatePurchasePayload {
-  number?: string;
   supplierId?: number;
   status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
 }
@@ -227,8 +242,8 @@ export interface Invoice {
   updatedAt: ISODateString;
 }
 
+/** `number` (FAC-YYYY-NNN) lo genera el backend. */
 export interface CreateInvoicePayload {
-  number: string;
   workOrderId: number;
   clientId?: number;
   subtotal?: number;

@@ -33,6 +33,15 @@ export class UsersService {
     });
   }
 
+  /** Usuarios activos de un rol con datos mínimos (id, nombre, correo). */
+  lookup(role: Role) {
+    return this.prisma.user.findMany({
+      where: { role, isActive: true },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
   async findOne(id: number) {
     const user = await this.prisma.user.findUnique({
       where: { id },

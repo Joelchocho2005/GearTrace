@@ -13,8 +13,10 @@ import {
   FileTypeValidator,
   MaxFileSizeValidator,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { randomUUID } from 'node:crypto';
@@ -24,8 +26,18 @@ import { CreatePartDto } from './dto/create-part.dto';
 import { CreateBoxDto } from './dto/create-box.dto';
 import { UpdatePartDto } from './dto/update-part.dto';
 import { UpdateBoxDto } from './dto/update-box.dto';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
 
+/**
+ * Inventario: solo personal del taller autenticado. Alexa no usa estas rutas
+ * (consume InventoryService directamente desde /api/webhook/alexa).
+ * Eliminar cajas o piezas queda reservado al GERENTE.
+ */
 @Controller('inventory')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.MECANICO)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
@@ -61,6 +73,7 @@ export class InventoryController {
 
   /** DELETE /api/inventory/boxes/:id → Eliminar una caja vacía */
   @Delete('boxes/:id')
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.NO_CONTENT)
   removeBox(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.removeBox(id);
@@ -133,6 +146,7 @@ export class InventoryController {
 
   /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
   @Delete('parts/:id')
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.NO_CONTENT)
   removePart(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.removePart(id);

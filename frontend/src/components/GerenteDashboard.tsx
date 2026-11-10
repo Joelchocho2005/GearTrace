@@ -68,26 +68,26 @@ export default function GerenteDashboard() {
       </header>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         {cards.map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="flex items-center gap-4 rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
-            <div className={`rounded-xl bg-slate-900 p-4 ${color}`}><Icon size={28} /></div>
+          <div key={label} className="glass flex items-center gap-4 rounded-2xl p-6">
+            <div className={`glass-inset rounded-xl p-4 ${color}`}><Icon size={28} /></div>
             <div><p className="text-sm text-slate-400">{label}</p><p className="text-3xl font-bold text-white">{value}</p></div>
           </div>
         ))}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+        <div className="glass rounded-2xl p-6">
           <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Estado general del hardware</h3>
           {hwStatus ? (
             <div className="space-y-3 text-sm">
-              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">Modo</span><span className={hwStatus.simulationMode ? 'text-amber-400' : 'text-emerald-400'}>{hwStatus.simulationMode ? 'Simulación' : 'GPIO real'}</span></p>
-              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">LEDs configurados</span><span className="text-white">{hwStatus.ledCount} WS2812B</span></p>
-              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">Pin GPIO</span><span className="text-white">{hwStatus.gpioPin}</span></p>
+              <p className="flex justify-between rounded-xl p-4 glass-inset"><span className="text-slate-400">Modo</span><span className={hwStatus.simulationMode ? 'text-amber-400' : 'text-emerald-400'}>{hwStatus.simulationMode ? 'Simulación' : 'GPIO real'}</span></p>
+              <p className="flex justify-between rounded-xl p-4 glass-inset"><span className="text-slate-400">LEDs configurados</span><span className="text-white">{hwStatus.ledCount} WS2812B</span></p>
+              <p className="flex justify-between rounded-xl p-4 glass-inset"><span className="text-slate-400">Pin GPIO</span><span className="text-white">{hwStatus.gpioPin}</span></p>
             </div>
           ) : <p className="text-slate-400">Conectando con el hardware...</p>}
         </div>
-        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+        <div className="glass rounded-2xl p-6">
           <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><ClipboardList className="text-brand-400" /> Órdenes activas</h3>
-          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{order.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle.plate} · {order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
+          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{order.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle.plate} · {order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
         </div>
       </div>
     </section>

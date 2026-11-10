@@ -9,6 +9,7 @@ interface InventoryPart {
   code: string;
   quantity: number;
   minStock: number;
+  unitPrice: string | null;
   keywords: string[];
   box?: {
     id: number;
@@ -23,6 +24,7 @@ const toFormValues = (part: InventoryPart): PartFormValues => ({
   quantity: part.quantity,
   boxId: part.box?.id ?? 0,
   minStock: part.minStock,
+  unitPrice: part.unitPrice ?? '',
   keywords: part.keywords,
 });
 
@@ -71,7 +73,7 @@ export default function InventoryList() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+            <div className="rounded-xl p-3 icon-badge">
               <Package size={24} />
             </div>
             <div>
@@ -89,14 +91,14 @@ export default function InventoryList() {
             setSelectedPart(null);
             setIsModalOpen(true);
           }}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900"
+          className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white transition-colors focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900 btn-primary"
         >
           <Plus size={18} />
           Nueva Pieza
         </button>
       </div>
 
-      <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4">
+      <div className="glass rounded-2xl p-4">
         <label htmlFor="inventory-search" className="sr-only">
           Buscar piezas
         </label>
@@ -111,12 +113,12 @@ export default function InventoryList() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Buscar por nombre o código..."
-            className="w-full rounded-xl border border-slate-700 bg-slate-900/70 py-2.5 pl-10 pr-4 text-slate-100 outline-none transition-colors placeholder:text-slate-500 focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+            className="w-full rounded-xl py-2.5 pl-10 pr-4 text-slate-100 transition-colors focus:ring-1 focus:ring-brand-500 glass-input"
           />
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="p-8 text-center text-slate-400">Cargando piezas...</div>
         ) : error ? (
@@ -128,7 +130,7 @@ export default function InventoryList() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="border-b border-slate-700 bg-slate-800">
+              <thead className="border-b border-white/10 bg-white/[0.03]">
                 <tr>
                   <th className="px-6 py-4 font-semibold text-slate-300">Pieza</th>
                   <th className="px-6 py-4 font-semibold text-slate-300">Código</th>
@@ -137,9 +139,9 @@ export default function InventoryList() {
                   <th className="px-6 py-4 text-right font-semibold text-slate-300">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/70">
+              <tbody className="divide-y divide-white/5">
                 {filteredParts.map((part) => (
-                  <tr key={part.id} className="transition-colors hover:bg-slate-700/30">
+                  <tr key={part.id} className="transition-colors hover:bg-white/5">
                     <td className="px-6 py-4 font-medium text-white">{part.name}</td>
                     <td className="px-6 py-4 text-slate-400">{part.code}</td>
                     <td className="px-6 py-4 text-slate-400">

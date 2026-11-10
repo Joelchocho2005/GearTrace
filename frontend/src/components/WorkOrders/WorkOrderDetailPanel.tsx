@@ -9,6 +9,7 @@ import {
   Play,
   Save,
   Stethoscope,
+  Trash2,
   User,
   Wrench,
   X,
@@ -33,7 +34,7 @@ const kmFormatter = new Intl.NumberFormat('es');
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-md">
+    <section className="glass rounded-2xl p-4">
       <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-slate-400">
         <span className="text-brand-400">{icon}</span>
         {title}
@@ -113,6 +114,26 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
     );
   };
 
+  const [removingPartId, setRemovingPartId] = useState<number | null>(null);
+
+  const removePart = async (partId: number, name: string) => {
+    if (!window.confirm(`¿Quitar "${name}" de la orden? Su cantidad vuelve al inventario.`)) return;
+    setRemovingPartId(partId);
+    try {
+      onUpdated(await workOrderActionsApi.removeUsedPart(order.id, partId));
+      toast.success(`"${name}" quitado; stock devuelto.`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo quitar el repuesto.'));
+    } finally {
+      setRemovingPartId(null);
+    }
+  };
+
+  const partsTotal = parts.reduce(
+    (sum, item) => (item.unitPrice === null ? sum : sum + Number(item.unitPrice) * item.quantity),
+    0,
+  );
+
   /** Lanza en error para que el buscador conserve la selección. */
   const addPart = async (part: InventoryPart, quantity: number) => {
     try {
@@ -126,15 +147,15 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
-      <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div className="glass-overlay absolute inset-0" onClick={onClose} aria-hidden="true" />
 
       <aside
         role="dialog"
         aria-modal="true"
         aria-labelledby="work-order-detail-title"
-        className="relative flex h-full w-full max-w-xl flex-col border-l border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-xl"
+        className="glass-strong relative flex h-full w-full max-w-xl flex-col rounded-l-2xl"
       >
-        <header className="flex items-start justify-between gap-3 border-b border-slate-700 p-5">
+        <header className="flex items-start justify-between gap-3 border-b border-white/10 p-5">
           <div>
             <p className="text-xs uppercase tracking-wider text-slate-500">Orden de trabajo</p>
             <h3 id="work-order-detail-title" className="mt-1 text-2xl font-bold text-white">{order.number}</h3>
@@ -156,7 +177,7 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                   type="button"
                   onClick={changeStatus}
                   disabled={busyAction !== null}
-                  className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 btn-primary"
                 >
                   {busyAction === 'status' ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                   {transition.label}
@@ -172,7 +193,7 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                     value={finalCost}
                     onChange={(event) => setFinalCost(event.target.value)}
                     placeholder="0.00"
-                    className="w-28 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500"
+                    className="w-28 rounded-lg px-3 py-2 text-sm text-white glass-input"
                   />
                 </label>
                 <button
@@ -205,7 +226,7 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                   }
                 />
                 <Field label="VIN" value={order.vehicle.vin ?? EMPTY} />
-                <div className="col-span-2 flex items-center gap-2 rounded-xl bg-slate-900/60 p-3">
+                <div className="col-span-2 flex items-center gap-2 rounded-xl p-3 glass-inset">
                   <User size={16} className="text-slate-500" />
                   <div>
                     <p className="text-sm text-slate-200">{order.vehicle.owner?.name ?? EMPTY}</p>
@@ -247,13 +268,13 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                   value={diagnosis}
                   onChange={(event) => setDiagnosis(event.target.value)}
                   placeholder="Hallazgos técnicos de la revisión…"
-                  className="w-full rounded-xl border border-slate-600 bg-slate-900/80 px-3 py-2 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500"
+                  className="w-full rounded-xl px-3 py-2 text-sm text-white glass-input"
                 />
                 <button
                   type="button"
                   onClick={saveDiagnosis}
                   disabled={busyAction !== null || diagnosis.trim() === (order.diagnosis ?? '').trim()}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700/50 disabled:opacity-40"
+                  className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm text-slate-200 disabled:opacity-40 btn-secondary"
                 >
                   {busyAction === 'diagnosis' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                   Guardar diagnóstico
@@ -266,15 +287,17 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
             {parts.length === 0 ? (
               <p className="mb-4 text-sm text-slate-400">Aún no se registran repuestos.</p>
             ) : (
-              <div className="mb-4 overflow-hidden rounded-xl border border-slate-700">
-                <table className="min-w-full divide-y divide-slate-700 text-sm">
-                  <thead className="bg-slate-800 text-xs uppercase text-slate-400">
+              <div className="mb-4 overflow-hidden rounded-xl border border-white/10">
+                <table className="min-w-full divide-y divide-white/5 text-sm">
+                  <thead className="bg-white/[0.03] text-xs uppercase text-slate-400">
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold">Repuesto</th>
                       <th className="px-3 py-2 text-right font-semibold">Cant.</th>
+                      <th className="px-3 py-2 text-right font-semibold">P. unit.</th>
+                      {!isConcluded && <th className="px-3 py-2"><span className="sr-only">Quitar</span></th>}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-700/70">
+                  <tbody className="divide-y divide-white/5">
                     {parts.map((item) => (
                       <tr key={item.id} className="text-slate-300">
                         <td className="px-3 py-2">
@@ -282,13 +305,30 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                           <div className="text-xs text-slate-500">{item.part?.code}</div>
                         </td>
                         <td className="px-3 py-2 text-right font-semibold text-white">{item.quantity}</td>
+                        <td className="px-3 py-2 text-right text-slate-300">{formatCurrency(item.unitPrice)}</td>
+                        {!isConcluded && (
+                          <td className="px-2 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => void removePart(item.partId, item.part?.name ?? `Pieza #${item.partId}`)}
+                              disabled={removingPartId !== null}
+                              title="Quitar repuesto (devuelve stock)"
+                              aria-label={`Quitar ${item.part?.name ?? 'repuesto'}`}
+                              className="rounded-lg p-1.5 text-slate-500 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                            >
+                              {removingPartId === item.partId ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot className="bg-slate-800/60 text-xs text-slate-400">
+                  <tfoot className="bg-white/[0.03] text-xs text-slate-400">
                     <tr>
                       <td className="px-3 py-2">{parts.length} repuesto(s)</td>
                       <td className="px-3 py-2 text-right">{totalUnits} u.</td>
+                      <td className="px-3 py-2 text-right font-semibold text-slate-200">{formatCurrency(partsTotal)}</td>
+                      {!isConcluded && <td />}
                     </tr>
                   </tfoot>
                 </table>

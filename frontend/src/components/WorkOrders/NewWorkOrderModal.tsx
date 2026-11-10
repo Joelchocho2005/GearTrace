@@ -22,7 +22,7 @@ interface FormState {
 const EMPTY_FORM: FormState = { vehicleId: '', description: '', mileage: '', estimatedCost: '', mechanicId: '' };
 
 const fieldClass =
-  'w-full rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2.5 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 disabled:opacity-50';
+  'w-full rounded-xl px-4 py-2.5 text-sm text-white disabled:opacity-50 glass-input';
 
 /** Formulario de nueva OT. El código OT-YYYY-NNN lo asigna el backend. */
 export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderModalProps) {
@@ -110,7 +110,7 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 glass-overlay"
       onMouseDown={(event) => event.target === event.currentTarget && !isSaving && onClose()}
     >
       <form
@@ -118,11 +118,11 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
         aria-modal="true"
         aria-labelledby="new-work-order-title"
         onSubmit={handleSubmit}
-        className="w-full max-w-lg space-y-5 rounded-2xl border border-slate-700 bg-slate-800/90 p-6 shadow-2xl backdrop-blur-xl"
+        className="glass-strong w-full max-w-lg space-y-5 rounded-2xl p-6 shadow-2xl"
       >
         <header className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-brand-500/10 p-2.5 text-brand-400">
+            <div className="rounded-xl p-2.5 icon-badge">
               <ClipboardPlus size={20} />
             </div>
             <div>
@@ -223,14 +223,14 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
             type="button"
             onClick={onClose}
             disabled={isSaving}
-            className="rounded-xl border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-700/50"
+            className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 btn-secondary"
           >
             Cancelar
           </button>
           <button
             type="submit"
             disabled={isSaving || isLoadingOptions}
-            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50 btn-primary"
           >
             {isSaving && <Loader2 size={16} className="animate-spin" />}
             Crear orden

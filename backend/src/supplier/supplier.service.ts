@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, PurchaseOrderStatus } from '@prisma/client';
+import { nextDocumentNumber } from '../common/document-number';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
 
@@ -32,11 +34,11 @@ export class SupplierService {
   }
 
   async createPurchaseOrder(dto: CreatePurchaseOrderDto) {
-    if (dto.items.length === 0) {
-      throw new ConflictException('El pedido debe contener al menos una pieza');
-    }
     await this.ensureSupplier(dto.supplierId);
     const partIds = [...new Set(dto.items.map((item) => item.partId))];
+    if (partIds.length !== dto.items.length) {
+      throw new BadRequestException('Una pieza aparece repetida en el pedido');
+    }
     const parts = await this.prisma.part.findMany({
       where: { id: { in: partIds } },
       select: { id: true, quantity: true, minStock: true },
@@ -56,23 +58,26 @@ export class SupplierService {
     }
 
     try {
-      return await this.prisma.purchaseOrder.create({
-        data: {
-          number: dto.number,
-          supplierId: dto.supplierId,
-          items: {
-            create: dto.items.map((item) => ({
-              partId: item.partId,
-              quantity: item.quantity,
-              unitPrice: item.unitPrice,
-            })),
+      // El código OC-YYYY-NNN se calcula en la misma transacción que el pedido.
+      return await this.prisma.$transaction(async (tx) =>
+        tx.purchaseOrder.create({
+          data: {
+            number: await nextDocumentNumber(tx, 'OC'),
+            supplierId: dto.supplierId,
+            items: {
+              create: dto.items.map((item) => ({
+                partId: item.partId,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+              })),
+            },
           },
-        },
-        include: { supplier: true, items: { include: { part: true } } },
-      });
+          include: { supplier: true, items: { include: { part: true } } },
+        }),
+      );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException(`Ya existe un pedido con el número "${dto.number}"`);
+        throw new ConflictException('No se pudo generar un código de pedido único; intenta de nuevo');
       }
       throw error;
     }

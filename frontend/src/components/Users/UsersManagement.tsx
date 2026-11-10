@@ -109,7 +109,7 @@ export default function UsersManagement() {
   return (
     <section className="space-y-6">
       <header className="flex items-center gap-3">
-        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+        <div className="rounded-xl p-3 icon-badge">
           <Users size={24} />
         </div>
         <div>
@@ -120,7 +120,7 @@ export default function UsersManagement() {
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="flex justify-center py-16">
             <Loader2 className="animate-spin text-brand-400" size={28} />
@@ -131,8 +131,8 @@ export default function UsersManagement() {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-700">
-              <thead className="bg-slate-800">
+            <table className="min-w-full divide-y divide-white/5">
+              <thead className="bg-white/[0.03]">
                 <tr>
                   <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
                     Usuario
@@ -145,12 +145,12 @@ export default function UsersManagement() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/80">
+              <tbody className="divide-y divide-white/5">
                 {users.map((managedUser) => {
                   const isUpdating = updatingUserId === managedUser.id;
 
                   return (
-                    <tr key={managedUser.id} className="hover:bg-slate-700/20">
+                    <tr key={managedUser.id} className="hover:bg-white/5">
                       <td className="whitespace-nowrap px-6 py-4">
                         <div className="font-medium text-white">{managedUser.name}</div>
                         <div className="text-sm text-slate-400">{managedUser.email}</div>
@@ -166,7 +166,7 @@ export default function UsersManagement() {
                           onChange={(event) =>
                             void updateRole(managedUser.id, event.target.value as Role)
                           }
-                          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="rounded-lg px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50 glass-input"
                         >
                           {roles.map((role) => (
                             <option key={role} value={role}>

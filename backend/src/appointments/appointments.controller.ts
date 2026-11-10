@@ -12,9 +12,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { Roles } from '../auth/decorators/auth.decorators';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateWorkOrderFromAppointmentDto } from '../work-orders/dto/work-order.dto';
+import { WorkOrdersService } from '../work-orders/work-orders.service';
 import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
 
@@ -26,7 +29,10 @@ import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dt
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.GERENTE, Role.MECANICO)
 export class AppointmentsController {
-  constructor(private readonly appointmentsService: AppointmentsService) {}
+  constructor(
+    private readonly appointmentsService: AppointmentsService,
+    private readonly workOrdersService: WorkOrdersService,
+  ) {}
 
   @Get()
   findAll() {
@@ -42,6 +48,17 @@ export class AppointmentsController {
   @HttpCode(HttpStatus.CREATED)
   create(@Body() dto: CreateAppointmentDto) {
     return this.appointmentsService.create(dto);
+  }
+
+  /** Cita → OT: crea la orden de trabajo desde la cita y la marca COMPLETADA. */
+  @Post(':id(\\d+)/work-order')
+  @HttpCode(HttpStatus.CREATED)
+  createWorkOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateWorkOrderFromAppointmentDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.createFromAppointment(id, dto, user);
   }
 
   @Patch(':id(\\d+)')

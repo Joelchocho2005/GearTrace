@@ -19,6 +19,7 @@ import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
 const protectedRoutes: Record<AppRoute, ReactNode> = {
   inventory: <InventoryList />,
+  logs: <AuditLogs />,
   // Administración
   usuarios: <UsuariosPage />,
   // Servicios (SER)
@@ -45,7 +46,7 @@ function App() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-500"></div>
       </div>
     )
@@ -64,7 +65,6 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="logs" element={<AuditLogs />} />
 
         {(Object.keys(protectedRoutes) as AppRoute[]).map((path) => (
           <Route

@@ -9,6 +9,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
@@ -16,7 +17,7 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+import { CreateUserDto, UpdateUserDto, UserLookupQueryDto } from './dto/user.dto';
 import { UsersService } from './users.service';
 
 /** /api/users — Administración de usuarios (solo GERENTE). */
@@ -29,6 +30,13 @@ export class UsersController {
   @Get()
   findAll() {
     return this.usersService.findAll();
+  }
+
+  /** Selector de usuarios por rol (p. ej. dueño de un vehículo). También MECANICO. */
+  @Get('lookup')
+  @Roles(Role.GERENTE, Role.MECANICO)
+  lookup(@Query() query: UserLookupQueryDto) {
+    return this.usersService.lookup(query.role);
   }
 
   @Get(':id(\\d+)')

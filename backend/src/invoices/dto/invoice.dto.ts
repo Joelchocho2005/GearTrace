@@ -1,19 +1,8 @@
 import { InvoiceStatus } from '@prisma/client';
-import {
-  IsEnum,
-  IsInt,
-  IsNumber,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsEnum, IsInt, IsNumber, IsOptional, Min } from 'class-validator';
 
+/** El código `number` (FAC-YYYY-NNN) lo genera el servidor; no se acepta en el body. */
 export class CreateInvoiceDto {
-  @IsString()
-  @MaxLength(30)
-  number: string;
-
   /** La orden debe estar CONCLUIDO y no tener factura previa */
   @IsInt()
   @Min(1)
@@ -25,7 +14,7 @@ export class CreateInvoiceDto {
   @Min(1)
   clientId?: number;
 
-  /** Por defecto: finalCost (o estimatedCost) de la orden */
+  /** Por defecto: finalCost, si no estimatedCost, si no la suma de repuestos de la orden */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)

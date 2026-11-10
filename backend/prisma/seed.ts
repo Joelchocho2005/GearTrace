@@ -130,6 +130,7 @@ async function main() {
       create: {
         name: 'Filtro de aceite Toyota',
         code: 'FLT-OIL-001',
+        unitPrice: 12.5,
         quantity: 15,
         minStock: 3,
         boxId: cajaA.id,
@@ -143,6 +144,7 @@ async function main() {
       create: {
         name: 'Pastillas de freno Brembo',
         code: 'BRK-PAD-001',
+        unitPrice: 35,
         quantity: 6,
         minStock: 2,
         boxId: cajaB.id,

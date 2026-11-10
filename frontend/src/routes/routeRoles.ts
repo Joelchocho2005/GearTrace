@@ -7,6 +7,7 @@ import type { Role } from '../contexts/AuthContext';
  */
 export const ROUTE_ROLES = {
   inventory: ['GERENTE', 'MECANICO'],
+  logs: ['GERENTE', 'MECANICO'],
   usuarios: ['GERENTE'],
   vehiculos: ['GERENTE', 'MECANICO'],
   'ordenes-trabajo': ['GERENTE', 'MECANICO'],

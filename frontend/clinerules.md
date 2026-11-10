@@ -12,11 +12,12 @@
 
 ## Reglas de Desarrollo Frontend
 1. Usar componentes funcionales en TypeScript con tipos explícitos.
-2. Utilizar clases utilitarias de TailwindCSS para el diseño (tema oscuro slate-900 / brand orange).
+2. Estilo glassmorphism con la paleta slate + brand naranja: usar las clases de `src/index.css` (`glass`, `glass-strong`, `glass-inset`, `glass-hover`, `glass-input`, `glass-overlay`, `btn-primary`, `btn-secondary`, `icon-badge`). Bordes `border-white/10`, divisores `divide-white/5`. No volver a `bg-slate-800/xx` + `border-slate-700` ni poner fondos opacos en contenedores de página.
 3. No hacer peticiones `fetch` directas; usar siempre la instancia de `@/api/axios`.
 4. Consumir los módulos del backend mediante los servicios de `@/api/resources`; las actualizaciones son PATCH (el backend no expone PUT).
 5. Rutas de la app en español (`/usuarios`, `/vehiculos`, `/ordenes-trabajo`, `/citas`, `/proveedores`, `/compras`, `/facturacion`). Sus roles se declaran SOLO en `ROUTE_ROLES` (`/src/routes/routeRoles.ts`); `App.tsx` (protección) y `Sidebar.tsx` (enlaces) los leen de ahí.
-6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío; acciones con iconos lucide. Eliminar solo se ofrece al `GERENTE`.
-7. Modales y paneles: capa `bg-slate-950/60-70` + `backdrop-blur-sm`, contenedor `bg-slate-800/90` o `bg-slate-900/95` con `backdrop-blur-xl` y borde `slate-700`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500`.
+6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío. Alta/edición con `createForm`/`editForm` (modal `ResourceFormModal`, campos declarativos) y acciones de negocio con `rowActions`; nunca `console.log` como placeholder. Eliminar solo se ofrece al `GERENTE`.
+7. Modales y paneles: capa `glass-overlay`, contenedor `glass-strong`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500` (`btn-primary`).
 8. Tras una acción que responde con menos relaciones que el listado (p. ej. `/close`), recargar la entidad con su `get` antes de reemplazarla en el estado local.
 9. Socket.io siempre vía `createHardwareSocket()` (`transports: ['websocket']`, sin `extraHeaders`). Axios siempre vía la instancia `api` (header `ngrok-skip-browser-warning` incluido); no modificar `axios.defaults`.
+10. Validaciones de formulario lanzan `UserInputError` (helpers de `utils/formValues.ts`); no usar casts para tipar valores de select: validar con type guards o búsquedas en la lista de valores permitidos.

@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { PackageSearch, Table2, Truck } from 'lucide-react';
 import { suppliersApi } from '../api/resources';
-import type { Supplier } from '../api/types';
+import type { CreateSupplierPayload, Supplier } from '../api/types';
+import type { FormField, FormValues } from '../components/ui/ResourceFormModal';
+import type { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
+import { optionalText, text } from '../utils/formValues';
 import SuppliersList from '../components/Suppliers/SuppliersList';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
@@ -37,6 +40,46 @@ const columns: Column<Supplier>[] = [
   },
 ];
 
+const supplierFields: FormField[] = [
+  { name: 'name', label: 'Razón social', type: 'text', required: true, maxLength: 150, wide: true },
+  { name: 'taxId', label: 'Identificador fiscal (RUC/NIT)', type: 'text', maxLength: 50 },
+  { name: 'contactName', label: 'Persona de contacto', type: 'text', maxLength: 150 },
+  { name: 'email', label: 'Correo', type: 'email', maxLength: 255 },
+  { name: 'phone', label: 'Teléfono', type: 'text', maxLength: 50 },
+  { name: 'address', label: 'Dirección', type: 'text', maxLength: 255, wide: true },
+];
+
+const supplierPayload = (values: FormValues): CreateSupplierPayload => ({
+  name: text(values, 'name'),
+  taxId: optionalText(values, 'taxId'),
+  contactName: optionalText(values, 'contactName'),
+  email: optionalText(values, 'email'),
+  phone: optionalText(values, 'phone'),
+  address: optionalText(values, 'address'),
+});
+
+const createForm: CreateFormConfig = {
+  title: 'Nuevo proveedor',
+  fields: supplierFields,
+  initialValues: { name: '', taxId: '', contactName: '', email: '', phone: '', address: '' },
+  submit: (values) => suppliersApi.create(supplierPayload(values)),
+  successMessage: 'Proveedor registrado.',
+};
+
+const editForm: EditFormConfig<Supplier> = {
+  title: (supplier) => `Editar ${supplier.name}`,
+  fields: () => supplierFields,
+  initialValues: (supplier) => ({
+    name: supplier.name,
+    taxId: supplier.taxId ?? '',
+    contactName: supplier.contactName ?? '',
+    email: supplier.email ?? '',
+    phone: supplier.phone ?? '',
+    address: supplier.address ?? '',
+  }),
+  submit: (supplier, values) => suppliersApi.update(supplier.id, supplierPayload(values)),
+};
+
 /** /proveedores — solo GERENTE. */
 export default function ProveedoresPage() {
   const [view, setView] = useState<View>('list');
@@ -63,6 +106,8 @@ export default function ProveedoresPage() {
       emptyMessage="No hay proveedores registrados."
       getRowLabel={(supplier) => supplier.name}
       onDelete={suppliersApi.remove}
+      createForm={createForm}
+      editForm={editForm}
     />
   );
 }

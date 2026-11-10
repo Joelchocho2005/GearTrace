@@ -34,7 +34,7 @@ export default function AuditLogs() {
   return (
     <section className="space-y-6">
       <header className="flex items-center gap-3">
-        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+        <div className="rounded-xl p-3 icon-badge">
           <ClipboardList size={24} />
         </div>
         <div>
@@ -45,7 +45,7 @@ export default function AuditLogs() {
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="flex justify-center p-8">
             <Loader2 className="animate-spin text-brand-400" size={28} />
@@ -57,7 +57,7 @@ export default function AuditLogs() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="border-b border-slate-700 bg-slate-800">
+              <thead className="border-b border-white/10 bg-white/[0.03]">
                 <tr>
                   <th className="px-6 py-4 font-semibold text-slate-300">Fecha</th>
                   <th className="px-6 py-4 font-semibold text-slate-300">
@@ -69,9 +69,9 @@ export default function AuditLogs() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/70">
+              <tbody className="divide-y divide-white/5">
                 {logs.map((log) => (
-                  <tr key={log.id} className="transition-colors hover:bg-slate-700/30">
+                  <tr key={log.id} className="transition-colors hover:bg-white/5">
                     <td className="whitespace-nowrap px-6 py-4 text-slate-400">
                       {new Date(log.createdAt).toLocaleString('es-ES')}
                     </td>

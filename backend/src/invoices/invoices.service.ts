@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InvoiceStatus, Prisma, WorkOrderStatus } from '@prisma/client';
+import { nextDocumentNumber } from '../common/document-number';
 import { isPrismaError } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
@@ -37,7 +38,11 @@ export class InvoicesService {
   async create(dto: CreateInvoiceDto) {
     const order = await this.prisma.workOrder.findUnique({
       where: { id: dto.workOrderId },
-      include: { vehicle: { select: { ownerId: true } }, invoice: { select: { id: true } } },
+      include: {
+        vehicle: { select: { ownerId: true } },
+        invoice: { select: { id: true } },
+        parts: { select: { quantity: true, unitPrice: true } },
+      },
     });
     if (!order) {
       throw new NotFoundException(`Orden de trabajo con id ${dto.workOrderId} no encontrada`);
@@ -52,34 +57,40 @@ export class InvoicesService {
     if (dto.clientId !== undefined) await this.ensureUser(dto.clientId);
     const clientId = dto.clientId ?? order.vehicle.ownerId;
 
+    // Repuestos a su precio congelado (UsedPart.unitPrice); sin precio no suman.
+    const partsTotal = order.parts.reduce(
+      (sum, item) => (item.unitPrice ? sum.plus(item.unitPrice.times(item.quantity)) : sum),
+      new Prisma.Decimal(0),
+    );
     const subtotal =
       dto.subtotal !== undefined
         ? new Prisma.Decimal(dto.subtotal)
-        : order.finalCost ?? order.estimatedCost;
+        : order.finalCost ?? order.estimatedCost ?? (partsTotal.gt(0) ? partsTotal : null);
     if (subtotal === null) {
       throw new BadRequestException(
-        'Indica el subtotal: la orden no tiene costo final ni estimado',
+        'Indica el subtotal: la orden no tiene costo final, costo estimado ni repuestos con precio',
       );
     }
     const tax = new Prisma.Decimal(dto.tax ?? 0);
 
     try {
-      return await this.prisma.invoice.create({
-        data: {
-          number: dto.number,
-          workOrderId: dto.workOrderId,
-          clientId,
-          subtotal,
-          tax,
-          total: subtotal.plus(tax),
-        },
-        include: INVOICE_INCLUDE,
-      });
+      // El código FAC-YYYY-NNN se calcula en la misma transacción que la factura.
+      return await this.prisma.$transaction(async (tx) =>
+        tx.invoice.create({
+          data: {
+            number: await nextDocumentNumber(tx, 'FAC'),
+            workOrderId: dto.workOrderId,
+            clientId,
+            subtotal,
+            tax,
+            total: subtotal.plus(tax),
+          },
+          include: INVOICE_INCLUDE,
+        }),
+      );
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException(
-          `Ya existe una factura con el número "${dto.number}" o para esta orden`,
-        );
+        throw new ConflictException('La orden de trabajo ya tiene una factura');
       }
       throw error;
     }

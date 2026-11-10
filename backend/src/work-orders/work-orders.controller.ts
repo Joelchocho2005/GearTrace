@@ -67,6 +67,16 @@ export class WorkOrdersController {
     return this.workOrdersService.addUsedPart(id, dto, user);
   }
 
+  /** Quita un repuesto y devuelve su stock (transacción). */
+  @Delete(':id(\\d+)/parts/:partId(\\d+)')
+  removeUsedPart(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('partId', ParseIntPipe) partId: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.workOrdersService.removeUsedPart(id, partId, user);
+  }
+
   @Patch(':id(\\d+)')
   update(
     @Param('id', ParseIntPipe) id: number,

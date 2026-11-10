@@ -100,7 +100,9 @@ Fuente: `backend/clinerules.md`.
 
 - `auth`: login, registro público de clientes, administración de usuarios y
   roles.
-- `inventory`: cajas (`Box`), piezas (`Part`), stock, imágenes y búsqueda.
+- `inventory`: cajas (`Box`), piezas (`Part`, con `unitPrice`), stock, imágenes
+  y búsqueda. Protegido con JWT: `GERENTE`/`MECANICO`; borrar solo `GERENTE`.
+  Alexa no usa estas rutas (llama a `InventoryService` directamente).
 - `client`: vehículos, citas y órdenes visibles para el cliente autenticado.
 - `service`: CRUD de vehículos y gestión de órdenes de trabajo.
 - `supplier`: stock bajo, pedidos de reposición y recepción (flujo con reglas
@@ -111,7 +113,7 @@ Fuente: `backend/clinerules.md`.
 - `common/prisma-errors.ts`: helper `isPrismaError(error, 'P2002' | 'P2003')`.
 - `alexa`: webhook `/api/webhook/alexa` para búsqueda de piezas.
 - `led`: Socket.io y control físico/simulado de LEDs.
-- `logs`: historial de búsquedas.
+- `logs`: historial de búsquedas (JWT, `GERENTE`/`MECANICO`).
 
 ### Backend: autorización
 
@@ -137,6 +139,8 @@ Fuente: `backend/clinerules.md`.
 - `PATCH /api/auth/users/:id` (`GERENTE`)
 - `PATCH /api/auth/users/:id/role` (`GERENTE`)
 - `PATCH /api/auth/users/:id/toggle` (`GERENTE`)
+- `GET /api/users/lookup?role=CLIENTE|MECANICO|GERENTE` (`GERENTE`, `MECANICO`):
+  usuarios activos de un rol (id, nombre, correo) para selectores.
 
 #### Cliente
 
@@ -144,6 +148,8 @@ Fuente: `backend/clinerules.md`.
 - `GET /api/client/appointments`
 - `POST /api/client/appointments`
 - `GET /api/client/work-orders`
+
+`GET /api/client/appointments` incluye la OT generada (`workOrder`).
 
 #### Servicio
 
@@ -174,6 +180,16 @@ Fuente: `backend/clinerules.md`.
   no se le agregan repuestos.
 - Eliminar una orden no concluida devuelve sus repuestos al inventario en la
   misma transacción.
+- `DELETE /api/work-orders/:id/parts/:partId` quita un repuesto y devuelve su
+  cantidad al stock (transacción, orden bloqueada; no en `CONCLUIDO`).
+- `UsedPart.unitPrice` congela `Part.unitPrice` al primer consumo (sumar
+  cantidad no lo cambia); es la base del subtotal de factura por repuestos.
+
+**Cita → OT:** `POST /api/appointments/:id/work-order` (`GERENTE`,
+`MECANICO`; body opcional `description`, `mileage`, `estimatedCost`,
+`mechanicId`) crea la OT con el vehículo y motivo de la cita, la vincula
+(`WorkOrder.appointmentId`, único) y marca la cita `COMPLETADA` en la misma
+transacción. Solo citas `AGENDADA`/`CONFIRMADA` y sin OT previa (409).
 - `PATCH .../status` no acepta `CONCLUIDO`; al pasar por primera vez a
   `EN_PROCESO` se registra `startedAt` (reanudar no lo reinicia).
 
@@ -197,11 +213,11 @@ comparten prefijo (p. ej. `/api/suppliers/low-stock`).
 | --- | --- | --- | --- |
 | `/api/users` | `GERENTE` | `GERENTE` | Hashea con bcrypt, nunca devuelve `password`, no permite borrarse a sí mismo; con FK → 409 (usar desactivar). |
 | `/api/vehicles` | `GERENTE`, `MECANICO` | `GERENTE` | RF-SER-01: placa normalizada (trim + mayúsculas) y única sin distinguir mayúsculas; dueño debe ser `CLIENTE` activo; 409 si tiene órdenes o citas. |
-| `/api/appointments` | `GERENTE`, `MECANICO` | `GERENTE` | Fecha futura; citas `COMPLETADA`/`CANCELADA` no se editan. |
+| `/api/appointments` (+ `POST /:id/work-order`) | `GERENTE`, `MECANICO` | `GERENTE` | Fecha futura al crear o reprogramar; citas `COMPLETADA`/`CANCELADA` no se editan. Incluye `workOrder` (OT generada). |
 | `/api/work-orders` (+ `POST /:id/parts`) | `GERENTE`, `MECANICO` | `GERENTE` | RF-INV-13: `POST /:id/parts` descuenta stock (ver arriba). RF-SER-05: `number` lo genera el servidor (`OT-YYYY-NNN`, no se acepta en el body). MECANICO solo ve/opera sus órdenes (ajenas → 404), se autoasigna al crear y no puede asignar a otro (403). Acepta `mileage`. `PATCH` no acepta `CONCLUIDO` (usar `/api/service/work-orders/:id/close`); órdenes concluidas no se editan ni borran. |
 | `/api/suppliers` | `GERENTE`, `MECANICO` | `GERENTE` | `GET` conserva `_count.purchaseOrders`; 409 si tiene pedidos. |
-| `/api/purchases` | `GERENTE`, `MECANICO` | `GERENTE` | `POST` delega en `SupplierService.createPurchaseOrder`; solo pedidos `PENDIENTE` se editan; `RECIBIDA` solo vía `/receive`; recibidos no se borran. |
-| `/api/invoices` | `GERENTE` | `GERENTE` | Solo órdenes `CONCLUIDO`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost`, `total = subtotal + tax`; pagadas no se editan ni borran. |
+| `/api/purchases` | `GERENTE`, `MECANICO` | `GERENTE` | `number` lo genera el servidor (`OC-YYYY-NNN`, no se acepta en el body). `POST` delega en `SupplierService.createPurchaseOrder` (piezas en o bajo `minStock`, sin repetir); solo pedidos `PENDIENTE` se editan; `RECIBIDA` solo vía `/receive`; recibidos no se borran. |
+| `/api/invoices` | `GERENTE` | `GERENTE` | `number` lo genera el servidor (`FAC-YYYY-NNN`). Solo órdenes `CONCLUIDO`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost ??` suma de repuestos (`UsedPart.unitPrice × cantidad`), `total = subtotal + tax`; pagadas no se editan ni borran. |
 
 Las rutas legadas `/api/service/vehicles*` y `/api/service/work-orders*`
 siguen activas porque las usa el frontend, pero **delegan** en
@@ -210,12 +226,14 @@ generador de código y mismo alcance por mecánico). `ServiceService` solo
 conserva las transiciones estado/diagnóstico/cierre, también con
 `workOrderScope`.
 
-#### Órdenes de trabajo: código y alcance
+#### Códigos correlativos y alcance de órdenes
 
-- `src/work-orders/work-order-number.ts`: `nextWorkOrderNumber(tx)` calcula
-  `OT-YYYY-NNN` (correlativo por año, MAX numérico) bajo
-  `pg_advisory_xact_lock`; debe llamarse dentro de la transacción que crea la
-  orden.
+- `src/common/document-number.ts`: `nextDocumentNumber(tx, 'OT' | 'OC' | 'FAC')`
+  calcula `PREFIJO-YYYY-NNN` (correlativo por año, MAX numérico) bajo un
+  `pg_advisory_xact_lock` por tipo; debe llamarse dentro de la transacción que
+  crea el registro. `OT` → órdenes de trabajo (`nextWorkOrderNumber` es su
+  envoltorio), `OC` → órdenes de compra, `FAC` → facturas. El cliente nunca
+  envía `number` (la validación lo rechaza).
 - `src/work-orders/work-order-scope.ts`: `workOrderScope(user)` → GERENTE
   `{}`, MECANICO `{ mechanicId }`, CLIENTE `{ vehicle.ownerId }`. Toda
   consulta o mutación de órdenes por id usa `findFirst({ id, ...scope })`.
@@ -225,7 +243,8 @@ conserva las transiciones estado/diagnóstico/cierre, también con
 Modelos principales:
 
 - `User`, `Box`, `Part`, `SearchLog`
-- `Vehicle`, `WorkOrder` (incluye `mileage`), `UsedPart` (tabla `used_parts`), `Appointment`
+- `Vehicle`, `WorkOrder` (incluye `mileage` y `appointmentId` único → `Appointment`),
+  `UsedPart` (tabla `used_parts`, con `unitPrice` congelado), `Appointment`
 - `Supplier`, `PurchaseOrder`, `PurchaseOrderItem`
 - `Invoice` (facturación: 1 factura por `WorkOrder`, `clientId` → `User`)
 
@@ -309,7 +328,9 @@ Fuente: `frontend/clinerules.md`.
 
 - React 18, Vite, TypeScript, TailwindCSS, Axios, React Router y Lucide Icons.
 - Usar componentes funcionales con tipos explícitos.
-- Mantener el tema oscuro basado en `slate-900`, `slate-800` y `brand` naranja.
+- Estilo **glassmorphism** con la paleta `slate` + `brand` naranja. Las
+  superficies usan las clases de `src/index.css` (ver "Sistema visual"), no
+  combinaciones manuales de `bg-slate-800/xx` + `border-slate-700`.
 - No usar `fetch`; todas las peticiones HTTP deben usar la instancia `api` de
   `frontend/src/api/axios.ts`.
 - Axios agrega automáticamente el JWT desde `localStorage` usando la clave
@@ -356,7 +377,8 @@ en otro lugar.
 
 | Ruta | Roles | Página |
 | --- | --- | --- |
-| `/dashboard`, `/logs` | autenticados | `Dashboard`, `AuditLogs` |
+| `/dashboard` | autenticados | `Dashboard` |
+| `/logs` | `GERENTE`, `MECANICO` | `AuditLogs` |
 | `/inventory` | `GERENTE`, `MECANICO` | `InventoryList` |
 | `/usuarios` | `GERENTE` | `UsuariosPage` (pestañas Listado / Gestión de accesos = `UsersList`) |
 | `/vehiculos` | `GERENTE`, `MECANICO` | `VehiculosPage` |
@@ -377,14 +399,55 @@ redirigen a su equivalente en español (`legacyRedirects`).
 - `components/ui/DataTable.tsx`: tabla genérica con `Column<T>`
   (`hideOnMobile` oculta columnas bajo `md`) y acciones Ver / Editar /
   Eliminar (iconos lucide `Eye`, `Pencil`, `Trash2`).
-- "Nuevo Registro", Ver y Editar solo hacen `console.log` hasta que existan
-  los formularios. Eliminar es funcional (confirmación + toast) y solo se
-  ofrece al `GERENTE`, igual que en el backend.
+- Formularios: cada página pasa `createForm` (`CreateFormConfig`) y/o
+  `editForm` (`EditFormConfig<T>`, con `isEditable` por fila) a
+  `ResourceListPage`, que abre `ui/ResourceFormModal.tsx`: campos
+  declarativos (`text`, `email`, `password`, `number`, `textarea`, `select`
+  con `options` o `loadOptions` asíncrono, `datetime`, `checkbox`). Sin
+  `createForm` no se muestra "Nuevo Registro".
+- "Ver" abre un modal con todas las columnas (incluidas las ocultas en
+  móvil). Eliminar pide confirmación y solo se ofrece al `GERENTE`.
+- `rowActions` (`ResourceRowAction`, con `label` como tooltip y `shortLabel`
+  visible): acciones de negocio por fila con
+  confirmación opcional; `run()` devuelve el mensaje de éxito y el listado se
+  recarga. Usadas para: confirmar cita y generar OT (Citas), recibir y
+  cancelar pedido (Compras), marcar factura pagada (Facturación).
+- Tras crear, editar o ejecutar una acción, el listado se recarga (las
+  respuestas pueden traer menos relaciones que el `list`).
+- `utils/formValues.ts`: `text`, `optionalText`, `optionalNumber`,
+  `requiredNumber`, `toDateTimeLocal`/`fromDateTimeLocal`, `idValue`,
+  `toOptions`. Lanzan `UserInputError` (`api/errors.ts`), cuyo mensaje
+  `getApiErrorMessage` muestra tal cual.
 - Estados y roles se muestran con `StatusBadge` usando los mapas de
   `utils/status.ts`; fechas y montos con `utils/format.ts` (moneda `USD`).
 
-`Layout.tsx` renderiza `Sidebar.tsx`, que en móvil (< `md`) es un panel
-deslizable abierto desde el botón de menú del header.
+`Layout.tsx` renderiza `Sidebar.tsx` (panel de vidrio flotante; en móvil
+< `md` es un cajón deslizable) y un encabezado de vidrio que muestra la
+sección y página actuales (`findNavigationItem(pathname)`) y el usuario.
+`Sidebar.tsx` agrupa `navigationItems` por `section` (General, Servicio
+técnico, Abastecimiento, Administración); sus roles salen de `ROUTE_ROLES`.
+
+### Frontend: sistema visual (glassmorphism)
+
+Definido en `src/index.css` (`@layer components`). Fondo: degradado oscuro con
+luces fijas naranja/azul/índigo en `body` (no poner `bg-slate-900` en
+contenedores de página, taparía el fondo).
+
+| Clase | Uso |
+| --- | --- |
+| `glass` | Paneles, tarjetas, tablas, encabezado. |
+| `glass-strong` | Modales, paneles laterales, sidebar, login. |
+| `glass-inset` | Elementos anidados dentro de un panel (ítems, filas, chips). |
+| `glass-hover` | Tarjetas clicables (realce al pasar el cursor). |
+| `glass-input` | `input`, `select`, `textarea`. |
+| `glass-overlay` | Capa detrás de modales y cajones. |
+| `btn-primary` / `btn-secondary` | Acción principal (degradado naranja) / secundaria (vidrio). |
+| `icon-badge` | Ícono destacado de encabezados. |
+
+Bordes y divisores sobre vidrio: `border-white/10`, `divide-white/5`;
+hovers: `hover:bg-white/5`. Las acciones de negocio de `DataTable` se
+muestran como botón con ícono + `shortLabel` (coloreado por `tone`); Ver,
+Editar y Eliminar quedan como íconos.
 
 ### Frontend: tablero de órdenes de trabajo
 

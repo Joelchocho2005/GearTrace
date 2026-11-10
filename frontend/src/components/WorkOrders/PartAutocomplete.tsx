@@ -146,7 +146,7 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
           onBlur={() => setIsOpen(false)}
           onKeyDown={handleKeyDown}
           placeholder="Buscar repuesto por nombre o código…"
-          className="w-full rounded-xl border border-slate-600 bg-slate-900/80 py-2.5 pl-9 pr-9 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 disabled:opacity-50"
+          className="w-full rounded-xl py-2.5 pl-9 pr-9 text-sm text-white disabled:opacity-50 glass-input"
         />
         {isSearching ? (
           <Loader2 size={16} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-400" />
@@ -167,7 +167,7 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
           <ul
             id={listboxId}
             role="listbox"
-            className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-700 bg-slate-800/95 p-1 shadow-2xl backdrop-blur-xl"
+            className="glass absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl p-1 shadow-2xl"
           >
             {results.length === 0 ? (
               <li className="px-3 py-3 text-sm text-slate-400">Sin coincidencias en el inventario.</li>
@@ -189,7 +189,7 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
                         ? 'cursor-not-allowed opacity-50'
                         : index === activeIndex
                           ? 'cursor-pointer bg-brand-500/15 text-white'
-                          : 'cursor-pointer text-slate-200 hover:bg-slate-700/50'
+                          : 'cursor-pointer text-slate-200 hover:bg-white/5'
                     }`}
                   >
                     <span className="min-w-0">
@@ -227,13 +227,13 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
               step={1}
               value={quantity}
               onChange={(event) => setQuantity(event.target.value)}
-              className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500"
+              className="w-24 rounded-lg px-3 py-2 text-sm text-white glass-input"
             />
           </label>
           <button
             type="submit"
             disabled={isAdding || quantityError !== null}
-            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 btn-primary"
           >
             {isAdding ? <Loader2 size={16} className="animate-spin" /> : <PackagePlus size={16} />}
             Agregar a la OT
