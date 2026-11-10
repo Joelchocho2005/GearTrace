@@ -63,6 +63,7 @@ src/
       SuppliersList.tsx
     ui/
       DataTable.tsx
+      ResourceFormModal.tsx
       ResourceListPage.tsx
       StatusBadge.tsx
       ViewTabs.tsx
@@ -98,6 +99,7 @@ src/
     routeRoles.ts
   utils/
     format.ts
+    formValues.ts
     status.ts
   App.tsx
   index.css
@@ -220,6 +222,9 @@ File: src/api/errors.ts
 ================
 import { isAxiosError } from 'axios';
 
+/** Error de validación de un formulario: su mensaje se muestra tal cual al usuario. */
+export class UserInputError extends Error {}
+
 /** Extrae el mensaje de error de NestJS (string o arreglo de class-validator). */
 export function getApiErrorMessage(error: unknown, fallback: string): string {
   if (isAxiosError<{ message?: string | string[] }>(error)) {
@@ -227,6 +232,7 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
     if (Array.isArray(message)) return message.join('. ');
     if (message) return message;
   }
+  if (error instanceof UserInputError) return error.message;
   return fallback;
 }
 
@@ -235,8 +241,11 @@ File: src/api/resources.ts
 ================
 import api from './axios';
 import { createCrudApi } from './crud';
+import type { Role } from '../contexts/AuthContext';
 import type {
   AddUsedPartPayload,
+  CreateWorkOrderFromAppointmentPayload,
+  UserLookup,
   AppUser,
   InventoryPart,
   Appointment,
@@ -268,7 +277,11 @@ import type {
  *  - DELETE en todos: GERENTE
  */
 
-export const usersApi = createCrudApi<AppUser, CreateUserPayload, UpdateUserPayload>('/users');
+export const usersApi = {
+  ...createCrudApi<AppUser, CreateUserPayload, UpdateUserPayload>('/users'),
+  /** Usuarios activos de un rol (id, nombre, correo). Disponible para GERENTE y MECANICO. */
+  lookup: async (role: Role) => (await api.get<UserLookup[]>('/users/lookup', { params: { role } })).data,
+};
 
 export const vehiclesApi = createCrudApi<Vehicle, CreateVehiclePayload, UpdateVehiclePayload>(
   '/vehicles',
@@ -279,6 +292,12 @@ export const appointmentsApi = createCrudApi<
   CreateAppointmentPayload,
   UpdateAppointmentPayload
 >('/appointments');
+
+/** Flujo cita → OT (GERENTE, MECANICO). */
+export const appointmentActionsApi = {
+  createWorkOrder: async (id: number, payload: CreateWorkOrderFromAppointmentPayload = {}) =>
+    (await api.post<WorkOrder>(`/appointments/${id}/work-order`, payload)).data,
+};
 
 export const workOrdersApi = createCrudApi<
   WorkOrder,
@@ -313,6 +332,8 @@ export const clientApi = {
 export const inventoryApi = {
   searchParts: async (query: string) =>
     (await api.get<InventoryPart[]>(`/inventory/search/${encodeURIComponent(query)}`)).data,
+  /** Piezas en o bajo su stock mínimo (candidatas a orden de compra). */
+  lowStockParts: async () => (await api.get<InventoryPart[]>('/inventory/parts/low-stock')).data,
 };
 
 /** Acciones operativas de una orden que no son CRUD. */
@@ -320,6 +341,9 @@ export const workOrderActionsApi = {
   /** RF-INV-13: registra el repuesto y descuenta stock en una transacción (409 si no alcanza). */
   addUsedPart: async (id: number, payload: AddUsedPartPayload) =>
     (await api.post<WorkOrder>(`/work-orders/${id}/parts`, payload)).data,
+  /** Quita el repuesto y devuelve su stock (transacción). */
+  removeUsedPart: async (id: number, partId: number) =>
+    (await api.delete<WorkOrder>(`/work-orders/${id}/parts/${partId}`)).data,
   /** Pasa la orden a CONCLUIDO; no toca inventario. Responde sin mecánico/factura: recargar con workOrdersApi.get. */
   conclude: async (id: number, finalCost?: number) =>
     (await api.patch<WorkOrder>(`/service/work-orders/${id}/close`, { finalCost })).data,
@@ -376,6 +400,9 @@ export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTO
 export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
 export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
 export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
+
+/** Respuesta de GET /users/lookup?role= (selectores de formularios). */
+export type UserLookup = Pick<UserSummary, 'id' | 'name' | 'email'>;
 
 export interface UserSummary {
   id: number;
@@ -434,8 +461,18 @@ export interface Appointment {
   status: AppointmentStatus;
   vehicleId: number;
   vehicle?: Vehicle;
+  /** OT generada desde esta cita (flujo cita → OT). */
+  workOrder?: { id: number; number: string; status: WorkOrderStatus } | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
+}
+
+/** POST /appointments/:id/work-order — vehículo y motivo salen de la cita. */
+export interface CreateWorkOrderFromAppointmentPayload {
+  description?: string;
+  mileage?: number;
+  estimatedCost?: number;
+  mechanicId?: number;
 }
 
 export interface CreateAppointmentPayload {
@@ -469,6 +506,8 @@ export interface AddUsedPartPayload {
 export interface UsedPart {
   id: number;
   quantity: number;
+  /** Precio unitario congelado al consumir la pieza. */
+  unitPrice: DecimalString | null;
   partId: number;
   part?: { id: number; name: string; code: string; quantity: number };
 }
@@ -484,6 +523,7 @@ export interface WorkOrder {
   finalCost: DecimalString | null;
   vehicleId: number;
   mechanicId: number | null;
+  appointmentId: number | null;
   vehicle?: Vehicle;
   mechanic?: UserSummary | null;
   parts?: UsedPart[];
@@ -560,15 +600,14 @@ export interface PurchaseOrder {
   updatedAt: ISODateString;
 }
 
+/** `number` (OC-YYYY-NNN) lo genera el backend. */
 export interface CreatePurchasePayload {
-  number: string;
   supplierId: number;
   items: { partId: number; quantity: number; unitPrice?: number }[];
 }
 
 /** `RECIBIDA` no se acepta aquí: la recepción usa /suppliers/purchase-orders/:id/receive. */
 export interface UpdatePurchasePayload {
-  number?: string;
   supplierId?: number;
   status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
 }
@@ -591,8 +630,8 @@ export interface Invoice {
   updatedAt: ISODateString;
 }
 
+/** `number` (FAC-YYYY-NNN) lo genera el backend. */
 export interface CreateInvoicePayload {
-  number: string;
   workOrderId: number;
   clientId?: number;
   subtotal?: number;
@@ -619,6 +658,7 @@ interface InventoryPart {
   code: string;
   quantity: number;
   minStock: number;
+  unitPrice: string | null;
   keywords: string[];
   box?: {
     id: number;
@@ -633,6 +673,7 @@ const toFormValues = (part: InventoryPart): PartFormValues => ({
   quantity: part.quantity,
   boxId: part.box?.id ?? 0,
   minStock: part.minStock,
+  unitPrice: part.unitPrice ?? '',
   keywords: part.keywords,
 });
 
@@ -681,7 +722,7 @@ export default function InventoryList() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+            <div className="rounded-xl p-3 icon-badge">
               <Package size={24} />
             </div>
             <div>
@@ -699,14 +740,14 @@ export default function InventoryList() {
             setSelectedPart(null);
             setIsModalOpen(true);
           }}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900"
+          className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white transition-colors focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900 btn-primary"
         >
           <Plus size={18} />
           Nueva Pieza
         </button>
       </div>
 
-      <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4">
+      <div className="glass rounded-2xl p-4">
         <label htmlFor="inventory-search" className="sr-only">
           Buscar piezas
         </label>
@@ -721,12 +762,12 @@ export default function InventoryList() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Buscar por nombre o código..."
-            className="w-full rounded-xl border border-slate-700 bg-slate-900/70 py-2.5 pl-10 pr-4 text-slate-100 outline-none transition-colors placeholder:text-slate-500 focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+            className="w-full rounded-xl py-2.5 pl-10 pr-4 text-slate-100 transition-colors focus:ring-1 focus:ring-brand-500 glass-input"
           />
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="p-8 text-center text-slate-400">Cargando piezas...</div>
         ) : error ? (
@@ -738,7 +779,7 @@ export default function InventoryList() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="border-b border-slate-700 bg-slate-800">
+              <thead className="border-b border-white/10 bg-white/[0.03]">
                 <tr>
                   <th className="px-6 py-4 font-semibold text-slate-300">Pieza</th>
                   <th className="px-6 py-4 font-semibold text-slate-300">Código</th>
@@ -747,9 +788,9 @@ export default function InventoryList() {
                   <th className="px-6 py-4 text-right font-semibold text-slate-300">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/70">
+              <tbody className="divide-y divide-white/5">
                 {filteredParts.map((part) => (
-                  <tr key={part.id} className="transition-colors hover:bg-slate-700/30">
+                  <tr key={part.id} className="transition-colors hover:bg-white/5">
                     <td className="px-6 py-4 font-medium text-white">{part.name}</td>
                     <td className="px-6 py-4 text-slate-400">{part.code}</td>
                     <td className="px-6 py-4 text-slate-400">
@@ -816,6 +857,8 @@ export interface PartFormValues {
   quantity: number;
   boxId: number;
   minStock: number;
+  /** '' = sin precio. Se congela en cada OT al consumir la pieza. */
+  unitPrice: string;
   keywords: string[];
 }
 
@@ -832,6 +875,7 @@ const emptyForm: PartFormValues = {
   quantity: 0,
   boxId: 0,
   minStock: 1,
+  unitPrice: '',
   keywords: [],
 };
 
@@ -892,6 +936,7 @@ export default function PartFormModal({
       quantity: form.quantity,
       boxId: form.boxId,
       minStock: form.minStock,
+      unitPrice: form.unitPrice.trim() === '' ? undefined : Number(form.unitPrice),
       keywords: keywordsText
         .split(',')
         .map((keyword) => keyword.trim())
@@ -919,20 +964,20 @@ export default function PartFormModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 glass-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby="part-form-title"
     >
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-800 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-700 px-6 py-4">
+      <div className="glass-strong max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl shadow-2xl">
+        <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
           <h2 id="part-form-title" className="text-xl font-bold text-white">
             {part ? 'Editar pieza' : 'Nueva pieza'}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-700 hover:text-white"
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
             aria-label="Cerrar modal"
           >
             <X size={20} />
@@ -948,7 +993,7 @@ export default function PartFormModal({
                 maxLength={150}
                 value={form.name}
                 onChange={(event) => updateField('name', event.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -959,7 +1004,7 @@ export default function PartFormModal({
                 maxLength={50}
                 value={form.code}
                 onChange={(event) => updateField('code', event.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -971,7 +1016,7 @@ export default function PartFormModal({
                 type="number"
                 value={form.quantity}
                 onChange={(event) => updateField('quantity', Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -983,7 +1028,21 @@ export default function PartFormModal({
                 type="number"
                 value={form.minStock}
                 onChange={(event) => updateField('minStock', Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              Precio unitario
+              <input
+                min={0}
+                step="0.01"
+                type="number"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={form.unitPrice}
+                onChange={(event) => updateField('unitPrice', event.target.value)}
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>
 
@@ -994,7 +1053,7 @@ export default function PartFormModal({
                 value={form.boxId || ''}
                 disabled={isLoadingBoxes}
                 onChange={(event) => updateField('boxId', Number(event.target.value))}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               >
                 <option value="" disabled>
                   {isLoadingBoxes ? 'Cargando cajas...' : 'Selecciona una caja'}
@@ -1013,7 +1072,7 @@ export default function PartFormModal({
                 value={keywordsText}
                 onChange={(event) => setKeywordsText(event.target.value)}
                 placeholder="filtro, aceite, motor"
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-white outline-none placeholder:text-slate-500 focus:border-brand-500"
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
               <span className="block text-xs text-slate-500">
                 Separa las palabras clave con comas.
@@ -1021,18 +1080,18 @@ export default function PartFormModal({
             </label>
           </div>
 
-          <div className="flex justify-end gap-3 border-t border-slate-700 pt-5">
+          <div className="flex justify-end gap-3 border-t border-white/10 pt-5">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl px-4 py-2.5 font-semibold text-slate-300 transition-colors hover:bg-slate-700"
+              className="rounded-xl px-4 py-2.5 font-semibold text-slate-300 transition-colors hover:bg-white/5"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={isSubmitting || isLoadingBoxes}
-              className="rounded-xl bg-brand-500 px-5 py-2.5 font-semibold text-white transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-xl px-5 py-2.5 font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60 btn-primary"
             >
               {isSubmitting ? 'Guardando...' : 'Guardar pieza'}
             </button>
@@ -1086,7 +1145,6 @@ export default function SuppliersList() {
     }
     try {
       await api.post('/suppliers/purchase-orders', {
-        number: `AUTO-${part.code}-${Date.now()}`,
         supplierId: Number(supplierId),
         items: [{ partId: part.id, quantity: Math.max(part.minStock * 2 - part.quantity, 1) }],
       });
@@ -1099,11 +1157,11 @@ export default function SuppliersList() {
 
   return (
     <section className="space-y-6">
-      <header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><Truck size={24} /></div><div><h2 className="text-2xl font-bold text-white">Proveedores y abastecimiento</h2><p className="text-sm text-slate-400">Solicita reposiciones cuando el stock esté bajo.</p></div></header>
-      <div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-5"><label className="mb-2 block text-sm text-slate-400">Proveedor para nuevas solicitudes</label><select value={supplierId} onChange={(event) => setSupplierId(event.target.value)} className="w-full max-w-md rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white">{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></div>
-      <div className="overflow-hidden rounded-2xl border border-amber-500/30 bg-slate-800/60">
-        <div className="flex items-center gap-2 border-b border-slate-700 p-5 text-amber-400"><AlertTriangle size={20} /><h3 className="font-semibold">Alertas de stock mínimo</h3></div>
-        {loading ? <p className="p-6 text-slate-400">Cargando alertas...</p> : lowStock.length === 0 ? <p className="p-6 text-emerald-400">No hay piezas bajo el mínimo.</p> : <div className="divide-y divide-slate-700">{lowStock.map((part) => <div key={part.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium text-white">{part.name}</p><p className="text-sm text-slate-400">{part.code} · Stock: <span className="text-amber-400">{part.quantity}</span> / mínimo {part.minStock}</p></div><button type="button" onClick={() => void requestRestock(part)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2 font-semibold text-white hover:bg-brand-600"><PackageCheck size={17} /> Solicitar reposición</button></div>)}</div>}
+      <header className="flex items-center gap-3"><div className="rounded-xl p-3 icon-badge"><Truck size={24} /></div><div><h2 className="text-2xl font-bold text-white">Proveedores y abastecimiento</h2><p className="text-sm text-slate-400">Solicita reposiciones cuando el stock esté bajo.</p></div></header>
+      <div className="glass rounded-2xl p-5"><label className="mb-2 block text-sm text-slate-400">Proveedor para nuevas solicitudes</label><select value={supplierId} onChange={(event) => setSupplierId(event.target.value)} className="w-full max-w-md rounded-xl px-4 py-3 text-white glass-input">{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></div>
+      <div className="overflow-hidden rounded-2xl border border-amber-500/30 bg-white/[0.03]">
+        <div className="flex items-center gap-2 border-b border-white/10 p-5 text-amber-400"><AlertTriangle size={20} /><h3 className="font-semibold">Alertas de stock mínimo</h3></div>
+        {loading ? <p className="p-6 text-slate-400">Cargando alertas...</p> : lowStock.length === 0 ? <p className="p-6 text-emerald-400">No hay piezas bajo el mínimo.</p> : <div className="divide-y divide-white/5">{lowStock.map((part) => <div key={part.id} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium text-white">{part.name}</p><p className="text-sm text-slate-400">{part.code} · Stock: <span className="text-amber-400">{part.quantity}</span> / mínimo {part.minStock}</p></div><button type="button" onClick={() => void requestRestock(part)} className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 font-semibold text-white btn-primary"><PackageCheck size={17} /> Solicitar reposición</button></div>)}</div>}
       </div>
     </section>
   );
@@ -1113,7 +1171,7 @@ export default function SuppliersList() {
 File: src/components/ui/DataTable.tsx
 ================
 import { ReactNode } from 'react';
-import { AlertCircle, Eye, Inbox, Pencil, RotateCw, Trash2 } from 'lucide-react';
+import { AlertCircle, Eye, Inbox, Pencil, RotateCw, Trash2, type LucideIcon } from 'lucide-react';
 
 export interface Column<T> {
   key: string;
@@ -1123,6 +1181,24 @@ export interface Column<T> {
   hideOnMobile?: boolean;
   align?: 'left' | 'right';
 }
+
+/** Acción adicional de una fila (p. ej. "Recibir pedido", "Marcar pagada"). */
+export interface RowAction {
+  key: string;
+  label: string;
+  /** Texto visible del botón (≥ sm); `label` queda como tooltip y para lectores de pantalla. */
+  shortLabel: string;
+  icon: LucideIcon;
+  tone?: 'brand' | 'success' | 'danger';
+  onClick: () => void;
+}
+
+/** Acciones de negocio: botón con ícono + texto, coloreado según su efecto. */
+const actionTone: Record<NonNullable<RowAction['tone']>, string> = {
+  brand: 'border-brand-400/25 bg-brand-500/10 text-brand-300 hover:bg-brand-500/20',
+  success: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20',
+  danger: 'border-red-400/25 bg-red-500/10 text-red-300 hover:bg-red-500/20',
+};
 
 interface DataTableProps<T extends { id: number }> {
   columns: Column<T>[];
@@ -1134,13 +1210,17 @@ interface DataTableProps<T extends { id: number }> {
   onView?: (row: T) => void;
   onEdit?: (row: T) => void;
   onDelete?: (row: T) => void;
+  /** Si se define, Editar solo aparece en las filas que lo cumplan. */
+  isEditable?: (row: T) => boolean;
+  /** Acciones adicionales por fila; se muestran antes de Ver/Editar/Eliminar. */
+  rowActions?: (row: T) => RowAction[];
 }
 
 const SKELETON_ROWS = 5;
 
 function cellClass(column: { hideOnMobile?: boolean; align?: 'left' | 'right' }): string {
   return [
-    'px-4 py-3 sm:px-6',
+    'whitespace-nowrap px-4 py-3 sm:px-6',
     column.hideOnMobile ? 'hidden md:table-cell' : '',
     column.align === 'right' ? 'text-right' : 'text-left',
   ].join(' ');
@@ -1159,8 +1239,10 @@ export default function DataTable<T extends { id: number }>({
   onView,
   onEdit,
   onDelete,
+  isEditable,
+  rowActions,
 }: DataTableProps<T>) {
-  const hasActions = Boolean(onView || onEdit || onDelete);
+  const hasActions = Boolean(onView || onEdit || onDelete || rowActions);
 
   if (error && !isLoading) {
     return (
@@ -1170,7 +1252,7 @@ export default function DataTable<T extends { id: number }>({
         <button
           type="button"
           onClick={onRetry}
-          className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/50"
+          className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm text-slate-200 btn-secondary"
         >
           <RotateCw size={16} /> Reintentar
         </button>
@@ -1180,8 +1262,8 @@ export default function DataTable<T extends { id: number }>({
 
   return (
     <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-slate-700 text-sm">
-        <thead className="bg-slate-800 text-xs uppercase tracking-wider text-slate-400">
+      <table className="min-w-full divide-y divide-white/5 text-sm">
+        <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-slate-400">
           <tr>
             {columns.map((column) => (
               <th key={column.key} scope="col" className={`${cellClass(column)} font-semibold`}>
@@ -1195,18 +1277,18 @@ export default function DataTable<T extends { id: number }>({
             )}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-700/80" aria-busy={isLoading}>
+        <tbody className="divide-y divide-white/5" aria-busy={isLoading}>
           {isLoading &&
             Array.from({ length: SKELETON_ROWS }, (_, index) => (
               <tr key={index} className="animate-pulse">
                 {columns.map((column) => (
                   <td key={column.key} className={cellClass(column)}>
-                    <div className="h-4 w-3/4 rounded bg-slate-700/60" />
+                    <div className="h-4 w-3/4 rounded bg-white/10" />
                   </td>
                 ))}
                 {hasActions && (
                   <td className="px-4 py-3 sm:px-6">
-                    <div className="ml-auto h-4 w-16 rounded bg-slate-700/60" />
+                    <div className="ml-auto h-4 w-16 rounded bg-white/10" />
                   </td>
                 )}
               </tr>
@@ -1225,7 +1307,7 @@ export default function DataTable<T extends { id: number }>({
 
           {!isLoading &&
             rows.map((row) => (
-              <tr key={row.id} className="text-slate-300 hover:bg-slate-700/20">
+              <tr key={row.id} className="text-slate-300 transition-colors hover:bg-white/5">
                 {columns.map((column) => (
                   <td key={column.key} className={cellClass(column)}>
                     {column.render(row)}
@@ -1233,18 +1315,31 @@ export default function DataTable<T extends { id: number }>({
                 ))}
                 {hasActions && (
                   <td className="whitespace-nowrap px-4 py-2 text-right sm:px-6">
+                    {rowActions?.(row).map(({ key, label, shortLabel, icon: Icon, tone = 'brand', onClick }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        title={label}
+                        aria-label={label}
+                        onClick={onClick}
+                        className={`mr-1 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${actionTone[tone]}`}
+                      >
+                        <Icon size={15} />
+                        <span className="hidden sm:inline">{shortLabel}</span>
+                      </button>
+                    ))}
                     {onView && (
                       <button
                         type="button"
                         title="Ver detalles"
                         aria-label="Ver detalles"
                         onClick={() => onView(row)}
-                        className={`${actionButton} hover:bg-slate-700/60 hover:text-white`}
+                        className={`${actionButton} hover:bg-white/5 hover:text-white`}
                       >
                         <Eye size={17} />
                       </button>
                     )}
-                    {onEdit && (
+                    {onEdit && (!isEditable || isEditable(row)) && (
                       <button
                         type="button"
                         title="Editar"
@@ -1277,19 +1372,292 @@ export default function DataTable<T extends { id: number }>({
 }
 
 ================
+File: src/components/ui/ResourceFormModal.tsx
+================
+import { FormEvent, useEffect, useState } from 'react';
+import { Loader2, X } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../../api/errors';
+
+export type FormValues = Record<string, string | boolean>;
+
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+export interface FormField {
+  name: string;
+  label: string;
+  type: 'text' | 'email' | 'password' | 'number' | 'textarea' | 'select' | 'datetime' | 'checkbox';
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+  /** Opciones fijas de un select. */
+  options?: SelectOption[];
+  /** Opciones asíncronas de un select (se cargan al abrir el modal). */
+  loadOptions?: () => Promise<SelectOption[]>;
+  min?: number;
+  step?: string;
+  maxLength?: number;
+  /** Ocupa las dos columnas en pantallas anchas. */
+  wide?: boolean;
+}
+
+interface ResourceFormModalProps {
+  title: string;
+  submitLabel: string;
+  fields: FormField[];
+  initialValues: FormValues;
+  /** Debe lanzar en error; el modal muestra el mensaje del backend y queda abierto. */
+  onSubmit: (values: FormValues) => Promise<void>;
+  onClose: () => void;
+}
+
+const fieldClass =
+  'w-full rounded-xl px-4 py-2.5 text-sm text-white disabled:opacity-50 glass-input';
+
+/** Modal de alta/edición configurable por campos (glass, slate + brand). */
+export default function ResourceFormModal({
+  title,
+  submitLabel,
+  fields,
+  initialValues,
+  onSubmit,
+  onClose,
+}: ResourceFormModalProps) {
+  const [values, setValues] = useState<FormValues>(initialValues);
+  const [asyncOptions, setAsyncOptions] = useState<Record<string, SelectOption[]>>({});
+  const [isLoadingOptions, setIsLoadingOptions] = useState(fields.some((field) => field.loadOptions));
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    const loaders = fields.flatMap((field) =>
+      field.loadOptions ? [{ name: field.name, load: field.loadOptions }] : [],
+    );
+    if (loaders.length === 0) return;
+    let active = true;
+    (async () => {
+      try {
+        const loaded = await Promise.all(
+          loaders.map(async ({ name, load }) => [name, await load()] as const),
+        );
+        if (active) setAsyncOptions(Object.fromEntries(loaded));
+      } catch (error) {
+        if (active) toast.error(getApiErrorMessage(error, 'No se pudieron cargar las opciones del formulario.'));
+      } finally {
+        if (active) setIsLoadingOptions(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // Solo al montar: los campos se fijan al abrir el modal y no cambian mientras está abierto.
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isSaving) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isSaving, onClose]);
+
+  const setValue = (name: string, value: string | boolean) =>
+    setValues((current) => ({ ...current, [name]: value }));
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    const missing = fields.find(
+      (field) => field.required && field.type !== 'checkbox' && String(values[field.name] ?? '').trim() === '',
+    );
+    if (missing) {
+      toast.error(`Completa el campo "${missing.label}".`);
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await onSubmit(values);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo guardar.'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const renderField = (field: FormField, autoFocus: boolean) => {
+    const value = values[field.name];
+    const common = { id: `field-${field.name}`, name: field.name, autoFocus, disabled: isSaving };
+
+    switch (field.type) {
+      case 'checkbox':
+        return (
+          <label className="flex items-center gap-3 text-sm text-slate-300">
+            <input
+              {...common}
+              type="checkbox"
+              checked={value === true}
+              onChange={(event) => setValue(field.name, event.target.checked)}
+              className="h-4 w-4 rounded accent-orange-500 glass-input"
+            />
+            {field.label}
+          </label>
+        );
+      case 'textarea':
+        return (
+          <textarea
+            {...common}
+            rows={3}
+            maxLength={field.maxLength}
+            value={String(value ?? '')}
+            placeholder={field.placeholder}
+            onChange={(event) => setValue(field.name, event.target.value)}
+            className={fieldClass}
+          />
+        );
+      case 'select': {
+        const options = field.options ?? asyncOptions[field.name] ?? [];
+        const loading = Boolean(field.loadOptions) && isLoadingOptions;
+        return (
+          <select
+            {...common}
+            disabled={isSaving || loading}
+            value={String(value ?? '')}
+            onChange={(event) => setValue(field.name, event.target.value)}
+            className={fieldClass}
+          >
+            <option value="">{loading ? 'Cargando…' : field.placeholder ?? 'Selecciona una opción'}</option>
+            {options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        );
+      }
+      default:
+        return (
+          <input
+            {...common}
+            type={field.type === 'datetime' ? 'datetime-local' : field.type}
+            min={field.min}
+            step={field.step}
+            maxLength={field.maxLength}
+            inputMode={field.type === 'number' ? 'decimal' : undefined}
+            value={String(value ?? '')}
+            placeholder={field.placeholder}
+            onChange={(event) => setValue(field.name, event.target.value)}
+            className={fieldClass}
+          />
+        );
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 glass-overlay"
+      onMouseDown={(event) => event.target === event.currentTarget && !isSaving && onClose()}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resource-form-title"
+        onSubmit={handleSubmit}
+        className="glass-strong flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl shadow-2xl"
+      >
+        <header className="flex items-center justify-between gap-3 border-b border-white/10 p-5">
+          <h3 id="resource-form-title" className="text-lg font-bold text-white">{title}</h3>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="rounded-lg p-1.5 text-slate-400 hover:text-white">
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="grid gap-4 overflow-y-auto p-5 sm:grid-cols-2">
+          {fields.map((field, index) => (
+            <div key={field.name} className={field.wide || field.type === 'textarea' ? 'sm:col-span-2' : ''}>
+              {field.type !== 'checkbox' && (
+                <label htmlFor={`field-${field.name}`} className="mb-1.5 block text-sm text-slate-300">
+                  {field.label}
+                  {field.required && <span className="text-brand-400"> *</span>}
+                </label>
+              )}
+              {renderField(field, index === 0)}
+              {field.help && <p className="mt-1 text-xs text-slate-500">{field.help}</p>}
+            </div>
+          ))}
+        </div>
+
+        <footer className="flex justify-end gap-3 border-t border-white/10 p-5">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSaving}
+            className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 btn-secondary"
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            disabled={isSaving || isLoadingOptions}
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50 btn-primary"
+          >
+            {isSaving && <Loader2 size={16} className="animate-spin" />}
+            {submitLabel}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+================
 File: src/components/ui/ResourceListPage.tsx
 ================
 import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import { Plus, type LucideIcon } from 'lucide-react';
+import { Plus, X, type LucideIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getApiErrorMessage } from '../../api/errors';
-import DataTable, { Column } from './DataTable';
+import DataTable, { Column, RowAction } from './DataTable';
+import ResourceFormModal, { FormField, FormValues } from './ResourceFormModal';
+
+/** Alta de registros. Sin esta config no se muestra "Nuevo Registro". */
+export interface CreateFormConfig {
+  title: string;
+  fields: FormField[];
+  initialValues: FormValues;
+  /** Debe lanzar en error (el modal muestra el mensaje y queda abierto). */
+  submit: (values: FormValues) => Promise<unknown>;
+  successMessage: string;
+}
+
+/** Edición de un registro existente. */
+export interface EditFormConfig<T> {
+  title: (row: T) => string;
+  fields: (row: T) => FormField[];
+  initialValues: (row: T) => FormValues;
+  submit: (row: T, values: FormValues) => Promise<unknown>;
+  /** Filas que admiten edición (p. ej. solo pedidos PENDIENTES). */
+  isEditable?: (row: T) => boolean;
+}
+
+/** Acción de negocio por fila; `run` devuelve el mensaje de éxito. */
+export interface ResourceRowAction {
+  key: string;
+  label: string;
+  /** Texto corto visible en el botón (p. ej. "Recibir"). */
+  shortLabel: string;
+  icon: LucideIcon;
+  tone?: RowAction['tone'];
+  /** Si se define, se pide confirmación antes de ejecutar. */
+  confirm?: string;
+  run: () => Promise<string>;
+}
 
 interface ResourceListPageProps<T extends { id: number }> {
   title: string;
   description: string;
   icon: LucideIcon;
-  /** Nombre singular del registro, usado en mensajes ("vehículo"). */
+  /** Nombre singular del registro, usado en mensajes ("el vehículo"). */
   entityLabel: string;
   /** Debe ser una referencia estable (p. ej. `vehiclesApi.list`). */
   fetchAll: () => Promise<T[]>;
@@ -1298,16 +1666,19 @@ interface ResourceListPageProps<T extends { id: number }> {
   getRowLabel: (row: T) => string;
   /** Solo se pasa si el rol actual puede eliminar (el backend exige GERENTE). */
   onDelete?: (id: number) => Promise<void>;
-  canCreate?: boolean;
-  canEdit?: boolean;
+  createForm?: CreateFormConfig;
+  editForm?: EditFormConfig<T>;
+  rowActions?: (row: T) => ResourceRowAction[];
   /** Contenido extra sobre el encabezado (p. ej. pestañas de vista). */
   toolbar?: ReactNode;
 }
 
+type FormState<T> = { mode: 'create' } | { mode: 'edit'; row: T } | null;
+
 /**
  * Página de listado CRUD: encabezado + "Nuevo Registro" + tabla con carga,
- * error, vacío y acciones. Los formularios de creación/edición llegarán en la
- * siguiente fase; por ahora esas acciones solo registran en consola.
+ * error, vacío, Ver/Editar/Eliminar y acciones de negocio por fila. Tras cada
+ * mutación se recarga el listado (las respuestas pueden traer menos relaciones).
  */
 export default function ResourceListPage<T extends { id: number }>({
   title,
@@ -1319,13 +1690,17 @@ export default function ResourceListPage<T extends { id: number }>({
   emptyMessage,
   getRowLabel,
   onDelete,
-  canCreate = true,
-  canEdit = true,
+  createForm,
+  editForm,
+  rowActions,
   toolbar,
 }: ResourceListPageProps<T>) {
   const [rows, setRows] = useState<T[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [formState, setFormState] = useState<FormState<T>>(null);
+  const [viewing, setViewing] = useState<T | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const latestRequest = useRef(0);
 
   const load = useCallback(async () => {
@@ -1352,6 +1727,15 @@ export default function ResourceListPage<T extends { id: number }>({
     };
   }, [load]);
 
+  useEffect(() => {
+    if (!viewing) return;
+    const onKeyDown = (event: KeyboardEvent) => event.key === 'Escape' && setViewing(null);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [viewing]);
+
+  const closeForm = useCallback(() => setFormState(null), []);
+
   const handleDelete = async (row: T) => {
     if (!onDelete) return;
     const confirmed = window.confirm(
@@ -1367,13 +1751,40 @@ export default function ResourceListPage<T extends { id: number }>({
     }
   };
 
+  const runAction = async (rowId: number, action: ResourceRowAction) => {
+    if (busyAction) return;
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    setBusyAction(`${rowId}:${action.key}`);
+    try {
+      toast.success(await action.run());
+      await load();
+    } catch (actionError) {
+      toast.error(getApiErrorMessage(actionError, `No se pudo completar "${action.label}".`));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const submitForm = async (values: FormValues) => {
+    if (!formState) return;
+    if (formState.mode === 'create' && createForm) {
+      await createForm.submit(values);
+      toast.success(createForm.successMessage);
+    } else if (formState.mode === 'edit' && editForm) {
+      await editForm.submit(formState.row, values);
+      toast.success(`Se actualizó ${entityLabel} "${getRowLabel(formState.row)}".`);
+    }
+    setFormState(null);
+    await load();
+  };
+
   return (
     <section className="space-y-6">
       {toolbar}
 
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <div className="rounded-xl p-3 icon-badge">
             <Icon size={24} />
           </div>
           <div>
@@ -1386,18 +1797,18 @@ export default function ResourceListPage<T extends { id: number }>({
             </p>
           </div>
         </div>
-        {canCreate && (
+        {createForm && (
           <button
             type="button"
-            onClick={() => console.log('Abrir modal de creación')}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white hover:bg-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+            onClick={() => setFormState({ mode: 'create' })}
+            className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 btn-primary"
           >
             <Plus size={18} /> Nuevo Registro
           </button>
         )}
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+      <div className="glass overflow-hidden rounded-2xl">
         <DataTable
           columns={columns}
           rows={rows}
@@ -1405,11 +1816,75 @@ export default function ResourceListPage<T extends { id: number }>({
           error={error}
           emptyMessage={emptyMessage}
           onRetry={() => void load()}
-          onView={(row) => console.log('Ver detalles', row)}
-          onEdit={canEdit ? (row) => console.log('Abrir modal de edición', row) : undefined}
+          onView={setViewing}
+          onEdit={editForm ? (row) => setFormState({ mode: 'edit', row }) : undefined}
+          isEditable={editForm?.isEditable}
           onDelete={onDelete ? (row) => void handleDelete(row) : undefined}
+          rowActions={
+            rowActions
+              ? (row) =>
+                  rowActions(row).map((action) => ({
+                    key: action.key,
+                    label: action.label,
+                    shortLabel: busyAction === `${row.id}:${action.key}` ? `${action.shortLabel}…` : action.shortLabel,
+                    icon: action.icon,
+                    tone: action.tone,
+                    onClick: () => void runAction(row.id, action),
+                  }))
+              : undefined
+          }
         />
       </div>
+
+      {formState?.mode === 'create' && createForm && (
+        <ResourceFormModal
+          title={createForm.title}
+          submitLabel="Crear"
+          fields={createForm.fields}
+          initialValues={createForm.initialValues}
+          onSubmit={submitForm}
+          onClose={closeForm}
+        />
+      )}
+      {formState?.mode === 'edit' && editForm && (
+        <ResourceFormModal
+          title={editForm.title(formState.row)}
+          submitLabel="Guardar cambios"
+          fields={editForm.fields(formState.row)}
+          initialValues={editForm.initialValues(formState.row)}
+          onSubmit={submitForm}
+          onClose={closeForm}
+        />
+      )}
+
+      {viewing && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 glass-overlay"
+          onMouseDown={(event) => event.target === event.currentTarget && setViewing(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="resource-detail-title"
+            className="glass-strong max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl shadow-2xl"
+          >
+            <header className="flex items-center justify-between gap-3 border-b border-white/10 p-5">
+              <h3 id="resource-detail-title" className="text-lg font-bold text-white">{getRowLabel(viewing)}</h3>
+              <button type="button" onClick={() => setViewing(null)} aria-label="Cerrar" className="rounded-lg p-1.5 text-slate-400 hover:text-white">
+                <X size={20} />
+              </button>
+            </header>
+            <dl className="divide-y divide-white/5 p-5">
+              {columns.map((column) => (
+                <div key={column.key} className="grid grid-cols-3 gap-3 py-2.5 text-sm">
+                  <dt className="text-slate-500">{column.header}</dt>
+                  <dd className="col-span-2 text-slate-200">{column.render(viewing)}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1420,7 +1895,7 @@ File: src/components/ui/StatusBadge.tsx
 export type BadgeTone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'brand';
 
 const toneClasses: Record<BadgeTone, string> = {
-  neutral: 'bg-slate-700/50 text-slate-300 border-slate-600',
+  neutral: 'bg-white/5 text-slate-300 border-white/10',
   info: 'bg-sky-500/10 text-sky-300 border-sky-500/30',
   warning: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
   success: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
@@ -1436,7 +1911,7 @@ interface StatusBadgeProps {
 export default function StatusBadge({ label, tone = 'neutral' }: StatusBadgeProps) {
   return (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ${toneClasses[tone]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium backdrop-blur-sm ${toneClasses[tone]}`}
     >
       {label}
     </span>
@@ -1463,7 +1938,7 @@ interface ViewTabsProps<TKey extends string> {
 /** Alterna entre el listado CRUD y una vista operativa existente del módulo. */
 export default function ViewTabs<TKey extends string>({ tabs, active, onChange }: ViewTabsProps<TKey>) {
   return (
-    <div role="tablist" className="inline-flex rounded-xl border border-slate-700 bg-slate-800/60 p-1">
+    <div role="tablist" className="glass inline-flex rounded-xl p-1">
       {tabs.map(({ key, label, icon: Icon }) => (
         <button
           key={key}
@@ -1472,7 +1947,9 @@ export default function ViewTabs<TKey extends string>({ tabs, active, onChange }
           aria-selected={active === key}
           onClick={() => onChange(key)}
           className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-            active === key ? 'bg-brand-500 text-white' : 'text-slate-400 hover:text-white'
+            active === key
+              ? 'bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_6px_18px_-8px_rgba(249,115,22,0.8)]'
+              : 'text-slate-400 hover:bg-white/5 hover:text-white'
           }`}
         >
           <Icon size={16} /> {label}
@@ -1562,25 +2039,25 @@ export default function UsersList() {
     <section className="space-y-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><Users size={24} /></div>
+          <div className="rounded-xl p-3 icon-badge"><Users size={24} /></div>
           <div>
             <h2 className="text-2xl font-bold text-white">Usuarios</h2>
             <p className="text-sm text-slate-400">Administra personal, clientes y accesos.</p>
           </div>
         </div>
-        <button type="button" onClick={() => setIsModalOpen(true)} className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white hover:bg-brand-600">
+        <button type="button" onClick={() => setIsModalOpen(true)} className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white btn-primary">
           <Plus size={18} /> Nuevo usuario
         </button>
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? <p className="p-8 text-center text-slate-400">Cargando usuarios...</p> : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-700 text-left">
-              <thead className="bg-slate-800 text-xs uppercase text-slate-400"><tr><th className="px-6 py-4">Usuario</th><th className="px-6 py-4">Rol</th><th className="px-6 py-4">Estado</th><th className="px-6 py-4">Acción</th></tr></thead>
-              <tbody className="divide-y divide-slate-700/80">
+            <table className="min-w-full divide-y divide-white/5 text-left">
+              <thead className="bg-white/[0.03] text-xs uppercase text-slate-400"><tr><th className="px-6 py-4">Usuario</th><th className="px-6 py-4">Rol</th><th className="px-6 py-4">Estado</th><th className="px-6 py-4">Acción</th></tr></thead>
+              <tbody className="divide-y divide-white/5">
                 {users.map((managedUser) => (
-                  <tr key={managedUser.id} className="hover:bg-slate-700/20">
+                  <tr key={managedUser.id} className="hover:bg-white/5">
                     <td className="px-6 py-4"><div className="font-medium text-white">{managedUser.name}</div><div className="text-sm text-slate-400">{managedUser.email}</div></td>
                     <td className="px-6 py-4 text-slate-300">{managedUser.role}</td>
                     <td className={`px-6 py-4 ${managedUser.isActive ? 'text-emerald-400' : 'text-slate-500'}`}><span className="inline-flex items-center gap-2"><ShieldCheck size={16} />{managedUser.isActive ? 'Activo' : 'Inactivo'}</span></td>
@@ -1594,16 +2071,16 @@ export default function UsersList() {
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/80 p-4">
-          <form onSubmit={createUser} className="w-full max-w-lg space-y-4 rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-30 flex items-center justify-center p-4 glass-overlay">
+          <form onSubmit={createUser} className="glass-strong w-full max-w-lg space-y-4 rounded-2xl p-6 shadow-2xl">
             <div className="flex items-center justify-between"><h3 className="text-xl font-bold text-white">Crear usuario</h3><button type="button" onClick={() => setIsModalOpen(false)} aria-label="Cerrar"><X /></button></div>
             {(['name', 'email', 'password'] as const).map((field) => (
-              <input key={field} required value={form[field]} type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'} placeholder={field === 'name' ? 'Nombre completo' : field === 'email' ? 'Correo electrónico' : 'Contraseña'} onChange={(event) => setForm({ ...form, [field]: event.target.value })} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white outline-none focus:border-brand-500" />
+              <input key={field} required value={form[field]} type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'} placeholder={field === 'name' ? 'Nombre completo' : field === 'email' ? 'Correo electrónico' : 'Contraseña'} onChange={(event) => setForm({ ...form, [field]: event.target.value })} className="w-full rounded-xl px-4 py-3 text-white glass-input" />
             ))}
-            <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white outline-none focus:border-brand-500">
+            <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl px-4 py-3 text-white glass-input">
               {roles.map((role) => <option key={role} value={role}>{role}</option>)}
             </select>
-            <button disabled={saving} className="w-full rounded-xl bg-brand-500 px-4 py-3 font-semibold text-white hover:bg-brand-600 disabled:opacity-50">{saving ? 'Guardando...' : 'Crear usuario'}</button>
+            <button disabled={saving} className="w-full rounded-xl px-4 py-3 font-semibold text-white disabled:opacity-50 btn-primary">{saving ? 'Guardando...' : 'Crear usuario'}</button>
           </form>
         </div>
       )}
@@ -1725,7 +2202,7 @@ export default function UsersManagement() {
   return (
     <section className="space-y-6">
       <header className="flex items-center gap-3">
-        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+        <div className="rounded-xl p-3 icon-badge">
           <Users size={24} />
         </div>
         <div>
@@ -1736,7 +2213,7 @@ export default function UsersManagement() {
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/60">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="flex justify-center py-16">
             <Loader2 className="animate-spin text-brand-400" size={28} />
@@ -1747,8 +2224,8 @@ export default function UsersManagement() {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-700">
-              <thead className="bg-slate-800">
+            <table className="min-w-full divide-y divide-white/5">
+              <thead className="bg-white/[0.03]">
                 <tr>
                   <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
                     Usuario
@@ -1761,12 +2238,12 @@ export default function UsersManagement() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/80">
+              <tbody className="divide-y divide-white/5">
                 {users.map((managedUser) => {
                   const isUpdating = updatingUserId === managedUser.id;
 
                   return (
-                    <tr key={managedUser.id} className="hover:bg-slate-700/20">
+                    <tr key={managedUser.id} className="hover:bg-white/5">
                       <td className="whitespace-nowrap px-6 py-4">
                         <div className="font-medium text-white">{managedUser.name}</div>
                         <div className="text-sm text-slate-400">{managedUser.email}</div>
@@ -1782,7 +2259,7 @@ export default function UsersManagement() {
                           onChange={(event) =>
                             void updateRole(managedUser.id, event.target.value as Role)
                           }
-                          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="rounded-lg px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50 glass-input"
                         >
                           {roles.map((role) => (
                             <option key={role} value={role}>
@@ -1857,7 +2334,7 @@ interface FormState {
 const EMPTY_FORM: FormState = { vehicleId: '', description: '', mileage: '', estimatedCost: '', mechanicId: '' };
 
 const fieldClass =
-  'w-full rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2.5 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 disabled:opacity-50';
+  'w-full rounded-xl px-4 py-2.5 text-sm text-white disabled:opacity-50 glass-input';
 
 /** Formulario de nueva OT. El código OT-YYYY-NNN lo asigna el backend. */
 export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderModalProps) {
@@ -1945,7 +2422,7 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 glass-overlay"
       onMouseDown={(event) => event.target === event.currentTarget && !isSaving && onClose()}
     >
       <form
@@ -1953,11 +2430,11 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
         aria-modal="true"
         aria-labelledby="new-work-order-title"
         onSubmit={handleSubmit}
-        className="w-full max-w-lg space-y-5 rounded-2xl border border-slate-700 bg-slate-800/90 p-6 shadow-2xl backdrop-blur-xl"
+        className="glass-strong w-full max-w-lg space-y-5 rounded-2xl p-6 shadow-2xl"
       >
         <header className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-brand-500/10 p-2.5 text-brand-400">
+            <div className="rounded-xl p-2.5 icon-badge">
               <ClipboardPlus size={20} />
             </div>
             <div>
@@ -2058,14 +2535,14 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
             type="button"
             onClick={onClose}
             disabled={isSaving}
-            className="rounded-xl border border-slate-600 px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-700/50"
+            className="rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 btn-secondary"
           >
             Cancelar
           </button>
           <button
             type="submit"
             disabled={isSaving || isLoadingOptions}
-            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50 btn-primary"
           >
             {isSaving && <Loader2 size={16} className="animate-spin" />}
             Crear orden
@@ -2227,7 +2704,7 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
           onBlur={() => setIsOpen(false)}
           onKeyDown={handleKeyDown}
           placeholder="Buscar repuesto por nombre o código…"
-          className="w-full rounded-xl border border-slate-600 bg-slate-900/80 py-2.5 pl-9 pr-9 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 disabled:opacity-50"
+          className="w-full rounded-xl py-2.5 pl-9 pr-9 text-sm text-white disabled:opacity-50 glass-input"
         />
         {isSearching ? (
           <Loader2 size={16} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-400" />
@@ -2248,7 +2725,7 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
           <ul
             id={listboxId}
             role="listbox"
-            className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-700 bg-slate-800/95 p-1 shadow-2xl backdrop-blur-xl"
+            className="glass absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-xl p-1 shadow-2xl"
           >
             {results.length === 0 ? (
               <li className="px-3 py-3 text-sm text-slate-400">Sin coincidencias en el inventario.</li>
@@ -2270,7 +2747,7 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
                         ? 'cursor-not-allowed opacity-50'
                         : index === activeIndex
                           ? 'cursor-pointer bg-brand-500/15 text-white'
-                          : 'cursor-pointer text-slate-200 hover:bg-slate-700/50'
+                          : 'cursor-pointer text-slate-200 hover:bg-white/5'
                     }`}
                   >
                     <span className="min-w-0">
@@ -2308,13 +2785,13 @@ export default function PartAutocomplete({ disabled = false, onAdd }: PartAutoco
               step={1}
               value={quantity}
               onChange={(event) => setQuantity(event.target.value)}
-              className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500"
+              className="w-24 rounded-lg px-3 py-2 text-sm text-white glass-input"
             />
           </label>
           <button
             type="submit"
             disabled={isAdding || quantityError !== null}
-            className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 btn-primary"
           >
             {isAdding ? <Loader2 size={16} className="animate-spin" /> : <PackagePlus size={16} />}
             Agregar a la OT
@@ -2342,6 +2819,7 @@ import {
   Play,
   Save,
   Stethoscope,
+  Trash2,
   User,
   Wrench,
   X,
@@ -2366,7 +2844,7 @@ const kmFormatter = new Intl.NumberFormat('es');
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-md">
+    <section className="glass rounded-2xl p-4">
       <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-slate-400">
         <span className="text-brand-400">{icon}</span>
         {title}
@@ -2446,6 +2924,26 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
     );
   };
 
+  const [removingPartId, setRemovingPartId] = useState<number | null>(null);
+
+  const removePart = async (partId: number, name: string) => {
+    if (!window.confirm(`¿Quitar "${name}" de la orden? Su cantidad vuelve al inventario.`)) return;
+    setRemovingPartId(partId);
+    try {
+      onUpdated(await workOrderActionsApi.removeUsedPart(order.id, partId));
+      toast.success(`"${name}" quitado; stock devuelto.`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo quitar el repuesto.'));
+    } finally {
+      setRemovingPartId(null);
+    }
+  };
+
+  const partsTotal = parts.reduce(
+    (sum, item) => (item.unitPrice === null ? sum : sum + Number(item.unitPrice) * item.quantity),
+    0,
+  );
+
   /** Lanza en error para que el buscador conserve la selección. */
   const addPart = async (part: InventoryPart, quantity: number) => {
     try {
@@ -2459,15 +2957,15 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
-      <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
+      <div className="glass-overlay absolute inset-0" onClick={onClose} aria-hidden="true" />
 
       <aside
         role="dialog"
         aria-modal="true"
         aria-labelledby="work-order-detail-title"
-        className="relative flex h-full w-full max-w-xl flex-col border-l border-slate-700 bg-slate-900/95 shadow-2xl backdrop-blur-xl"
+        className="glass-strong relative flex h-full w-full max-w-xl flex-col rounded-l-2xl"
       >
-        <header className="flex items-start justify-between gap-3 border-b border-slate-700 p-5">
+        <header className="flex items-start justify-between gap-3 border-b border-white/10 p-5">
           <div>
             <p className="text-xs uppercase tracking-wider text-slate-500">Orden de trabajo</p>
             <h3 id="work-order-detail-title" className="mt-1 text-2xl font-bold text-white">{order.number}</h3>
@@ -2489,7 +2987,7 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                   type="button"
                   onClick={changeStatus}
                   disabled={busyAction !== null}
-                  className="inline-flex items-center gap-2 rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 btn-primary"
                 >
                   {busyAction === 'status' ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
                   {transition.label}
@@ -2505,7 +3003,7 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                     value={finalCost}
                     onChange={(event) => setFinalCost(event.target.value)}
                     placeholder="0.00"
-                    className="w-28 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-brand-500"
+                    className="w-28 rounded-lg px-3 py-2 text-sm text-white glass-input"
                   />
                 </label>
                 <button
@@ -2538,7 +3036,7 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                   }
                 />
                 <Field label="VIN" value={order.vehicle.vin ?? EMPTY} />
-                <div className="col-span-2 flex items-center gap-2 rounded-xl bg-slate-900/60 p-3">
+                <div className="col-span-2 flex items-center gap-2 rounded-xl p-3 glass-inset">
                   <User size={16} className="text-slate-500" />
                   <div>
                     <p className="text-sm text-slate-200">{order.vehicle.owner?.name ?? EMPTY}</p>
@@ -2580,13 +3078,13 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                   value={diagnosis}
                   onChange={(event) => setDiagnosis(event.target.value)}
                   placeholder="Hallazgos técnicos de la revisión…"
-                  className="w-full rounded-xl border border-slate-600 bg-slate-900/80 px-3 py-2 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500"
+                  className="w-full rounded-xl px-3 py-2 text-sm text-white glass-input"
                 />
                 <button
                   type="button"
                   onClick={saveDiagnosis}
                   disabled={busyAction !== null || diagnosis.trim() === (order.diagnosis ?? '').trim()}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-700/50 disabled:opacity-40"
+                  className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm text-slate-200 disabled:opacity-40 btn-secondary"
                 >
                   {busyAction === 'diagnosis' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                   Guardar diagnóstico
@@ -2599,15 +3097,17 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
             {parts.length === 0 ? (
               <p className="mb-4 text-sm text-slate-400">Aún no se registran repuestos.</p>
             ) : (
-              <div className="mb-4 overflow-hidden rounded-xl border border-slate-700">
-                <table className="min-w-full divide-y divide-slate-700 text-sm">
-                  <thead className="bg-slate-800 text-xs uppercase text-slate-400">
+              <div className="mb-4 overflow-hidden rounded-xl border border-white/10">
+                <table className="min-w-full divide-y divide-white/5 text-sm">
+                  <thead className="bg-white/[0.03] text-xs uppercase text-slate-400">
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold">Repuesto</th>
                       <th className="px-3 py-2 text-right font-semibold">Cant.</th>
+                      <th className="px-3 py-2 text-right font-semibold">P. unit.</th>
+                      {!isConcluded && <th className="px-3 py-2"><span className="sr-only">Quitar</span></th>}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-700/70">
+                  <tbody className="divide-y divide-white/5">
                     {parts.map((item) => (
                       <tr key={item.id} className="text-slate-300">
                         <td className="px-3 py-2">
@@ -2615,13 +3115,30 @@ export default function WorkOrderDetailPanel({ order, onClose, onUpdated }: Work
                           <div className="text-xs text-slate-500">{item.part?.code}</div>
                         </td>
                         <td className="px-3 py-2 text-right font-semibold text-white">{item.quantity}</td>
+                        <td className="px-3 py-2 text-right text-slate-300">{formatCurrency(item.unitPrice)}</td>
+                        {!isConcluded && (
+                          <td className="px-2 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => void removePart(item.partId, item.part?.name ?? `Pieza #${item.partId}`)}
+                              disabled={removingPartId !== null}
+                              title="Quitar repuesto (devuelve stock)"
+                              aria-label={`Quitar ${item.part?.name ?? 'repuesto'}`}
+                              className="rounded-lg p-1.5 text-slate-500 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                            >
+                              {removingPartId === item.partId ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot className="bg-slate-800/60 text-xs text-slate-400">
+                  <tfoot className="bg-white/[0.03] text-xs text-slate-400">
                     <tr>
                       <td className="px-3 py-2">{parts.length} repuesto(s)</td>
                       <td className="px-3 py-2 text-right">{totalUnits} u.</td>
+                      <td className="px-3 py-2 text-right font-semibold text-slate-200">{formatCurrency(partsTotal)}</td>
+                      {!isConcluded && <td />}
                     </tr>
                   </tfoot>
                 </table>
@@ -2720,7 +3237,7 @@ function OrderCard({ order, onOpen }: { order: WorkOrder; onOpen: () => void }) 
     <button
       type="button"
       onClick={onOpen}
-      className="group w-full rounded-xl border border-slate-700 bg-slate-900/70 p-4 text-left transition-colors hover:border-brand-500/50 hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+      className="glass-inset glass-hover group w-full rounded-xl p-4 text-left"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -2732,7 +3249,7 @@ function OrderCard({ order, onOpen }: { order: WorkOrder; onOpen: () => void }) 
         </span>
       </div>
       <p className="mt-3 line-clamp-2 text-sm text-slate-300">{order.description}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-700/70 pt-3 text-xs text-slate-400">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 pt-3 text-xs text-slate-400">
         <span className="inline-flex items-center gap-1">
           <Wrench size={13} /> {order.mechanic?.name ?? 'Sin asignar'}
         </span>
@@ -2814,7 +3331,7 @@ export default function WorkOrdersList() {
     <section className="space-y-6">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+          <div className="rounded-xl p-3 icon-badge">
             <ClipboardList size={24} />
           </div>
           <div>
@@ -2835,13 +3352,13 @@ export default function WorkOrdersList() {
               onChange={(event) => setFilter(event.target.value)}
               placeholder="Filtrar por OT, placa, cliente…"
               aria-label="Filtrar órdenes"
-              className="w-full rounded-xl border border-slate-700 bg-slate-800/60 py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-slate-500 outline-none backdrop-blur-md focus:border-brand-500 sm:w-72"
+              className="glass w-full rounded-xl py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 sm:w-72"
             />
           </div>
           <button
             type="button"
             onClick={() => setIsCreating(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] hover:bg-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+            className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 btn-primary"
           >
             <Plus size={18} /> Nueva Orden
           </button>
@@ -2849,13 +3366,13 @@ export default function WorkOrdersList() {
       </header>
 
       {error && !isLoading ? (
-        <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-800/50 p-10 text-center backdrop-blur-md">
+        <div className="glass flex flex-col items-center gap-3 rounded-2xl p-10 text-center">
           <AlertCircle className="text-red-400" size={28} />
           <p className="text-slate-300">{error}</p>
           <button
             type="button"
             onClick={() => void load()}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:bg-slate-700/50"
+            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm text-slate-200 btn-secondary"
           >
             <RotateCw size={16} /> Reintentar
           </button>
@@ -2865,12 +3382,12 @@ export default function WorkOrdersList() {
           {columns.map(({ status, orders: columnOrders }) => (
             <div
               key={status}
-              className="flex flex-col rounded-2xl border border-slate-700 bg-slate-800/50 p-4 backdrop-blur-md"
+              className="glass flex flex-col rounded-2xl p-4"
             >
               <h3 className="mb-4 flex items-center gap-2 font-semibold text-slate-200">
                 <span className={`h-2.5 w-2.5 rounded-full ${columnAccent[status]}`} />
                 {WORK_ORDER_STATUS[status].label}
-                <span className="ml-auto rounded-full bg-slate-700/60 px-2 py-0.5 text-xs text-slate-300">
+                <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-slate-300">
                   {isLoading ? '…' : columnOrders.length}
                 </span>
               </h3>
@@ -2878,10 +3395,10 @@ export default function WorkOrdersList() {
               <div className="space-y-3" aria-busy={isLoading}>
                 {isLoading &&
                   Array.from({ length: 2 }, (_, index) => (
-                    <div key={index} className="h-32 animate-pulse rounded-xl border border-slate-700 bg-slate-900/50" />
+                    <div key={index} className="h-32 animate-pulse rounded-xl glass-inset" />
                   ))}
                 {!isLoading && columnOrders.length === 0 && (
-                  <p className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-sm text-slate-500">
+                  <p className="rounded-xl border border-dashed border-white/10 p-4 text-center text-sm text-slate-500">
                     {term ? 'Sin coincidencias' : 'Sin órdenes'}
                   </p>
                 )}
@@ -2957,7 +3474,7 @@ export default function AuditLogs() {
   return (
     <section className="space-y-6">
       <header className="flex items-center gap-3">
-        <div className="rounded-xl bg-brand-500/10 p-3 text-brand-400">
+        <div className="rounded-xl p-3 icon-badge">
           <ClipboardList size={24} />
         </div>
         <div>
@@ -2968,7 +3485,7 @@ export default function AuditLogs() {
         </div>
       </header>
 
-      <div className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800/50">
+      <div className="glass overflow-hidden rounded-2xl">
         {isLoading ? (
           <div className="flex justify-center p-8">
             <Loader2 className="animate-spin text-brand-400" size={28} />
@@ -2980,7 +3497,7 @@ export default function AuditLogs() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="border-b border-slate-700 bg-slate-800">
+              <thead className="border-b border-white/10 bg-white/[0.03]">
                 <tr>
                   <th className="px-6 py-4 font-semibold text-slate-300">Fecha</th>
                   <th className="px-6 py-4 font-semibold text-slate-300">
@@ -2992,9 +3509,9 @@ export default function AuditLogs() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/70">
+              <tbody className="divide-y divide-white/5">
                 {logs.map((log) => (
-                  <tr key={log.id} className="transition-colors hover:bg-slate-700/30">
+                  <tr key={log.id} className="transition-colors hover:bg-white/5">
                     <td className="whitespace-nowrap px-6 py-4 text-slate-400">
                       {new Date(log.createdAt).toLocaleString('es-ES')}
                     </td>
@@ -3074,7 +3591,7 @@ export default function ClienteDashboard() {
   };
 
   if (loading) return <p className="text-slate-400">Cargando tu portal...</p>;
-  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl bg-brand-500/10 p-3 text-brand-400"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = statuses.indexOf(order.status); return <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p></div><span className="text-xs text-brand-400">{labels[order.status]}</span></div><div className="mt-5 flex gap-2">{statuses.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < 3 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">Diagnóstico · En proceso · Repuestos · Concluido</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {new Date(order.createdAt).toLocaleDateString()}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="h-fit space-y-4 rounded-2xl border border-slate-700 bg-slate-800/60 p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white placeholder:text-slate-500" /><button type="submit" className="w-full rounded-xl bg-brand-500 px-4 py-3 font-semibold text-white hover:bg-brand-600">Solicitar cita</button></form></div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
+  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl p-3 icon-badge"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="glass rounded-2xl p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = statuses.indexOf(order.status); return <article key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p></div><span className="text-xs text-brand-400">{labels[order.status]}</span></div><div className="mt-5 flex gap-2">{statuses.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < 3 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">Diagnóstico · En proceso · Repuestos · Concluido</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {new Date(order.createdAt).toLocaleDateString()}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="glass h-fit space-y-4 rounded-2xl p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl px-4 py-3 text-white glass-input"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl px-4 py-3 text-white glass-input" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl px-4 py-3 text-white placeholder:text-slate-500 glass-input" /><button type="submit" className="w-full rounded-xl px-4 py-3 font-semibold text-white btn-primary">Solicitar cita</button></form></div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
 }
 
 ================
@@ -3173,26 +3690,26 @@ export default function GerenteDashboard() {
       </header>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         {cards.map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="flex items-center gap-4 rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
-            <div className={`rounded-xl bg-slate-900 p-4 ${color}`}><Icon size={28} /></div>
+          <div key={label} className="glass flex items-center gap-4 rounded-2xl p-6">
+            <div className={`glass-inset rounded-xl p-4 ${color}`}><Icon size={28} /></div>
             <div><p className="text-sm text-slate-400">{label}</p><p className="text-3xl font-bold text-white">{value}</p></div>
           </div>
         ))}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+        <div className="glass rounded-2xl p-6">
           <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Estado general del hardware</h3>
           {hwStatus ? (
             <div className="space-y-3 text-sm">
-              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">Modo</span><span className={hwStatus.simulationMode ? 'text-amber-400' : 'text-emerald-400'}>{hwStatus.simulationMode ? 'Simulación' : 'GPIO real'}</span></p>
-              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">LEDs configurados</span><span className="text-white">{hwStatus.ledCount} WS2812B</span></p>
-              <p className="flex justify-between rounded-xl bg-slate-900/60 p-4"><span className="text-slate-400">Pin GPIO</span><span className="text-white">{hwStatus.gpioPin}</span></p>
+              <p className="flex justify-between rounded-xl p-4 glass-inset"><span className="text-slate-400">Modo</span><span className={hwStatus.simulationMode ? 'text-amber-400' : 'text-emerald-400'}>{hwStatus.simulationMode ? 'Simulación' : 'GPIO real'}</span></p>
+              <p className="flex justify-between rounded-xl p-4 glass-inset"><span className="text-slate-400">LEDs configurados</span><span className="text-white">{hwStatus.ledCount} WS2812B</span></p>
+              <p className="flex justify-between rounded-xl p-4 glass-inset"><span className="text-slate-400">Pin GPIO</span><span className="text-white">{hwStatus.gpioPin}</span></p>
             </div>
           ) : <p className="text-slate-400">Conectando con el hardware...</p>}
         </div>
-        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6">
+        <div className="glass rounded-2xl p-6">
           <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><ClipboardList className="text-brand-400" /> Órdenes activas</h3>
-          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{order.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle.plate} · {order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
+          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{order.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle.plate} · {order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
         </div>
       </div>
     </section>
@@ -3203,35 +3720,60 @@ export default function GerenteDashboard() {
 File: src/components/Layout.tsx
 ================
 import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
-import { Menu } from 'lucide-react';
-import Sidebar from './Sidebar';
+import { Outlet, useLocation } from 'react-router-dom';
+import { LayoutDashboard, Menu } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { ROLE_META } from '../utils/status';
+import Sidebar, { findNavigationItem, initials } from './Sidebar';
 
 export default function Layout() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const { pathname } = useLocation();
+  const { user } = useAuth();
+
+  // Título del encabezado según la sección actual del menú.
+  const current = findNavigationItem(pathname);
+  const SectionIcon = current?.icon ?? LayoutDashboard;
 
   return (
-    <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden">
+    <div className="flex h-screen overflow-hidden text-slate-100">
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
-      {/* Main content */}
-      <main className="flex-1 flex flex-col relative overflow-hidden min-w-0">
-        {/* Ambient background blur */}
-        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-900/30 rounded-full blur-[100px] pointer-events-none -translate-y-1/2 translate-x-1/2"></div>
-
-        <header className="h-16 flex items-center gap-3 px-4 sm:px-8 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm z-10">
+      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="glass z-10 mx-3 mt-3 flex h-16 items-center gap-3 rounded-2xl px-4 sm:px-6 md:ml-0">
           <button
             type="button"
             onClick={() => setIsSidebarOpen(true)}
             aria-label="Abrir menú"
-            className="rounded-lg p-1.5 text-slate-400 hover:text-white md:hidden"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white md:hidden"
           >
             <Menu size={22} />
           </button>
-          <h1 className="text-xl font-semibold">Panel de Control</h1>
+
+          <div className="flex min-w-0 items-center gap-3">
+            <SectionIcon size={20} className="hidden shrink-0 text-brand-300 sm:block" />
+            <div className="min-w-0 leading-tight">
+              <p className="hidden text-[11px] uppercase tracking-wider text-slate-500 sm:block">
+                {current?.section ?? 'GearTrace'}
+              </p>
+              <h1 className="truncate text-lg font-semibold text-white">{current?.label ?? 'Panel de control'}</h1>
+            </div>
+          </div>
+
+          {user && (
+            <div className="ml-auto hidden items-center gap-3 sm:flex">
+              <div className="text-right leading-tight">
+                <p className="text-sm font-medium text-white">{user.name}</p>
+                <p className="text-xs text-slate-400">{ROLE_META[user.role].label}</p>
+              </div>
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-sm font-bold text-white ring-2 ring-white/10">
+                {initials(user.name)}
+              </div>
+            </div>
+          )}
         </header>
 
-        <div className="flex-1 overflow-auto p-4 sm:p-8 z-10">
+        <div className="z-0 flex-1 overflow-auto p-3 sm:p-6 md:pl-3">
           <Outlet />
         </div>
       </main>
@@ -3270,13 +3812,13 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
+    <div className="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
       {/* Elemento de diseño de fondo (glow) */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-brand-500 rounded-full blur-[128px] opacity-20 pointer-events-none"></div>
 
-      <div className="max-w-md w-full space-y-8 bg-slate-800/80 backdrop-blur-xl p-10 rounded-2xl shadow-2xl border border-slate-700 relative z-10">
+      <div className="glass-strong max-w-md w-full space-y-8 p-10 rounded-2xl shadow-2xl relative z-10">
         <div>
-          <div className="mx-auto h-16 w-16 bg-brand-500/20 text-brand-500 flex items-center justify-center rounded-2xl shadow-[0_0_20px_rgba(249,115,22,0.3)]">
+          <div className="icon-badge mx-auto h-16 w-16 flex items-center justify-center rounded-2xl">
             <Wrench size={32} strokeWidth={2.5} />
           </div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-white">
@@ -3296,7 +3838,7 @@ export default function Login() {
                 name="email"
                 type="email"
                 required
-                className="appearance-none rounded-xl relative block w-full px-4 py-3 border border-slate-600 bg-slate-900/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:z-10 sm:text-sm transition-all"
+                className="appearance-none rounded-xl relative block w-full px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:z-10 sm:text-sm transition-all glass-input"
                 placeholder="Correo electrónico"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -3309,7 +3851,7 @@ export default function Login() {
                 name="password"
                 type="password"
                 required
-                className="appearance-none rounded-xl relative block w-full px-4 py-3 border border-slate-600 bg-slate-900/50 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:z-10 sm:text-sm transition-all"
+                className="appearance-none rounded-xl relative block w-full px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:z-10 sm:text-sm transition-all glass-input"
                 placeholder="Contraseña"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -3321,7 +3863,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-brand-600 hover:bg-brand-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-500 focus:ring-offset-slate-900 transition-all disabled:opacity-70 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(234,88,12,0.4)] hover:shadow-[0_0_25px_rgba(249,115,22,0.6)]"
+              className="group relative w-full flex justify-center py-3 px-4 text-sm font-semibold rounded-xl btn-primary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-500 focus:ring-offset-slate-900 transition-all disabled:opacity-70 disabled:cursor-not-allowed shadow-[0_0_15px_rgba(234,88,12,0.4)] hover:shadow-[0_0_25px_rgba(249,115,22,0.6)]"
             >
               {loading ? (
                 <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -3415,10 +3957,10 @@ export default function MecanicoDashboard() {
     <section className="space-y-6">
       <header><h2 className="text-2xl font-bold text-white">Panel del mecánico</h2><p className="text-sm text-slate-400">Operación diaria, órdenes asignadas y búsqueda de repuestos.</p></header>
       <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Control WS2812B {hwStatus?.simulationMode && <span className="text-xs text-amber-400">(simulación)</span>}</h3><div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{leds.map((led) => <div key={led.index} className="text-center"><div className={`h-16 rounded-lg border ${led.isActive ? 'border-white' : 'border-slate-700 bg-slate-950'}`} style={led.isActive ? { backgroundColor: led.color, boxShadow: `0 0 20px ${led.color}` } : undefined} /><p className="mt-2 text-xs text-slate-400">LED {led.index}</p><button type="button" onClick={() => emitLedAction(led)} className="mt-2 rounded-lg bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-600">{led.isActive ? 'Apagar' : 'Test'}</button></div>)}</div></div>
-        <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6"><h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-white"><Search className="text-brand-400" /> Buscar repuesto</h3><div className="flex gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchParts(); }} placeholder="Nombre o código" className="min-w-0 flex-1 rounded-xl border border-slate-600 bg-slate-900 px-3 py-2 text-white" /><button type="button" onClick={() => void searchParts()} className="rounded-xl bg-brand-500 px-3 text-white"><Search size={18} /></button></div><div className="mt-4 space-y-2">{parts.map((part) => <p key={part.id} className="rounded-lg bg-slate-900/70 p-3 text-sm text-slate-300">{part.name} <span className="text-slate-500">({part.code}) · stock {part.quantity}</span></p>)}</div></div>
+        <div className="glass rounded-2xl p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Control WS2812B {hwStatus?.simulationMode && <span className="text-xs text-amber-400">(simulación)</span>}</h3><div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{leds.map((led) => <div key={led.index} className="text-center"><div className={`h-16 rounded-lg border ${led.isActive ? 'border-white' : 'border-white/10 bg-slate-950'}`} style={led.isActive ? { backgroundColor: led.color, boxShadow: `0 0 20px ${led.color}` } : undefined} /><p className="mt-2 text-xs text-slate-400">LED {led.index}</p><button type="button" onClick={() => emitLedAction(led)} className="mt-2 rounded-lg bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-600">{led.isActive ? 'Apagar' : 'Test'}</button></div>)}</div></div>
+        <div className="glass rounded-2xl p-6"><h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-white"><Search className="text-brand-400" /> Buscar repuesto</h3><div className="flex gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchParts(); }} placeholder="Nombre o código" className="min-w-0 flex-1 rounded-xl px-3 py-2 text-white glass-input" /><button type="button" onClick={() => void searchParts()} className="btn-primary rounded-xl px-3"><Search size={18} /></button></div><div className="mt-4 space-y-2">{parts.map((part) => <p key={part.id} className="rounded-lg p-3 text-sm text-slate-300 glass-inset">{part.name} <span className="text-slate-500">({part.code}) · stock {part.quantity}</span></p>)}</div></div>
       </div>
-      <div className="rounded-2xl border border-slate-700 bg-slate-800/50 p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Wrench className="text-brand-400" /> Mis órdenes asignadas</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes asignadas.</p> : <div className="grid gap-4 md:grid-cols-2">{orders.map((order) => <article key={order.id} className="rounded-xl border border-slate-700 bg-slate-900/60 p-4"><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p><span className="mt-3 inline-block rounded-full bg-brand-500/10 px-3 py-1 text-xs text-brand-400">{order.status.replace('_', ' ')}</span></article>)}</div>}</div>
+      <div className="glass rounded-2xl p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Wrench className="text-brand-400" /> Mis órdenes asignadas</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes asignadas.</p> : <div className="grid gap-4 md:grid-cols-2">{orders.map((order) => <article key={order.id} className="rounded-xl p-4 glass-inset"><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p><span className="mt-3 inline-block rounded-full bg-brand-500/10 px-3 py-1 text-xs text-brand-400">{order.status.replace('_', ' ')}</span></article>)}</div>}</div>
     </section>
   );
 }
@@ -3456,6 +3998,7 @@ import {
   CalendarDays,
   Car,
   ClipboardList,
+  History,
   LayoutDashboard,
   LogOut,
   Package,
@@ -3469,27 +4012,50 @@ import {
 } from 'lucide-react';
 import { Role, useAuth } from '../contexts/AuthContext';
 import { ROUTE_ROLES } from '../routes/routeRoles';
+import { ROLE_META } from '../utils/status';
 
-interface NavigationItem {
+export interface NavigationItem {
   label: string;
   path: string;
   icon: LucideIcon;
   roles: readonly Role[];
+  section: NavigationSection;
 }
 
+type NavigationSection = 'General' | 'Servicio técnico' | 'Abastecimiento' | 'Administración';
+
+const SECTIONS: NavigationSection[] = ['General', 'Servicio técnico', 'Abastecimiento', 'Administración'];
+
 /** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
-const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO'] },
-  { label: 'Mi Vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'] },
-  { label: 'Inventario', path: '/inventory', icon: Package, roles: ROUTE_ROLES.inventory },
-  { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos },
-  { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'] },
-  { label: 'Citas', path: '/citas', icon: CalendarDays, roles: ROUTE_ROLES.citas },
-  { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios },
-  { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores },
-  { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras },
-  { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion },
+export const navigationItems: NavigationItem[] = [
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO'], section: 'General' },
+  { label: 'Mi vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'], section: 'General' },
+  { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'], section: 'Servicio técnico' },
+  { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos, section: 'Servicio técnico' },
+  { label: 'Citas', path: '/citas', icon: CalendarDays, roles: ROUTE_ROLES.citas, section: 'Servicio técnico' },
+  { label: 'Inventario', path: '/inventory', icon: Package, roles: ROUTE_ROLES.inventory, section: 'Abastecimiento' },
+  { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores, section: 'Abastecimiento' },
+  { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras, section: 'Abastecimiento' },
+  { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion, section: 'Administración' },
+  { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios, section: 'Administración' },
+  { label: 'Historial de búsquedas', path: '/logs', icon: History, roles: ROUTE_ROLES.logs, section: 'Administración' },
 ];
+
+/** Ítem de menú que corresponde a una ruta (para el título del encabezado). */
+export function findNavigationItem(pathname: string): NavigationItem | undefined {
+  return navigationItems.find((item) => item.path.split('#')[0] === pathname);
+}
+
+/** Iniciales para el avatar (máx. 2 letras). */
+export function initials(name: string | undefined): string {
+  if (!name) return '?';
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
+}
 
 interface SidebarProps {
   /** Solo aplica en móvil (< md); en escritorio el sidebar siempre está visible. */
@@ -3498,10 +4064,10 @@ interface SidebarProps {
 }
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-  `flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium transition-colors ${
+  `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
     isActive
-      ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
-      : 'text-slate-400 hover:bg-slate-700/50 hover:text-white'
+      ? 'bg-gradient-to-r from-brand-500/20 to-brand-500/5 text-white shadow-[inset_0_0_0_1px_rgba(251,146,60,0.25)]'
+      : 'text-slate-400 hover:bg-white/5 hover:text-white'
   }`;
 
 export default function Sidebar({ isOpen, onClose }: SidebarProps) {
@@ -3511,61 +4077,87 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
   return (
     <>
       {isOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-slate-950/70 md:hidden"
-          onClick={onClose}
-          aria-hidden="true"
-        />
+        <div className="fixed inset-0 z-30 md:hidden glass-overlay" onClick={onClose} aria-hidden="true" />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-700 bg-slate-800 transition-transform md:static md:z-20 md:translate-x-0 md:bg-slate-800/80 md:backdrop-blur-md ${
+        aria-label="Navegación principal"
+        className={`glass-strong fixed inset-y-0 left-0 z-40 flex w-72 flex-col transition-transform duration-300 md:static md:z-20 md:m-3 md:w-64 md:translate-x-0 md:rounded-2xl ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="h-16 flex items-center px-6 border-b border-slate-700 gap-3">
-          <div className="h-8 w-8 bg-brand-500/20 text-brand-500 rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.3)]">
+        <div className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
+          <div className="icon-badge flex h-9 w-9 items-center justify-center">
             <Wrench size={18} />
           </div>
-          <span className="text-xl font-bold tracking-tight">GearTrace</span>
+          <div className="leading-tight">
+            <span className="block text-lg font-bold tracking-tight text-white">GearTrace</span>
+            <span className="block text-[11px] text-slate-500">Taller inteligente</span>
+          </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Cerrar menú"
-            className="ml-auto rounded-lg p-1.5 text-slate-400 hover:text-white md:hidden"
+            className="ml-auto rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white md:hidden"
           >
             <X size={20} />
           </button>
         </div>
 
-        <div className="p-4 border-b border-slate-700/50">
-          <div className="font-medium truncate">{user?.name}</div>
-          <div className="text-xs text-brand-400 mt-1 uppercase tracking-wider font-semibold">
-            {user?.role}
-          </div>
-        </div>
-
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {visibleItems.map(({ label, path, icon: Icon }) => (
-            <NavLink
-              key={label}
-              to={path}
-              className={navLinkClass}
-              end={path === '/dashboard'}
-              onClick={onClose}
-            >
-              <Icon size={20} /> {label}
-            </NavLink>
-          ))}
+        <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
+          {SECTIONS.map((section) => {
+            const items = visibleItems.filter((item) => item.section === section);
+            if (items.length === 0) return null;
+            return (
+              <div key={section}>
+                <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  {section}
+                </p>
+                <div className="space-y-0.5">
+                  {items.map(({ label, path, icon: Icon }) => (
+                    <NavLink key={label} to={path} className={navLinkClass} end={path === '/dashboard'} onClick={onClose}>
+                      {({ isActive }) => (
+                        <>
+                          <span
+                            className={`absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-brand-400 transition-opacity ${
+                              isActive ? 'opacity-100' : 'opacity-0'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          <Icon
+                            size={18}
+                            className={isActive ? 'text-brand-300' : 'text-slate-500 transition-colors group-hover:text-slate-300'}
+                          />
+                          {label}
+                        </>
+                      )}
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </nav>
 
-        <div className="p-4 border-t border-slate-700">
-          <button
-            onClick={logout}
-            className="flex items-center gap-3 px-3 py-2.5 w-full text-slate-400 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-colors"
-          >
-            <LogOut size={20} /> Cerrar Sesión
-          </button>
+        <div className="border-t border-white/10 p-3">
+          <div className="glass-inset flex items-center gap-3 rounded-xl p-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-sm font-bold text-white">
+              {initials(user?.name)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">{user?.name}</p>
+              <p className="text-xs text-brand-300">{user ? ROLE_META[user.role].label : ''}</p>
+            </div>
+            <button
+              type="button"
+              onClick={logout}
+              title="Cerrar sesión"
+              aria-label="Cerrar sesión"
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-400"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
         </div>
       </aside>
     </>
@@ -3662,15 +4254,24 @@ export const useAuth = () => {
 ================
 File: src/pages/CitasPage.tsx
 ================
-import { CalendarDays } from 'lucide-react';
-import { appointmentsApi, clientApi } from '../api/resources';
-import type { Appointment } from '../api/types';
+import { CalendarCheck, CalendarDays, ClipboardPlus } from 'lucide-react';
+import { appointmentActionsApi, appointmentsApi, clientApi, vehiclesApi } from '../api/resources';
+import type { Appointment, AppointmentStatus, Vehicle } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
-import ResourceListPage from '../components/ui/ResourceListPage';
+import type { FormField, FormValues, SelectOption } from '../components/ui/ResourceFormModal';
+import ResourceListPage, {
+  CreateFormConfig,
+  EditFormConfig,
+  ResourceRowAction,
+} from '../components/ui/ResourceListPage';
 import StatusBadge from '../components/ui/StatusBadge';
 import { useAuth } from '../contexts/AuthContext';
 import { EMPTY, formatDateTime } from '../utils/format';
-import { APPOINTMENT_STATUS } from '../utils/status';
+import { fromDateTimeLocal, optionalText, requiredNumber, text, toDateTimeLocal, toOptions } from '../utils/formValues';
+import { APPOINTMENT_STATUS, WORK_ORDER_STATUS } from '../utils/status';
+
+const OPEN_STATUSES: AppointmentStatus[] = ['AGENDADA', 'CONFIRMADA'];
+const isOpen = (appointment: Appointment) => OPEN_STATUSES.includes(appointment.status);
 
 const baseColumns: Column<Appointment>[] = [
   {
@@ -3706,6 +4307,20 @@ const baseColumns: Column<Appointment>[] = [
     header: 'Estado',
     render: (appointment) => <StatusBadge {...APPOINTMENT_STATUS[appointment.status]} />,
   },
+  {
+    key: 'workOrder',
+    header: 'Orden',
+    hideOnMobile: true,
+    render: (appointment) =>
+      appointment.workOrder ? (
+        <span className="inline-flex items-center gap-2">
+          <span className="font-semibold text-white">{appointment.workOrder.number}</span>
+          <StatusBadge {...WORK_ORDER_STATUS[appointment.workOrder.status]} />
+        </span>
+      ) : (
+        EMPTY
+      ),
+  },
 ];
 
 const ownerColumn: Column<Appointment> = {
@@ -3717,9 +4332,108 @@ const ownerColumn: Column<Appointment> = {
 
 const staffColumns: Column<Appointment>[] = [...baseColumns.slice(0, 2), ownerColumn, ...baseColumns.slice(2)];
 
+const vehicleLabel = (vehicle: Vehicle) =>
+  `${vehicle.plate} · ${vehicle.make} ${vehicle.model}${vehicle.owner ? ` — ${vehicle.owner.name}` : ''}`;
+
+function appointmentFields(loadVehicles: () => Promise<SelectOption[]>): FormField[] {
+  return [
+    { name: 'vehicleId', label: 'Vehículo', type: 'select', required: true, loadOptions: loadVehicles, wide: true },
+    { name: 'scheduledAt', label: 'Fecha y hora', type: 'datetime', required: true, help: 'Debe ser una fecha futura.' },
+    { name: 'reason', label: 'Motivo', type: 'textarea', maxLength: 255 },
+  ];
+}
+
+const emptyAppointment: FormValues = { vehicleId: '', scheduledAt: '', reason: '' };
+
+const appointmentPayload = (values: FormValues) => ({
+  vehicleId: requiredNumber(values, 'vehicleId', 'Vehículo'),
+  scheduledAt: fromDateTimeLocal(text(values, 'scheduledAt')),
+  reason: optionalText(values, 'reason'),
+});
+
+const staffCreateForm: CreateFormConfig = {
+  title: 'Agendar cita',
+  fields: appointmentFields(async () => toOptions(await vehiclesApi.list(), (vehicle) => vehicle.id, vehicleLabel)),
+  initialValues: emptyAppointment,
+  submit: (values) => appointmentsApi.create(appointmentPayload(values)),
+  successMessage: 'Cita agendada.',
+};
+
+const clientCreateForm: CreateFormConfig = {
+  title: 'Solicitar cita',
+  fields: appointmentFields(async () => toOptions(await clientApi.myVehicles(), (vehicle) => vehicle.id, vehicleLabel)),
+  initialValues: emptyAppointment,
+  submit: (values) => clientApi.createAppointment(appointmentPayload(values)),
+  successMessage: 'Cita solicitada. El taller la confirmará.',
+};
+
+/** La cita se completa al generar su OT; aquí solo se agenda, confirma o cancela. */
+const EDITABLE_STATUSES: AppointmentStatus[] = ['AGENDADA', 'CONFIRMADA', 'CANCELADA'];
+const editableStatusOptions: SelectOption[] = EDITABLE_STATUSES.map((status) => ({
+  value: status,
+  label: APPOINTMENT_STATUS[status].label,
+}));
+
+const staffEditForm: EditFormConfig<Appointment> = {
+  title: (appointment) => `Editar cita del ${formatDateTime(appointment.scheduledAt)}`,
+  fields: () => [
+    { name: 'scheduledAt', label: 'Fecha y hora', type: 'datetime', required: true },
+    { name: 'status', label: 'Estado', type: 'select', required: true, options: editableStatusOptions },
+    { name: 'reason', label: 'Motivo', type: 'textarea', maxLength: 255 },
+  ],
+  initialValues: (appointment) => ({
+    scheduledAt: toDateTimeLocal(appointment.scheduledAt),
+    status: appointment.status,
+    reason: appointment.reason ?? '',
+  }),
+  submit: (appointment, values) => {
+    const scheduledAt = text(values, 'scheduledAt');
+    const status = EDITABLE_STATUSES.find((option) => option === text(values, 'status'));
+    return appointmentsApi.update(appointment.id, {
+      // Solo se envía si cambió: el backend exige fecha futura al reprogramar.
+      scheduledAt: scheduledAt !== toDateTimeLocal(appointment.scheduledAt) ? fromDateTimeLocal(scheduledAt) : undefined,
+      status,
+      reason: optionalText(values, 'reason'),
+    });
+  },
+  isEditable: isOpen,
+};
+
+function staffRowActions(appointment: Appointment): ResourceRowAction[] {
+  if (!isOpen(appointment) || appointment.workOrder) return [];
+  const actions: ResourceRowAction[] = [
+    {
+      key: 'work-order',
+      label: 'Generar orden de trabajo',
+      shortLabel: 'Generar OT',
+      icon: ClipboardPlus,
+      confirm: `¿Generar la orden de trabajo para ${appointment.vehicle?.plate ?? 'esta cita'}? La cita quedará completada.`,
+      run: async () => {
+        const order = await appointmentActionsApi.createWorkOrder(appointment.id);
+        return `Orden ${order.number} creada desde la cita.`;
+      },
+    },
+  ];
+  if (appointment.status === 'AGENDADA') {
+    actions.unshift({
+      key: 'confirm',
+      label: 'Confirmar cita',
+      shortLabel: 'Confirmar',
+      icon: CalendarCheck,
+      tone: 'success',
+      run: async () => {
+        await appointmentsApi.update(appointment.id, { status: 'CONFIRMADA' });
+        return 'Cita confirmada.';
+      },
+    });
+  }
+  return actions;
+}
+
 /**
- * /citas — GERENTE y MECANICO ven la agenda completa (/api/appointments);
- * el CLIENTE solo sus citas (/api/client/appointments).
+ * /citas — GERENTE y MECANICO gestionan la agenda (/api/appointments) y
+ * generan la OT desde la cita; el CLIENTE ve y solicita sus citas
+ * (/api/client/appointments).
  */
 export default function CitasPage() {
   const { user } = useAuth();
@@ -3735,7 +4449,9 @@ export default function CitasPage() {
       columns={isClient ? baseColumns : staffColumns}
       emptyMessage={isClient ? 'Aún no has solicitado citas.' : 'No hay citas programadas.'}
       getRowLabel={(appointment) => formatDateTime(appointment.scheduledAt)}
-      canEdit={!isClient}
+      createForm={isClient ? clientCreateForm : staffCreateForm}
+      editForm={isClient ? undefined : staffEditForm}
+      rowActions={isClient ? undefined : staffRowActions}
       onDelete={user?.role === 'GERENTE' ? appointmentsApi.remove : undefined}
     />
   );
@@ -3744,11 +4460,16 @@ export default function CitasPage() {
 ================
 File: src/pages/ComprasPage.tsx
 ================
-import { ShoppingCart } from 'lucide-react';
-import { purchasesApi } from '../api/resources';
+import { Ban, PackageCheck, ShoppingCart } from 'lucide-react';
+import { inventoryApi, inventoryFlowsApi, purchasesApi, suppliersApi } from '../api/resources';
 import type { PurchaseOrder } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
-import ResourceListPage from '../components/ui/ResourceListPage';
+import ResourceListPage, {
+  CreateFormConfig,
+  EditFormConfig,
+  ResourceRowAction,
+} from '../components/ui/ResourceListPage';
+import { idValue, optionalNumber, requiredNumber, toOptions } from '../utils/formValues';
 import StatusBadge from '../components/ui/StatusBadge';
 import { EMPTY, formatCurrency, formatDate } from '../utils/format';
 import { PURCHASE_STATUS } from '../utils/status';
@@ -3784,7 +4505,93 @@ const columns: Column<PurchaseOrder>[] = [
   { key: 'orderedAt', header: 'Fecha', hideOnMobile: true, render: (order) => formatDate(order.orderedAt) },
 ];
 
-/** /compras — solo GERENTE. */
+const loadSupplierOptions = async () =>
+  toOptions(await suppliersApi.list(), (supplier) => supplier.id, (supplier) => supplier.name);
+
+/** El backend solo admite pedidos de piezas en o bajo su stock mínimo. */
+const loadLowStockOptions = async () =>
+  toOptions(
+    await inventoryApi.lowStockParts(),
+    (part) => part.id,
+    (part) => `${part.name} (${part.code}) · stock ${part.quantity} / mín. ${part.minStock}`,
+  );
+
+const createForm: CreateFormConfig = {
+  title: 'Nueva orden de compra',
+  fields: [
+    { name: 'supplierId', label: 'Proveedor', type: 'select', required: true, loadOptions: loadSupplierOptions, wide: true },
+    {
+      name: 'partId',
+      label: 'Repuesto',
+      type: 'select',
+      required: true,
+      loadOptions: loadLowStockOptions,
+      wide: true,
+      placeholder: 'Selecciona una pieza con stock bajo',
+      help: 'Solo aparecen piezas en o bajo su stock mínimo. El código OC-AAAA-NNN se asigna automáticamente.',
+    },
+    { name: 'quantity', label: 'Cantidad', type: 'number', required: true, min: 1, step: '1' },
+    { name: 'unitPrice', label: 'Precio unitario', type: 'number', min: 0, step: '0.01' },
+  ],
+  initialValues: { supplierId: '', partId: '', quantity: '1', unitPrice: '' },
+  submit: (values) =>
+    purchasesApi.create({
+      supplierId: requiredNumber(values, 'supplierId', 'Proveedor'),
+      items: [
+        {
+          partId: requiredNumber(values, 'partId', 'Repuesto'),
+          quantity: requiredNumber(values, 'quantity', 'Cantidad'),
+          unitPrice: optionalNumber(values, 'unitPrice', 'Precio unitario'),
+        },
+      ],
+    }),
+  successMessage: 'Orden de compra creada.',
+};
+
+const isPending = (order: PurchaseOrder) => order.status === 'PENDIENTE';
+
+const editForm: EditFormConfig<PurchaseOrder> = {
+  title: (order) => `Editar ${order.number}`,
+  fields: () => [
+    { name: 'supplierId', label: 'Proveedor', type: 'select', required: true, loadOptions: loadSupplierOptions, wide: true },
+  ],
+  initialValues: (order) => ({ supplierId: idValue(order.supplierId) }),
+  submit: (order, values) =>
+    purchasesApi.update(order.id, { supplierId: requiredNumber(values, 'supplierId', 'Proveedor') }),
+  isEditable: isPending,
+};
+
+function rowActions(order: PurchaseOrder): ResourceRowAction[] {
+  if (!isPending(order)) return [];
+  return [
+    {
+      key: 'receive',
+      label: 'Recibir pedido (suma al inventario)',
+      shortLabel: 'Recibir',
+      icon: PackageCheck,
+      tone: 'success',
+      confirm: `¿Confirmas la recepción de ${order.number}? Se sumarán las cantidades al inventario.`,
+      run: async () => {
+        await inventoryFlowsApi.receivePurchase(order.id);
+        return `Pedido ${order.number} recibido; inventario actualizado.`;
+      },
+    },
+    {
+      key: 'cancel',
+      label: 'Cancelar pedido',
+      shortLabel: 'Cancelar',
+      icon: Ban,
+      tone: 'danger',
+      confirm: `¿Cancelar el pedido ${order.number}?`,
+      run: async () => {
+        await purchasesApi.update(order.id, { status: 'CANCELADA' });
+        return `Pedido ${order.number} cancelado.`;
+      },
+    },
+  ];
+}
+
+/** /compras — solo GERENTE. Recibir un pedido es la única vía que suma stock. */
 export default function ComprasPage() {
   return (
     <ResourceListPage
@@ -3797,6 +4604,9 @@ export default function ComprasPage() {
       emptyMessage="No hay órdenes de compra registradas."
       getRowLabel={(order) => order.number}
       onDelete={purchasesApi.remove}
+      createForm={createForm}
+      editForm={editForm}
+      rowActions={rowActions}
     />
   );
 }
@@ -3804,11 +4614,16 @@ export default function ComprasPage() {
 ================
 File: src/pages/FacturacionPage.tsx
 ================
-import { Receipt } from 'lucide-react';
-import { invoicesApi } from '../api/resources';
+import { BadgeCheck, Receipt } from 'lucide-react';
+import { invoicesApi, workOrdersApi } from '../api/resources';
 import type { Invoice } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
-import ResourceListPage from '../components/ui/ResourceListPage';
+import ResourceListPage, {
+  CreateFormConfig,
+  EditFormConfig,
+  ResourceRowAction,
+} from '../components/ui/ResourceListPage';
+import { optionalNumber, requiredNumber, toOptions } from '../utils/formValues';
 import StatusBadge from '../components/ui/StatusBadge';
 import { EMPTY, formatCurrency, formatDate } from '../utils/format';
 import { INVOICE_STATUS } from '../utils/status';
@@ -3842,6 +4657,83 @@ const columns: Column<Invoice>[] = [
   { key: 'issuedAt', header: 'Emitida', hideOnMobile: true, render: (invoice) => formatDate(invoice.issuedAt) },
 ];
 
+/** Solo órdenes concluidas y aún sin factura pueden facturarse. */
+const loadBillableOrders = async () =>
+  toOptions(
+    (await workOrdersApi.list()).filter((order) => order.status === 'CONCLUIDO' && !order.invoice),
+    (order) => order.id,
+    (order) =>
+      `${order.number} · ${order.vehicle?.plate ?? ''} — ${order.vehicle?.owner?.name ?? 'sin cliente'} (${formatCurrency(order.finalCost ?? order.estimatedCost)})`,
+  );
+
+const createForm: CreateFormConfig = {
+  title: 'Nueva factura',
+  fields: [
+    {
+      name: 'workOrderId',
+      label: 'Orden de trabajo concluida',
+      type: 'select',
+      required: true,
+      loadOptions: loadBillableOrders,
+      wide: true,
+      placeholder: 'Selecciona una orden sin facturar',
+      help: 'El código FAC-AAAA-NNN se asigna automáticamente; el cliente es el dueño del vehículo.',
+    },
+    {
+      name: 'subtotal',
+      label: 'Subtotal',
+      type: 'number',
+      min: 0,
+      step: '0.01',
+      help: 'Vacío = costo final de la orden (o estimado, o suma de repuestos).',
+    },
+    { name: 'tax', label: 'Impuestos (monto)', type: 'number', min: 0, step: '0.01' },
+  ],
+  initialValues: { workOrderId: '', subtotal: '', tax: '' },
+  submit: (values) =>
+    invoicesApi.create({
+      workOrderId: requiredNumber(values, 'workOrderId', 'Orden de trabajo'),
+      subtotal: optionalNumber(values, 'subtotal', 'Subtotal'),
+      tax: optionalNumber(values, 'tax', 'Impuestos'),
+    }),
+  successMessage: 'Factura emitida.',
+};
+
+const isPending = (invoice: Invoice) => invoice.status === 'PENDIENTE';
+
+const editForm: EditFormConfig<Invoice> = {
+  title: (invoice) => `Editar ${invoice.number}`,
+  fields: () => [
+    { name: 'subtotal', label: 'Subtotal', type: 'number', required: true, min: 0, step: '0.01' },
+    { name: 'tax', label: 'Impuestos (monto)', type: 'number', required: true, min: 0, step: '0.01' },
+  ],
+  initialValues: (invoice) => ({ subtotal: invoice.subtotal, tax: invoice.tax }),
+  submit: (invoice, values) =>
+    invoicesApi.update(invoice.id, {
+      subtotal: requiredNumber(values, 'subtotal', 'Subtotal'),
+      tax: requiredNumber(values, 'tax', 'Impuestos'),
+    }),
+  isEditable: isPending,
+};
+
+function rowActions(invoice: Invoice): ResourceRowAction[] {
+  if (!isPending(invoice)) return [];
+  return [
+    {
+      key: 'pay',
+      label: 'Marcar como pagada',
+      shortLabel: 'Registrar pago',
+      icon: BadgeCheck,
+      tone: 'success',
+      confirm: `¿Registrar el pago de ${invoice.number} por ${formatCurrency(invoice.total)}? Ya no podrá modificarse.`,
+      run: async () => {
+        await invoicesApi.update(invoice.id, { status: 'PAGADA' });
+        return `Factura ${invoice.number} pagada.`;
+      },
+    },
+  ];
+}
+
 /** /facturacion — solo GERENTE. */
 export default function FacturacionPage() {
   return (
@@ -3855,6 +4747,9 @@ export default function FacturacionPage() {
       emptyMessage="No hay facturas emitidas."
       getRowLabel={(invoice) => invoice.number}
       onDelete={invoicesApi.remove}
+      createForm={createForm}
+      editForm={editForm}
+      rowActions={rowActions}
     />
   );
 }
@@ -3968,7 +4863,10 @@ File: src/pages/ProveedoresPage.tsx
 import { useState } from 'react';
 import { PackageSearch, Table2, Truck } from 'lucide-react';
 import { suppliersApi } from '../api/resources';
-import type { Supplier } from '../api/types';
+import type { CreateSupplierPayload, Supplier } from '../api/types';
+import type { FormField, FormValues } from '../components/ui/ResourceFormModal';
+import type { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
+import { optionalText, text } from '../utils/formValues';
 import SuppliersList from '../components/Suppliers/SuppliersList';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
@@ -4004,6 +4902,46 @@ const columns: Column<Supplier>[] = [
   },
 ];
 
+const supplierFields: FormField[] = [
+  { name: 'name', label: 'Razón social', type: 'text', required: true, maxLength: 150, wide: true },
+  { name: 'taxId', label: 'Identificador fiscal (RUC/NIT)', type: 'text', maxLength: 50 },
+  { name: 'contactName', label: 'Persona de contacto', type: 'text', maxLength: 150 },
+  { name: 'email', label: 'Correo', type: 'email', maxLength: 255 },
+  { name: 'phone', label: 'Teléfono', type: 'text', maxLength: 50 },
+  { name: 'address', label: 'Dirección', type: 'text', maxLength: 255, wide: true },
+];
+
+const supplierPayload = (values: FormValues): CreateSupplierPayload => ({
+  name: text(values, 'name'),
+  taxId: optionalText(values, 'taxId'),
+  contactName: optionalText(values, 'contactName'),
+  email: optionalText(values, 'email'),
+  phone: optionalText(values, 'phone'),
+  address: optionalText(values, 'address'),
+});
+
+const createForm: CreateFormConfig = {
+  title: 'Nuevo proveedor',
+  fields: supplierFields,
+  initialValues: { name: '', taxId: '', contactName: '', email: '', phone: '', address: '' },
+  submit: (values) => suppliersApi.create(supplierPayload(values)),
+  successMessage: 'Proveedor registrado.',
+};
+
+const editForm: EditFormConfig<Supplier> = {
+  title: (supplier) => `Editar ${supplier.name}`,
+  fields: () => supplierFields,
+  initialValues: (supplier) => ({
+    name: supplier.name,
+    taxId: supplier.taxId ?? '',
+    contactName: supplier.contactName ?? '',
+    email: supplier.email ?? '',
+    phone: supplier.phone ?? '',
+    address: supplier.address ?? '',
+  }),
+  submit: (supplier, values) => suppliersApi.update(supplier.id, supplierPayload(values)),
+};
+
 /** /proveedores — solo GERENTE. */
 export default function ProveedoresPage() {
   const [view, setView] = useState<View>('list');
@@ -4030,6 +4968,8 @@ export default function ProveedoresPage() {
       emptyMessage="No hay proveedores registrados."
       getRowLabel={(supplier) => supplier.name}
       onDelete={suppliersApi.remove}
+      createForm={createForm}
+      editForm={editForm}
     />
   );
 }
@@ -4041,6 +4981,11 @@ import { useState } from 'react';
 import { ShieldCheck, Table2, Users } from 'lucide-react';
 import { usersApi } from '../api/resources';
 import type { AppUser } from '../api/types';
+import type { Role } from '../contexts/AuthContext';
+import type { FormField, FormValues, SelectOption } from '../components/ui/ResourceFormModal';
+import type { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
+import { UserInputError } from '../api/errors';
+import { optionalText, text } from '../utils/formValues';
 import UsersList from '../components/Users/UsersList';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
@@ -4085,6 +5030,54 @@ const columns: Column<AppUser>[] = [
   { key: 'createdAt', header: 'Alta', hideOnMobile: true, render: (user) => formatDate(user.createdAt) },
 ];
 
+const roleOptions: SelectOption[] = (Object.keys(ROLE_META) as Role[]).map((role) => ({
+  value: role,
+  label: ROLE_META[role].label,
+}));
+
+function userFields(mode: 'create' | 'edit'): FormField[] {
+  return [
+    { name: 'name', label: 'Nombre completo', type: 'text', required: true, maxLength: 150 },
+    { name: 'email', label: 'Correo electrónico', type: 'email', required: true, maxLength: 255 },
+    {
+      name: 'password',
+      label: 'Contraseña',
+      type: 'password',
+      required: mode === 'create',
+      maxLength: 72,
+      help: mode === 'create' ? 'Mínimo 6 caracteres.' : 'Déjala vacía para no cambiarla.',
+    },
+    { name: 'role', label: 'Rol', type: 'select', required: true, options: roleOptions },
+    { name: 'isActive', label: 'Usuario activo (puede iniciar sesión)', type: 'checkbox', wide: true },
+  ];
+}
+
+function isRole(value: string): value is Role {
+  return value in ROLE_META;
+}
+
+function userPayload(values: FormValues) {
+  const role = text(values, 'role');
+  if (!isRole(role)) throw new UserInputError('Selecciona un rol válido.');
+  return { name: text(values, 'name'), email: text(values, 'email'), role, isActive: values.isActive === true };
+}
+
+const createForm: CreateFormConfig = {
+  title: 'Nuevo usuario',
+  fields: userFields('create'),
+  initialValues: { name: '', email: '', password: '', role: 'CLIENTE', isActive: true },
+  submit: (values) => usersApi.create({ ...userPayload(values), password: text(values, 'password') }),
+  successMessage: 'Usuario creado.',
+};
+
+const editForm: EditFormConfig<AppUser> = {
+  title: (user) => `Editar ${user.name}`,
+  fields: () => userFields('edit'),
+  initialValues: (user) => ({ name: user.name, email: user.email, password: '', role: user.role, isActive: user.isActive }),
+  submit: (user, values) =>
+    usersApi.update(user.id, { ...userPayload(values), password: optionalText(values, 'password') }),
+};
+
 /** /usuarios — solo GERENTE (protegida en App.tsx). */
 export default function UsuariosPage() {
   const [view, setView] = useState<View>('list');
@@ -4111,6 +5104,8 @@ export default function UsuariosPage() {
       emptyMessage="No hay usuarios registrados."
       getRowLabel={(user) => user.email}
       onDelete={usersApi.remove}
+      createForm={createForm}
+      editForm={editForm}
     />
   );
 }
@@ -4119,8 +5114,11 @@ export default function UsuariosPage() {
 File: src/pages/VehiculosPage.tsx
 ================
 import { Car } from 'lucide-react';
-import { vehiclesApi } from '../api/resources';
-import type { Vehicle } from '../api/types';
+import { usersApi, vehiclesApi } from '../api/resources';
+import type { CreateVehiclePayload, Vehicle } from '../api/types';
+import type { FormField, FormValues } from '../components/ui/ResourceFormModal';
+import type { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
+import { idValue, optionalNumber, optionalText, requiredNumber, text, toOptions } from '../utils/formValues';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
 import { useAuth } from '../contexts/AuthContext';
@@ -4151,6 +5149,54 @@ const columns: Column<Vehicle>[] = [
   },
 ];
 
+const loadClientOptions = async () =>
+  toOptions(await usersApi.lookup('CLIENTE'), (client) => client.id, (client) => `${client.name} — ${client.email}`);
+
+const vehicleFields: FormField[] = [
+  { name: 'plate', label: 'Placa', type: 'text', required: true, maxLength: 20, help: 'Se guarda en mayúsculas; no puede repetirse.' },
+  { name: 'ownerId', label: 'Propietario (cliente)', type: 'select', required: true, loadOptions: loadClientOptions },
+  { name: 'make', label: 'Marca', type: 'text', required: true, maxLength: 80 },
+  { name: 'model', label: 'Modelo', type: 'text', required: true, maxLength: 80 },
+  { name: 'year', label: 'Año', type: 'number', min: 1886, step: '1' },
+  { name: 'color', label: 'Color', type: 'text', maxLength: 50 },
+  { name: 'vin', label: 'VIN', type: 'text', maxLength: 17, wide: true },
+];
+
+function vehiclePayload(values: FormValues): CreateVehiclePayload {
+  return {
+    plate: text(values, 'plate'),
+    ownerId: requiredNumber(values, 'ownerId', 'Propietario'),
+    make: text(values, 'make'),
+    model: text(values, 'model'),
+    year: optionalNumber(values, 'year', 'Año'),
+    color: optionalText(values, 'color'),
+    vin: optionalText(values, 'vin'),
+  };
+}
+
+const createForm: CreateFormConfig = {
+  title: 'Registrar vehículo',
+  fields: vehicleFields,
+  initialValues: { plate: '', ownerId: '', make: '', model: '', year: '', color: '', vin: '' },
+  submit: (values) => vehiclesApi.create(vehiclePayload(values)),
+  successMessage: 'Vehículo registrado.',
+};
+
+const editForm: EditFormConfig<Vehicle> = {
+  title: (vehicle) => `Editar ${vehicle.plate}`,
+  fields: () => vehicleFields,
+  initialValues: (vehicle) => ({
+    plate: vehicle.plate,
+    ownerId: idValue(vehicle.ownerId),
+    make: vehicle.make,
+    model: vehicle.model,
+    year: vehicle.year === null ? '' : String(vehicle.year),
+    color: vehicle.color ?? '',
+    vin: vehicle.vin ?? '',
+  }),
+  submit: (vehicle, values) => vehiclesApi.update(vehicle.id, vehiclePayload(values)),
+};
+
 /** /vehiculos — GERENTE, MECANICO. */
 export default function VehiculosPage() {
   const { user } = useAuth();
@@ -4166,6 +5212,8 @@ export default function VehiculosPage() {
       emptyMessage="No hay vehículos registrados."
       getRowLabel={(vehicle) => vehicle.plate}
       onDelete={user?.role === 'GERENTE' ? vehiclesApi.remove : undefined}
+      createForm={createForm}
+      editForm={editForm}
     />
   );
 }
@@ -4182,6 +5230,7 @@ import type { Role } from '../contexts/AuthContext';
  */
 export const ROUTE_ROLES = {
   inventory: ['GERENTE', 'MECANICO'],
+  logs: ['GERENTE', 'MECANICO'],
   usuarios: ['GERENTE'],
   vehiculos: ['GERENTE', 'MECANICO'],
   'ordenes-trabajo': ['GERENTE', 'MECANICO'],
@@ -4226,6 +5275,62 @@ export function formatDateTime(value: string | null | undefined): string {
 export function formatCurrency(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return EMPTY;
   return currencyFormatter.format(Number(value));
+}
+
+================
+File: src/utils/formValues.ts
+================
+import { UserInputError } from '../api/errors';
+import type { FormValues, SelectOption } from '../components/ui/ResourceFormModal';
+
+/** Texto recortado; '' si no hay valor. */
+export function text(values: FormValues, name: string): string {
+  const value = values[name];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Texto opcional: `undefined` si está vacío (no se envía al backend). */
+export function optionalText(values: FormValues, name: string): string | undefined {
+  return text(values, name) || undefined;
+}
+
+/** Número opcional: `undefined` si está vacío. Lanza si no es un número válido. */
+export function optionalNumber(values: FormValues, name: string, label: string): number | undefined {
+  const raw = text(values, name);
+  if (raw === '') return undefined;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) throw new UserInputError(`"${label}" debe ser un número.`);
+  return parsed;
+}
+
+/** Número obligatorio. Lanza si falta o no es válido. */
+export function requiredNumber(values: FormValues, name: string, label: string): number {
+  const parsed = optionalNumber(values, name, label);
+  if (parsed === undefined) throw new UserInputError(`Completa el campo "${label}".`);
+  return parsed;
+}
+
+/** ISO → valor de <input type="datetime-local"> en hora local. */
+export function toDateTimeLocal(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+/** Valor de <input type="datetime-local"> (hora local) → ISO UTC. */
+export function fromDateTimeLocal(value: string): string {
+  return new Date(value).toISOString();
+}
+
+/** Valor para un select a partir de un id numérico opcional. */
+export function idValue(id: number | null | undefined): string {
+  return id === null || id === undefined ? '' : String(id);
+}
+
+/** Convierte una lista a opciones de select. */
+export function toOptions<T>(items: T[], value: (item: T) => number, label: (item: T) => string): SelectOption[] {
+  return items.map((item) => ({ value: String(value(item)), label: label(item) }));
 }
 
 ================
@@ -4300,6 +5405,7 @@ import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
 const protectedRoutes: Record<AppRoute, ReactNode> = {
   inventory: <InventoryList />,
+  logs: <AuditLogs />,
   // Administración
   usuarios: <UsuariosPage />,
   // Servicios (SER)
@@ -4326,7 +5432,7 @@ function App() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-brand-500"></div>
       </div>
     )
@@ -4345,7 +5451,6 @@ function App() {
       >
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="logs" element={<AuditLogs />} />
 
         {(Object.keys(protectedRoutes) as AppRoute[]).map((path) => (
           <Route
@@ -4378,9 +5483,98 @@ File: src/index.css
 @tailwind components;
 @tailwind utilities;
 
+/* ══════════════════════════════════════════════════════════════════════════
+   GearTrace — Sistema visual "glass" (glassmorphism)
+   Paleta: slate (superficies) + brand naranja (acento). Las superficies son
+   translúcidas con desenfoque; el fondo aporta luces de color que se ven a
+   través del vidrio. Usar SIEMPRE estas clases en lugar de combinar a mano
+   bg-slate-800/xx + border-slate-700.
+   ══════════════════════════════════════════════════════════════════════════ */
+
 @layer base {
+  html {
+    color-scheme: dark;
+  }
+
   body {
-    @apply bg-slate-900 text-slate-100 antialiased;
+    @apply min-h-screen bg-slate-950 text-slate-100 antialiased;
+    /* Luces de fondo fijas: naranja (marca) y azul/índigo (contraste frío). */
+    background-image:
+      radial-gradient(55rem 38rem at 105% -5%, rgba(249, 115, 22, 0.32), transparent 60%),
+      radial-gradient(45rem 35rem at -5% 105%, rgba(56, 189, 248, 0.18), transparent 60%),
+      radial-gradient(35rem 28rem at 45% 45%, rgba(99, 102, 241, 0.12), transparent 70%),
+      linear-gradient(180deg, #0b1120 0%, #020617 100%);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    @apply bg-brand-500/40 text-white;
+  }
+
+  /* Foco visible y consistente para navegación con teclado. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-400/70 ring-offset-0;
+  }
+
+  /* Scrollbars discretas sobre vidrio. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+  }
+}
+
+@layer components {
+  /* Superficie principal: paneles, tarjetas, tablas. */
+  .glass {
+    @apply border border-white/10 bg-slate-900/40 backdrop-blur-xl;
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01));
+    box-shadow:
+      0 10px 40px -12px rgba(2, 6, 23, 0.7),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* Superficie elevada y más opaca: modales, paneles laterales, sidebar. */
+  .glass-strong {
+    @apply border border-white/10 bg-slate-900/75 backdrop-blur-2xl;
+    background-image: linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.0) 40%);
+    box-shadow:
+      0 25px 60px -15px rgba(2, 6, 23, 0.85),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
+  }
+
+  /* Elemento anidado dentro de una superficie glass (ítems, filas, chips). */
+  .glass-inset {
+    @apply border border-white/[0.06] bg-slate-950/35;
+  }
+
+  /* Tarjeta interactiva: realce sutil al pasar el cursor. */
+  .glass-hover {
+    @apply transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-400/30 hover:bg-slate-900/60 motion-reduce:transform-none;
+  }
+
+  /* Campos de formulario. */
+  .glass-input {
+    @apply border border-white/10 bg-slate-950/40 text-white placeholder:text-slate-500 outline-none backdrop-blur-sm transition-colors focus:border-brand-400/60 focus:bg-slate-950/60 focus:ring-2 focus:ring-brand-500/20 disabled:opacity-50;
+  }
+
+  /* Capa detrás de modales. */
+  .glass-overlay {
+    @apply bg-slate-950/60 backdrop-blur-md;
+  }
+
+  /* Botón principal: degradado naranja con brillo. */
+  .btn-primary {
+    @apply bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-[0_8px_24px_-8px_rgba(249,115,22,0.6)] transition-all duration-200 hover:from-brand-500 hover:to-brand-700 hover:shadow-[0_10px_30px_-8px_rgba(249,115,22,0.75)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none motion-reduce:transform-none;
+  }
+
+  /* Botón secundario: vidrio. */
+  .btn-secondary {
+    @apply border border-white/10 bg-white/5 text-slate-200 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Ícono destacado de encabezado de página/sección. */
+  .icon-badge {
+    @apply rounded-xl border border-brand-400/20 bg-gradient-to-br from-brand-500/25 to-brand-500/5 text-brand-300 shadow-[0_0_20px_-6px_rgba(249,115,22,0.6)];
   }
 }
 
@@ -4458,14 +5652,15 @@ File: clinerules.md
 
 ## Reglas de Desarrollo Frontend
 1. Usar componentes funcionales en TypeScript con tipos explícitos.
-2. Utilizar clases utilitarias de TailwindCSS para el diseño (tema oscuro slate-900 / brand orange).
+2. Estilo glassmorphism con la paleta slate + brand naranja: usar las clases de `src/index.css` (`glass`, `glass-strong`, `glass-inset`, `glass-hover`, `glass-input`, `glass-overlay`, `btn-primary`, `btn-secondary`, `icon-badge`). Bordes `border-white/10`, divisores `divide-white/5`. No volver a `bg-slate-800/xx` + `border-slate-700` ni poner fondos opacos en contenedores de página.
 3. No hacer peticiones `fetch` directas; usar siempre la instancia de `@/api/axios`.
 4. Consumir los módulos del backend mediante los servicios de `@/api/resources`; las actualizaciones son PATCH (el backend no expone PUT).
 5. Rutas de la app en español (`/usuarios`, `/vehiculos`, `/ordenes-trabajo`, `/citas`, `/proveedores`, `/compras`, `/facturacion`). Sus roles se declaran SOLO en `ROUTE_ROLES` (`/src/routes/routeRoles.ts`); `App.tsx` (protección) y `Sidebar.tsx` (enlaces) los leen de ahí.
-6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío; acciones con iconos lucide. Eliminar solo se ofrece al `GERENTE`.
-7. Modales y paneles: capa `bg-slate-950/60-70` + `backdrop-blur-sm`, contenedor `bg-slate-800/90` o `bg-slate-900/95` con `backdrop-blur-xl` y borde `slate-700`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500`.
+6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío. Alta/edición con `createForm`/`editForm` (modal `ResourceFormModal`, campos declarativos) y acciones de negocio con `rowActions`; nunca `console.log` como placeholder. Eliminar solo se ofrece al `GERENTE`.
+7. Modales y paneles: capa `glass-overlay`, contenedor `glass-strong`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500` (`btn-primary`).
 8. Tras una acción que responde con menos relaciones que el listado (p. ej. `/close`), recargar la entidad con su `get` antes de reemplazarla en el estado local.
 9. Socket.io siempre vía `createHardwareSocket()` (`transports: ['websocket']`, sin `extraHeaders`). Axios siempre vía la instancia `api` (header `ngrok-skip-browser-warning` incluido); no modificar `axios.defaults`.
+10. Validaciones de formulario lanzan `UserInputError` (helpers de `utils/formValues.ts`); no usar casts para tipar valores de select: validar con type guards o búsquedas en la lista de valores permitidos.
 
 ================
 File: index.html

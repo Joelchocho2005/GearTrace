@@ -111,7 +111,10 @@ Fuente: `backend/clinerules.md`.
   `purchases`, `invoices`: CRUD REST por dominio (`GET`, `GET :id`, `POST`,
   `PATCH :id`, `DELETE :id`). Ver "CRUD por dominio".
 - `common/prisma-errors.ts`: helper `isPrismaError(error, 'P2002' | 'P2003')`.
-- `alexa`: webhook `/api/webhook/alexa` para búsqueda de piezas.
+- `alexa`: webhook `/api/webhook/alexa` para búsqueda de piezas. Las
+  respuestas a consultas usan `buildAnswer` (agrega la frase `FOLLOW_UP` y
+  deja la sesión abierta); toda respuesta con sesión abierta lleva
+  `reprompt`. Solo Cancel/Stop cierran la skill (`shouldEndSession: true`).
 - `led`: Socket.io y control físico/simulado de LEDs.
 - `logs`: historial de búsquedas (JWT, `GERENTE`/`MECANICO`).
 
