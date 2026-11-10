@@ -5,6 +5,12 @@ const prisma = new PrismaClient();
 const BCRYPT_ROUNDS = 10;
 
 async function main() {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'El seed de demostración está bloqueado en producción. Usa migraciones y crea usuarios con la API administrativa.',
+    );
+  }
+
   console.log('🌱 Iniciando seedeo de la base de datos...');
 
   // 1. Limpiar datos existentes (opcional, cuidado en producción)
@@ -13,8 +19,9 @@ async function main() {
   // await prisma.box.deleteMany();
   // await prisma.user.deleteMany();
 
-  // 2. Crear Usuarios con sus roles (password: password123)
-  const defaultPassword = await bcrypt.hash('password123', BCRYPT_ROUNDS);
+  // 2. Crear usuarios de demostración. SEED_PASSWORD permite cambiarla sin editar código.
+  const seedPassword = process.env.SEED_PASSWORD?.trim() || 'password123';
+  const defaultPassword = await bcrypt.hash(seedPassword, BCRYPT_ROUNDS);
 
   console.log('👤 Creando usuarios...');
   

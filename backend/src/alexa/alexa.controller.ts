@@ -1,102 +1,45 @@
 import {
-  Controller,
-  Post,
   Body,
+  Controller,
   HttpCode,
+  HttpException,
   HttpStatus,
   Logger,
-  Inject,
-  forwardRef,
+  Post,
 } from '@nestjs/common';
-import { AlexaService, INTENTS, SLOTS } from './alexa.service';
-import { AlexaRequestEnvelope, AlexaIntentRequest } from './alexa.types';
-import { LedGateway } from '../led/led.gateway';
-import { InventoryService } from '../inventory/inventory.service';
+import { tell } from './alexa-response';
+import { ALEXA_MESSAGES } from './alexa.messages';
+import { AlexaService } from './alexa.service';
+import { AlexaRequestEnvelope, AlexaResponseEnvelope } from './alexa.types';
 
 /**
- * AlexaController
+ * POST /api/webhook/alexa — Amazon lo invoca cuando el usuario habla con la skill.
  *
- * Expone POST /api/webhook/alexa — Amazon lo invoca cuando el usuario
- * habla con la Skill de GearTrace.
+ *   Usuario → Alexa → Amazon → webhook → AlexaService → handler del intent
+ *                                                          ├─ InventoryService (datos)
+ *                                                          └─ LocationIndicator (LED + dashboard)
  *
- * Flujo completo:
- *   Usuario → Alexa → Amazon → POST /api/webhook/alexa
- *                                    │
- *                    ┌───────────────┴──────────────────┐
- *                    │                                  │
- *             AlexaService                        LedGateway
- *          procesa el intent                  enciende el LED +
- *          y genera respuesta                emite evento Socket.io
- *                    │                                  │
- *                    └───────────────┬──────────────────┘
- *                                   │
- *                         JSON response → Amazon → Alexa → Usuario
- *                         Socket.io event → Dashboard React (tiempo real)
+ * El controller solo adapta HTTP: no contiene lógica de negocio.
  */
 @Controller('webhook')
 export class AlexaController {
   private readonly logger = new Logger(AlexaController.name);
 
-  constructor(
-    private readonly alexaService: AlexaService,
-    private readonly inventoryService: InventoryService,
-    @Inject(forwardRef(() => LedGateway))
-    private readonly ledGateway: LedGateway,
-  ) {}
+  constructor(private readonly alexaService: AlexaService) {}
 
-  /**
-   * POST /api/webhook/alexa
-   */
   @Post('alexa')
   @HttpCode(HttpStatus.OK)
-  async handleAlexaWebhook(@Body() envelope: AlexaRequestEnvelope) {
-    this.logger.log(`📩 Webhook recibido | Type: ${envelope?.request?.type}`);
-
+  async handleAlexaWebhook(@Body() envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
     try {
-      // ── Si es BuscarPiezaIntent, encender el LED ANTES de responder ──
-      if (
-        envelope?.request?.type === 'IntentRequest' &&
-        (envelope.request as AlexaIntentRequest).intent?.name === INTENTS.BUSCAR_PIEZA
-      ) {
-        const slot = (envelope.request as AlexaIntentRequest).intent?.slots?.[SLOTS.NOMBRE_PIEZA];
-
-        if (slot?.value) {
-          // Buscar la pieza para obtener ledIndex Y colorHex de la caja
-          const results = await this.inventoryService.searchPartByName(slot.value);
-
-          if (results && results.length > 0) {
-            const pieza = results[0];
-            const { ledIndex, colorHex, name: boxName } = pieza.box;
-
-            this.logger.log(
-              `💡 Activando LED ${ledIndex} (${colorHex}) para "${pieza.name}" en ${boxName}`,
-            );
-
-            // Disparar LED + Socket.io de forma no bloqueante
-            // (no usamos await para no retrasar la respuesta a Amazon)
-            void this.ledGateway.triggerLed(ledIndex, pieza.name, colorHex);
-          }
-        }
-      }
-
-      // ── Procesar intent y devolver respuesta a Amazon ──
-      const response = await this.alexaService.handleRequest(envelope);
-      this.logger.log('📤 Respuesta enviada a Amazon');
-      return response;
+      return await this.alexaService.handleRequest(envelope);
     } catch (error: unknown) {
+      // Request inválido o skill no autorizada: se responde con su código HTTP.
+      if (error instanceof HttpException) throw error;
+
+      // Fallo interno: respuesta de voz válida para que Alexa no quede en silencio.
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error procesando solicitud de Alexa: ${message}`);
-      // Respuesta de contingencia válida para que Alexa no falle
-      return {
-        version: '1.0',
-        response: {
-          outputSpeech: {
-            type: 'PlainText',
-            text: 'Hubo un problema al consultar GearTrace. Por favor, intenta de nuevo.',
-          },
-          shouldEndSession: true,
-        },
-      };
+      return tell(ALEXA_MESSAGES.error());
     }
   }
 }

@@ -25,6 +25,31 @@ import { InvoicesModule } from './invoices/invoices.module';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      validate: (config: Record<string, unknown>) => {
+        const nodeEnv = String(config.NODE_ENV ?? 'development');
+        const jwtSecret = String(config.JWT_SECRET ?? '').trim();
+        const databaseUrl = String(config.DATABASE_URL ?? '').trim();
+        const corsOrigin = String(config.CORS_ORIGIN ?? '').trim();
+
+        if (!jwtSecret) {
+          throw new Error('JWT_SECRET es obligatorio');
+        }
+        if (!databaseUrl) {
+          throw new Error('DATABASE_URL es obligatorio');
+        }
+        if (nodeEnv === 'production') {
+          if (jwtSecret.length < 32) {
+            throw new Error('JWT_SECRET debe tener al menos 32 caracteres en producción');
+          }
+          if (!corsOrigin) {
+            throw new Error('CORS_ORIGIN es obligatorio en producción');
+          }
+          if (jwtSecret === 'geartrace-super-secret-key-change-in-production-2024') {
+            throw new Error('JWT_SECRET no puede usar el valor de ejemplo en producción');
+          }
+        }
+        return config;
+      },
     }),
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'uploads'),

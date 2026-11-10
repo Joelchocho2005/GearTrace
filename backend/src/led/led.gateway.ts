@@ -1,51 +1,49 @@
+import { Logger, OnModuleDestroy } from '@nestjs/common';
 import {
-  WebSocketGateway,
-  WebSocketServer,
-  OnGatewayInit,
+  ConnectedSocket,
+  MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
-  MessageBody,
-  ConnectedSocket,
+  WebSocketGateway,
+  WebSocketServer,
+  WsException,
 } from '@nestjs/websockets';
+import { Subscription } from 'rxjs';
 import { Server, Socket } from 'socket.io';
-import { Logger } from '@nestjs/common';
 import { CORS_ALLOWED_HEADERS, corsOriginCallback, isAllowedOrigin } from '../common/cors';
-import { LedControllerService } from './led-controller.service';
+import { LedIndicatorService } from './led-indicator.service';
+import { LedEvent, LedRequestError, SOCKET_EVENTS } from './led.types';
 
-// ══════════════════════════════════════════════════════════════════════════
-// Eventos Socket.io — GearTrace
-//
-// SERVIDOR → CLIENTE (emitidos por NestJS al Dashboard de React):
-//   led:activated   Alexa encontró una pieza y encendió el LED
-//   led:off         El LED fue apagado (timeout o manual)
-//   led:status      Estado inicial al conectarse un cliente nuevo
-//   hw:status       Info del modo hardware (real vs simulado)
-//
-// CLIENTE → SERVIDOR (recibidos desde el Dashboard):
-//   led:turnOff     El operador apaga el LED manualmente desde el dashboard
-//   led:test        El operador prueba un LED específico
-// ══════════════════════════════════════════════════════════════════════════
-export const SOCKET_EVENTS = {
-  // Server → Client
-  LED_ACTIVATED : 'led:activated',
-  LED_OFF       : 'led:off',
-  LED_STATUS    : 'led:status',
-  HW_STATUS     : 'hw:status',
-  // Client → Server
-  LED_TURN_OFF  : 'led:turnOff',
-  LED_TEST      : 'led:test',
-} as const;
-
-/** Payload que el servidor emite cuando un LED se activa */
-export interface LedActivatedPayload {
-  ledIndex : number;
-  partName : string;
-  colorHex : string;
-  timestamp: string;
-  simulated: boolean;  // true si estamos en modo sin hardware
+/** Mensaje que envía el dashboard (led:turnOff, led:test). */
+interface LedMessage {
+  ledIndex: number;
+  colorHex?: string;
 }
 
+/** Valida la forma del mensaje del cliente; el rango y el color los valida el servicio. */
+function parseLedMessage(data: unknown): LedMessage {
+  if (typeof data !== 'object' || data === null) {
+    throw new LedRequestError('Mensaje inválido: se espera { ledIndex, colorHex? }');
+  }
+  const ledIndex = 'ledIndex' in data ? data.ledIndex : undefined;
+  const colorHex = 'colorHex' in data ? data.colorHex : undefined;
+  if (typeof ledIndex !== 'number') {
+    throw new LedRequestError('ledIndex debe ser un número');
+  }
+  if (colorHex !== undefined && typeof colorHex !== 'string') {
+    throw new LedRequestError('colorHex debe ser un texto #RRGGBB');
+  }
+  return { ledIndex, colorHex };
+}
+
+/**
+ * Transporte Socket.io del módulo de LEDs. Solo traduce:
+ *  - mensajes del dashboard → llamadas a `LedIndicatorService`
+ *  - eventos de `LedIndicatorService` → emisiones a los clientes
+ * La lógica (parpadeo, auto-apagado) vive en el servicio.
+ */
 @WebSocketGateway({
   cors: {
     origin: corsOriginCallback,
@@ -63,146 +61,69 @@ export interface LedActivatedPayload {
   },
 })
 export class LedGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
 {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(LedGateway.name);
+  private subscription?: Subscription;
 
-  /** Mapa de timeouts activos por ledIndex → para poder cancelarlos */
-  private activeTimeouts = new Map<number, NodeJS.Timeout>();
-
-  constructor(private readonly ledService: LedControllerService) {}
-
-  // ──────────────────────────────────────────────────────────
-  // Ciclo de vida del Gateway
-  // ──────────────────────────────────────────────────────────
+  constructor(private readonly indicator: LedIndicatorService) {}
 
   afterInit(): void {
-    this.logger.log('🔌 Socket.io Gateway inicializado y escuchando');
+    this.subscription = this.indicator.events$.subscribe((event) => this.broadcast(event));
+    this.logger.log('Socket.io Gateway inicializado y escuchando');
+  }
+
+  onModuleDestroy(): void {
+    this.subscription?.unsubscribe();
   }
 
   handleConnection(client: Socket): void {
-    this.logger.log(`📲 Cliente conectado: ${client.id}`);
-
-    // Al conectar, enviar al cliente el estado del hardware
-    const hwStatus = this.ledService.getStatus();
-    client.emit(SOCKET_EVENTS.HW_STATUS, hwStatus);
+    this.logger.log(`Cliente conectado: ${client.id}`);
+    client.emit(SOCKET_EVENTS.HW_STATUS, this.indicator.getStatus());
   }
 
   handleDisconnect(client: Socket): void {
-    this.logger.log(`🔴 Cliente desconectado: ${client.id}`);
+    this.logger.log(`Cliente desconectado: ${client.id}`);
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Mensajes recibidos DESDE el cliente (Dashboard React)
-  // ──────────────────────────────────────────────────────────
-
-  /** El operador apaga un LED manualmente desde el Dashboard */
+  /** El operador apaga un LED manualmente desde el dashboard. */
   @SubscribeMessage(SOCKET_EVENTS.LED_TURN_OFF)
-  handleManualOff(
-    @MessageBody() data: { ledIndex: number },
-    @ConnectedSocket() client: Socket,
-  ): void {
-    const { ledIndex } = data;
-    this.logger.log(`🖱️  Apagado manual solicitado por cliente ${client.id} → LED ${ledIndex}`);
-
-    // Cancelar el timeout automático si existe
-    this.cancelAutoOff(ledIndex);
-
-    this.ledService.turnOff(ledIndex);
-    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, manual: true });
-  }
-
-  /** El operador prueba un LED específico desde el Dashboard */
-  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
-  async handleLedTest(
-    @MessageBody() data: { ledIndex: number; colorHex?: string },
-    @ConnectedSocket() client: Socket,
-  ): Promise<void> {
-    const { ledIndex, colorHex } = data;
-    this.logger.log(`🧪 Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
-
-    // Efecto de parpadeo para testeo visual
-    await this.ledService.blink(ledIndex, 3, colorHex);
-
-    const payload: LedActivatedPayload = {
-      ledIndex,
-      partName : `[TEST] LED ${ledIndex}`,
-      colorHex: colorHex ?? '#FFFFFF',
-      timestamp: new Date().toISOString(),
-      simulated: this.ledService.getStatus().simulationMode,
-    };
-    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
-
-    // Auto-apagar tras 5s en modo test
-    this.scheduleAutoOff(ledIndex, 5_000);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // API pública — llamada desde AlexaController
-  // ──────────────────────────────────────────────────────────
-
-  /**
-   * Enciende el LED correspondiente a la pieza encontrada por Alexa,
-   * emite el evento a todos los clientes del Dashboard y programa
-   * el apagado automático tras 10 segundos.
-   *
-   * @param ledIndex  Índice del LED en la tira (0-4)
-   * @param partName  Nombre de la pieza encontrada (para el dashboard)
-   * @param colorHex  Color del LED (viene de Box.colorHex en la BD)
-   */
-  async triggerLed(
-    ledIndex: number,
-    partName: string,
-    colorHex?: string,
-  ): Promise<void> {
-    // Cancelar timeout previo si el mismo LED ya estaba encendido
-    this.cancelAutoOff(ledIndex);
-
-    // Parpadeo inicial para llamar la atención y luego dejarlo encendido
-    await this.ledService.blink(ledIndex, 2, colorHex);
-
-    // Construir y emitir el payload al Dashboard
-    const payload: LedActivatedPayload = {
-      ledIndex,
-      partName,
-      colorHex: colorHex ?? '#FFFFFF',
-      timestamp: new Date().toISOString(),
-      simulated: this.ledService.getStatus().simulationMode,
-    };
-
-    this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, payload);
-
-    this.logger.log(
-      `📡 Evento "${SOCKET_EVENTS.LED_ACTIVATED}" emitido → LED ${ledIndex} | "${partName}"`,
-    );
-
-    // Programar apagado automático a los 10 segundos
-    this.scheduleAutoOff(ledIndex, 10_000);
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // Helpers privados
-  // ──────────────────────────────────────────────────────────
-
-  private scheduleAutoOff(ledIndex: number, delayMs: number): void {
-    const timeout = setTimeout(() => {
-      this.ledService.turnOff(ledIndex);
-      this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex, auto: true });
-      this.activeTimeouts.delete(ledIndex);
-      this.logger.log(`💤 LED ${ledIndex} apagado automáticamente (${delayMs / 1000}s)`);
-    }, delayMs);
-
-    this.activeTimeouts.set(ledIndex, timeout);
-  }
-
-  private cancelAutoOff(ledIndex: number): void {
-    const existing = this.activeTimeouts.get(ledIndex);
-    if (existing) {
-      clearTimeout(existing);
-      this.activeTimeouts.delete(ledIndex);
+  handleManualOff(@MessageBody() data: unknown, @ConnectedSocket() client: Socket): void {
+    try {
+      const { ledIndex } = parseLedMessage(data);
+      this.logger.log(`Apagado manual solicitado por ${client.id} → LED ${ledIndex}`);
+      this.indicator.turnOff(ledIndex);
+    } catch (error: unknown) {
+      throw this.toClientError(error);
     }
+  }
+
+  /** El operador prueba un LED desde el dashboard. */
+  @SubscribeMessage(SOCKET_EVENTS.LED_TEST)
+  async handleLedTest(@MessageBody() data: unknown, @ConnectedSocket() client: Socket): Promise<void> {
+    try {
+      const { ledIndex, colorHex } = parseLedMessage(data);
+      this.logger.log(`Test de LED solicitado por ${client.id} → índice ${ledIndex}`);
+      await this.indicator.test(ledIndex, colorHex);
+    } catch (error: unknown) {
+      throw this.toClientError(error);
+    }
+  }
+
+  private broadcast(event: LedEvent): void {
+    if (event.type === 'activated') {
+      this.server.emit(SOCKET_EVENTS.LED_ACTIVATED, event.payload);
+      return;
+    }
+    // Forma histórica del payload: { ledIndex, manual: true } | { ledIndex, auto: true }
+    this.server.emit(SOCKET_EVENTS.LED_OFF, { ledIndex: event.ledIndex, [event.reason]: true });
+  }
+
+  /** Una petición inválida del cliente llega como evento `exception` con su mensaje, no como error interno. */
+  private toClientError(error: unknown): unknown {
+    return error instanceof LedRequestError ? new WsException(error.message) : error;
   }
 }

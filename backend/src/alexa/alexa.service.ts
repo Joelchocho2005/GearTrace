@@ -1,293 +1,77 @@
-import {
-  Injectable,
-  Logger,
-  BadRequestException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../prisma/prisma.service';
-import { InventoryService } from '../inventory/inventory.service';
-import {
-  AlexaRequestEnvelope,
-  AlexaResponseEnvelope,
-  AlexaIntentRequest,
-  AlexaOutputSpeech,
-} from './alexa.types';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import { ask, tell } from './alexa-response';
+import { plain } from './alexa-speech';
+import { AlexaConfig, alexaConfig } from './alexa.config';
+import { ALEXA_MESSAGES } from './alexa.messages';
+import { AlexaRequestEnvelope, AlexaResponseEnvelope } from './alexa.types';
+import { ALEXA_INTENT_HANDLERS, AlexaIntentHandler } from './intents/alexa-intent-handler';
 
-// ──────────────────────────────────────────────────────────
-// Nombres de los Intents definidos en la Alexa Developer Console
-// ──────────────────────────────────────────────────────────
-export const INTENTS = {
-  BUSCAR_PIEZA: 'BuscarPiezaIntent',
-  LISTAR_CAJAS: 'ListarCajasIntent',
-  STOCK_BAJO: 'StockBajoIntent',
-  HELP: 'AMAZON.HelpIntent',
-  CANCEL: 'AMAZON.CancelIntent',
-  STOP: 'AMAZON.StopIntent',
-  FALLBACK: 'AMAZON.FallbackIntent',
-} as const;
-
-// ──────────────────────────────────────────────────────────
-// Nombres de los Slots en el modelo de interacción de Alexa
-// ──────────────────────────────────────────────────────────
-export const SLOTS = {
-  NOMBRE_PIEZA: 'nombrePieza',
-} as const;
-
+/**
+ * Despachador de la skill: valida el origen y enruta cada request a su
+ * handler. No contiene lógica de negocio ni textos; los intents viven en
+ * `intents/` y las frases en `alexa.messages.ts`.
+ */
 @Injectable()
 export class AlexaService {
   private readonly logger = new Logger(AlexaService.name);
-  private readonly skillId: string;
+  private readonly handlers = new Map<string, AlexaIntentHandler>();
 
   constructor(
-    private readonly config: ConfigService,
-    private readonly prisma: PrismaService,
-    private readonly inventoryService: InventoryService,
+    @Inject(alexaConfig.KEY) private readonly config: AlexaConfig,
+    @Inject(ALEXA_INTENT_HANDLERS) handlers: AlexaIntentHandler[],
   ) {
-    this.skillId = this.config.get<string>('ALEXA_SKILL_ID', '');
-  }
-
-  /**
-   * Punto de entrada: recibe el envelope completo de Amazon y
-   * delega al manejador del tipo de request correspondiente.
-   */
-  async handleRequest(envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
-    this.logger.debug(`Request recibido: ${envelope.request.type}`);
-
-    // Validación del Skill ID si está configurado con un ID real (amzn1.ask.skill...)
-    const isConfiguredSkillId =
-      Boolean(this.skillId) &&
-      !this.skillId.includes('XXXX') &&
-      this.skillId.startsWith('amzn1.ask.skill.');
-
-    if (isConfiguredSkillId) {
-      const incomingSkillId =
-        envelope.session?.application?.applicationId ??
-        envelope.context?.System?.application?.applicationId;
-
-      if (incomingSkillId && incomingSkillId !== this.skillId) {
-        this.logger.warn(`Skill ID inválido: ${incomingSkillId} (esperado: ${this.skillId})`);
-        throw new BadRequestException('Skill ID no autorizado');
+    for (const handler of handlers) {
+      for (const intent of handler.intents) {
+        if (this.handlers.has(intent)) {
+          throw new Error(`El intent "${intent}" tiene más de un handler registrado`);
+        }
+        this.handlers.set(intent, handler);
       }
     }
+  }
 
-    const { request } = envelope;
+  /** Punto de entrada: recibe el envelope de Amazon y devuelve la respuesta. */
+  async handleRequest(envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
+    const request = envelope?.request;
+    if (!request?.type) {
+      throw new BadRequestException('Request de Alexa inválido');
+    }
+    this.assertAuthorizedSkill(envelope);
 
     switch (request.type) {
       case 'LaunchRequest':
-        return this.handleLaunchRequest();
+        return ask(ALEXA_MESSAGES.welcome());
 
-      case 'IntentRequest':
-        return this.handleIntentRequest(request as AlexaIntentRequest);
+      case 'IntentRequest': {
+        const intentName = request.intent?.name;
+        this.logger.log(`Intent recibido: "${intentName}"`);
+        const handler = this.handlers.get(intentName);
+        // AMAZON.FallbackIntent y cualquier intent sin handler: pedir que repita.
+        return handler ? handler.handle(request) : ask(ALEXA_MESSAGES.fallback());
+      }
 
       case 'SessionEndedRequest':
-        this.logger.log('Sesión de Alexa finalizada');
-        return this.buildResponse(
-          { type: 'PlainText', text: '' },
-          true,
-        );
+        // Alexa ignora el cuerpo de esta respuesta; solo espera un 200.
+        this.logger.log(`Sesión de Alexa finalizada (${request.reason})`);
+        return tell(plain(''));
 
       default:
-        return this.buildResponse(
-          { type: 'PlainText', text: 'No entendí la solicitud.' },
-          true,
-        );
+        return tell(ALEXA_MESSAGES.unknownRequest());
     }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // Handlers por tipo de request
-  // ──────────────────────────────────────────────────────────
+  /** Si hay un Skill ID real configurado, rechaza requests de otra skill. */
+  private assertAuthorizedSkill(envelope: AlexaRequestEnvelope): void {
+    const { skillId } = this.config;
+    if (!skillId) return;
 
-  private handleLaunchRequest(): AlexaResponseEnvelope {
-    return this.buildResponse({
-      type: 'SSML',
-      ssml: `<speak>
-        Bienvenido a <emphasis level="strong">GearTrace</emphasis>.
-        Puedes pedirme que busque una pieza diciendo:
-        <break time="300ms"/>
-        <emphasis level="moderate">busca filtro de aceite</emphasis>.
-        ¿Qué pieza necesitas?
-      </speak>`,
-    });
-  }
+    const incoming =
+      envelope.session?.application?.applicationId ??
+      envelope.context?.System?.application?.applicationId;
 
-  private async handleIntentRequest(
-    request: AlexaIntentRequest,
-  ): Promise<AlexaResponseEnvelope> {
-    const { name: intentName } = request.intent;
-    this.logger.log(`Intent recibido: "${intentName}"`);
-
-    switch (intentName) {
-      case INTENTS.BUSCAR_PIEZA:
-        return this.handleBuscarPieza(request);
-
-      case INTENTS.LISTAR_CAJAS:
-        return this.handleListarCajas();
-
-      case INTENTS.STOCK_BAJO:
-        return this.handleStockBajo();
-
-      case INTENTS.HELP:
-        return this.buildResponse({
-          type: 'PlainText',
-          text: 'Puedes decirme "busca filtro de aceite" o "qué piezas tienen stock bajo". ¿Cómo puedo ayudarte?',
-        });
-
-      case INTENTS.CANCEL:
-      case INTENTS.STOP:
-        return this.buildResponse(
-          { type: 'PlainText', text: 'Hasta luego. GearTrace listo.' },
-          true,
-        );
-
-      case INTENTS.FALLBACK:
-      default:
-        return this.buildResponse({
-          type: 'PlainText',
-          text: 'No entendí bien. Intenta decir "busca" seguido del nombre de la pieza.',
-        });
+    if (incoming && incoming !== skillId) {
+      this.logger.warn(`Skill ID no autorizado: ${incoming}`);
+      throw new BadRequestException('Skill ID no autorizado');
     }
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // BuscarPiezaIntent: el más importante de GearTrace
-  // ──────────────────────────────────────────────────────────
-
-  private async handleBuscarPieza(
-    request: AlexaIntentRequest,
-  ): Promise<AlexaResponseEnvelope> {
-    // 1. Extraer el slot "nombrePieza" del request de Alexa
-    const slot = request.intent.slots?.[SLOTS.NOMBRE_PIEZA];
-
-    if (!slot?.value) {
-      return this.buildResponse({
-        type: 'PlainText',
-        text: '¿Qué pieza necesitas encontrar? Por favor, dime el nombre de la pieza.',
-      });
-    }
-
-    const nombreBuscado = slot.value;
-    this.logger.log(`🔍 Buscando pieza: "${nombreBuscado}"`);
-
-    // 2. Buscar en la base de datos usando InventoryService
-    const resultados = await this.inventoryService.searchPartByName(nombreBuscado);
-
-    // 3. Registrar la búsqueda en el log de auditoría
-    await this.prisma.searchLog.create({
-      data: {
-        query: nombreBuscado,
-        found: resultados.length > 0,
-        partId: resultados[0]?.id ?? null,
-        alexaResponse: resultados.length > 0
-          ? `Encontrado en caja ${resultados[0].box.name}`
-          : 'No encontrado',
-      },
-    });
-
-    // 4. Si no se encontró nada
-    if (resultados.length === 0) {
-      return this.buildResponse(
-        {
-          type: 'SSML',
-          ssml: `<speak>
-            No encontré ninguna pieza con el nombre
-            <emphasis level="moderate">${nombreBuscado}</emphasis>
-            en el inventario.
-            Verifica el nombre e intenta de nuevo.
-          </speak>`,
-        },
-        true,
-      );
-    }
-
-    // 5. Pieza encontrada: extraer datos de la primera coincidencia
-    const pieza = resultados[0];
-    const caja = pieza.box;
-
-    this.logger.log(
-      `✅ Pieza encontrada: "${pieza.name}" → Caja "${caja.name}" (LED ${caja.ledIndex})`,
-    );
-
-    // El evento de encendido del LED se dispara desde el AlexaController
-    // usando el LedGateway (ver alexa.controller.ts)
-
-    const stockMsg = pieza.quantity <= pieza.minStock
-      ? ` Atención: el stock es bajo, solo quedan ${pieza.quantity} unidades.`
-      : ` Stock disponible: ${pieza.quantity} unidades.`;
-
-    return this.buildResponse(
-      {
-        type: 'SSML',
-        ssml: `<speak>
-          Encontré
-          <emphasis level="moderate">${pieza.name}</emphasis>.
-          Está en la <emphasis level="strong">${caja.name}</emphasis>,
-          ubicada en ${caja.location ?? 'el almacén'}.
-          He encendido el LED indicador.
-          ${stockMsg}
-        </speak>`,
-      },
-      true,
-    );
-  }
-
-  private async handleListarCajas(): Promise<AlexaResponseEnvelope> {
-    const cajas = await this.inventoryService.findAllBoxes();
-    const lista = cajas.map((c) => c.name).join(', ');
-
-    return this.buildResponse(
-      {
-        type: 'PlainText',
-        text: `El almacén tiene ${cajas.length} cajas: ${lista}.`,
-      },
-      true,
-    );
-  }
-
-  private async handleStockBajo(): Promise<AlexaResponseEnvelope> {
-    const piezas = await this.inventoryService.getLowStockParts();
-
-    if (piezas.length === 0) {
-      return this.buildResponse(
-        { type: 'PlainText', text: 'Todo el inventario tiene stock suficiente. ¡Buen trabajo!' },
-        true,
-      );
-    }
-
-    const lista = piezas.map((p) => p.name).join(', ');
-    return this.buildResponse(
-      {
-        type: 'PlainText',
-        text: `Hay ${piezas.length} piezas con stock bajo: ${lista}. Considera reabastecerlas pronto.`,
-      },
-      true,
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────
-  // Helper: construye el envelope de respuesta
-  // ──────────────────────────────────────────────────────────
-
-  private buildResponse(
-    outputSpeech: AlexaOutputSpeech,
-    shouldEndSession = false,
-  ): AlexaResponseEnvelope {
-    return {
-      version: '1.0',
-      response: {
-        outputSpeech,
-        shouldEndSession,
-      },
-    };
-  }
-
-  /**
-   * Extrae el ledIndex de la pieza encontrada para ser usado
-   * externamente por el AlexaController al disparar el evento LED.
-   */
-  async getLedIndexForPart(partName: string): Promise<number | null> {
-    const results = await this.inventoryService.searchPartByName(partName);
-    if (results.length === 0) return null;
-    return results[0].box.ledIndex;
   }
 }
