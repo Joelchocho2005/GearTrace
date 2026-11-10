@@ -41,7 +41,7 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   register(@Body() dto: RegisterDto) {
     // Forzar CLIENTE en registro público
-    return this.authService.register({ ...dto, role: Role.CLIENTE });
+    return this.authService.register({ ...dto, role: Role.CLIENTE, supplierId: undefined });
   }
 
   // ── Rutas autenticadas ─────────────────────────────────────

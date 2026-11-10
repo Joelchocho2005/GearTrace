@@ -9,6 +9,7 @@ export interface JwtPayload {
   email: string;
   role: Role;
   name: string;
+  supplierId?: number;
 }
 
 /**
@@ -20,4 +21,5 @@ export interface AuthenticatedUser {
   email: string;
   role: Role;
   name: string;
+  supplierId?: number;
 }

@@ -11,6 +11,11 @@ export default function Dashboard() {
       return <GerenteDashboard />;
     case 'MECANICO':
       return <MecanicoDashboard />;
+    case 'BODEGUERO':
+      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+    case 'CONTADOR':
+    case 'PROVEEDOR':
+      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
     case 'CLIENTE':
       return <ClienteDashboard />;
     default:

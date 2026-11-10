@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 
-export type Role = 'GERENTE' | 'MECANICO' | 'CLIENTE';
+export type Role = 'GERENTE' | 'MECANICO' | 'BODEGUERO' | 'CONTADOR' | 'CLIENTE' | 'PROVEEDOR';
 
 export interface User {
   id: number;

@@ -20,6 +20,7 @@ const USER_SELECT = {
   isActive: true,
   createdAt: true,
   updatedAt: true,
+  supplierId: true,
 } satisfies Prisma.UserSelect;
 
 @Injectable()
@@ -52,6 +53,7 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
+    await this.validateSupplierAssignment(dto.role ?? Role.CLIENTE, dto.supplierId);
     try {
       return await this.prisma.user.create({
         data: {
@@ -68,7 +70,12 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto) {
-    await this.findOne(id);
+    const current = await this.prisma.user.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    await this.validateSupplierAssignment(
+      dto.role ?? current.role,
+      dto.supplierId ?? current.supplierId ?? undefined,
+    );
     try {
       return await this.prisma.user.update({
         where: { id },
@@ -106,6 +113,19 @@ export class UsersService {
   private throwDuplicateEmail(error: unknown) {
     if (isPrismaError(error, 'P2002')) {
       throw new ConflictException('El correo electrónico ya está registrado');
+    }
+  }
+
+  private async validateSupplierAssignment(role: Role, supplierId?: number) {
+    if (role === Role.PROVEEDOR && !supplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (role !== Role.PROVEEDOR && supplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({ where: { id: supplierId } });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     }
   }
 }

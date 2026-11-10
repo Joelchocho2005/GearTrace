@@ -1,5 +1,5 @@
 import { PurchaseOrderStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, Min } from 'class-validator';
 import { CreatePurchaseOrderDto } from '../../supplier/dto/purchase-order.dto';
 
 /**
@@ -23,4 +23,15 @@ export class UpdatePurchaseDto {
   @IsOptional()
   @IsEnum(PurchaseOrderStatus)
   status?: PurchaseOrderStatus;
+}
+
+export class SupplierPurchaseResponseDto {
+  @IsEnum(PurchaseOrderStatus, {
+    message: 'El estado debe ser CONFIRMADA o RECHAZADA',
+  })
+  status: 'CONFIRMADA' | 'RECHAZADA';
+
+  @IsOptional()
+  @IsDateString()
+  expectedDeliveryAt?: string;
 }

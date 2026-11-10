@@ -21,7 +21,7 @@ import { InvoicesService } from './invoices.service';
 /** /api/invoices — Facturación (solo GERENTE). */
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE)
+@Roles(Role.GERENTE, Role.CONTADOR)
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 

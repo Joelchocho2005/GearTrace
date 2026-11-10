@@ -10,7 +10,12 @@ export type ISODateString = string;
 
 export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
 export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
-export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
+export type PurchaseOrderStatus =
+  | 'PENDIENTE'
+  | 'CONFIRMADA'
+  | 'RECIBIDA'
+  | 'CANCELADA'
+  | 'RECHAZADA';
 export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
 
 /** Respuesta de GET /users/lookup?role= (selectores de formularios). */
@@ -205,6 +210,7 @@ export interface PurchaseOrder {
   status: PurchaseOrderStatus;
   orderedAt: ISODateString;
   receivedAt: ISODateString | null;
+  expectedDeliveryAt: ISODateString | null;
   supplierId: number;
   supplier?: Supplier;
   items?: PurchaseOrderItem[];
@@ -222,6 +228,11 @@ export interface CreatePurchasePayload {
 export interface UpdatePurchasePayload {
   supplierId?: number;
   status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
+}
+
+export interface SupplierPurchaseResponsePayload {
+  status: 'CONFIRMADA' | 'RECHAZADA';
+  expectedDeliveryAt?: ISODateString;
 }
 
 // ── Facturas ────────────────────────────────────────────────

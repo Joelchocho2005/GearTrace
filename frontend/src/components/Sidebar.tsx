@@ -33,7 +33,7 @@ const SECTIONS: NavigationSection[] = ['General', 'Servicio técnico', 'Abasteci
 
 /** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
 export const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO'], section: 'General' },
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'PROVEEDOR'], section: 'General' },
   { label: 'Mi vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'], section: 'General' },
   { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'], section: 'Servicio técnico' },
   { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos, section: 'Servicio técnico' },
@@ -42,6 +42,7 @@ export const navigationItems: NavigationItem[] = [
   { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores, section: 'Abastecimiento' },
   { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras, section: 'Abastecimiento' },
   { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion, section: 'Administración' },
+  { label: 'Pedidos recibidos', path: '/portal-proveedor', icon: Truck, roles: ROUTE_ROLES['portal-proveedor'], section: 'Abastecimiento' },
   { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios, section: 'Administración' },
   { label: 'Historial de búsquedas', path: '/logs', icon: History, roles: ROUTE_ROLES.logs, section: 'Administración' },
 ];

@@ -41,6 +41,19 @@ export class AuthService {
       );
     }
 
+    if (dto.role === Role.PROVEEDOR && !dto.supplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (dto.role !== Role.PROVEEDOR && dto.supplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (dto.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
+    }
+
     // Hashear la contraseña con bcrypt
     const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
@@ -50,6 +63,7 @@ export class AuthService {
         email: dto.email,
         password: hashedPassword,
         role: dto.role ?? Role.CLIENTE,
+        supplierId: dto.supplierId,
       },
       select: { id: true, name: true, email: true, role: true, createdAt: true },
     });
@@ -126,6 +140,17 @@ export class AuthService {
   }
 
   async changeUserRole(userId: number, role: Role) {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { supplierId: true },
+    });
+    if (!current) throw new NotFoundException('Usuario no encontrado');
+    if (role === Role.PROVEEDOR && !current.supplierId) {
+      throw new ConflictException('Asocia un proveedor antes de asignar el rol PROVEEDOR');
+    }
+    if (role !== Role.PROVEEDOR && current.supplierId) {
+      throw new ConflictException('Desvincula el proveedor antes de cambiar este rol');
+    }
     return this.prisma.user.update({
       where: { id: userId },
       data: { role },
@@ -137,6 +162,20 @@ export class AuthService {
     const existing = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!existing) {
       throw new NotFoundException('Usuario no encontrado');
+    }
+    const targetRole = dto.role ?? existing.role;
+    const targetSupplierId = dto.supplierId ?? existing.supplierId ?? undefined;
+    if (targetRole === Role.PROVEEDOR && !targetSupplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (targetRole !== Role.PROVEEDOR && targetSupplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (dto.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     }
 
     const data = {

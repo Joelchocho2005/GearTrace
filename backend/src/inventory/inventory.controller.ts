@@ -37,7 +37,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
  */
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
@@ -73,7 +73,7 @@ export class InventoryController {
 
   /** DELETE /api/inventory/boxes/:id → Eliminar una caja vacía */
   @Delete('boxes/:id')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   removeBox(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.removeBox(id);
@@ -146,7 +146,7 @@ export class InventoryController {
 
   /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
   @Delete('parts/:id')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   removePart(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.removePart(id);

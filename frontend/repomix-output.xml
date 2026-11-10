@@ -93,6 +93,7 @@ src/
     FacturacionPage.tsx
     OrdenesTrabajoPage.tsx
     ProveedoresPage.tsx
+    ProveedorPortalPage.tsx
     UsuariosPage.tsx
     VehiculosPage.tsx
   routes/
@@ -258,6 +259,7 @@ import type {
   CreateWorkOrderPayload,
   Invoice,
   PurchaseOrder,
+  SupplierPurchaseResponsePayload,
   Supplier,
   UpdateAppointmentPayload,
   UpdateInvoicePayload,
@@ -314,6 +316,12 @@ export const purchasesApi = createCrudApi<
   CreatePurchasePayload,
   UpdatePurchasePayload
 >('/purchases');
+
+export const supplierPortalApi = {
+  list: async () => (await api.get<PurchaseOrder[]>('/purchases/supplier-portal')).data,
+  respond: async (id: number, payload: SupplierPurchaseResponsePayload) =>
+    (await api.patch<PurchaseOrder>(`/purchases/supplier-portal/${id}`, payload)).data,
+};
 
 export const invoicesApi = createCrudApi<Invoice, CreateInvoicePayload, UpdateInvoicePayload>(
   '/invoices',
@@ -398,7 +406,12 @@ export type ISODateString = string;
 
 export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
 export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
-export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
+export type PurchaseOrderStatus =
+  | 'PENDIENTE'
+  | 'CONFIRMADA'
+  | 'RECIBIDA'
+  | 'CANCELADA'
+  | 'RECHAZADA';
 export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
 
 /** Respuesta de GET /users/lookup?role= (selectores de formularios). */
@@ -593,6 +606,7 @@ export interface PurchaseOrder {
   status: PurchaseOrderStatus;
   orderedAt: ISODateString;
   receivedAt: ISODateString | null;
+  expectedDeliveryAt: ISODateString | null;
   supplierId: number;
   supplier?: Supplier;
   items?: PurchaseOrderItem[];
@@ -610,6 +624,11 @@ export interface CreatePurchasePayload {
 export interface UpdatePurchasePayload {
   supplierId?: number;
   status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
+}
+
+export interface SupplierPurchaseResponsePayload {
+  status: 'CONFIRMADA' | 'RECHAZADA';
+  expectedDeliveryAt?: ISODateString;
 }
 
 // ── Facturas ────────────────────────────────────────────────
@@ -1976,7 +1995,14 @@ interface ManagedUser {
   isActive: boolean;
 }
 
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+const roles: Role[] = [
+  'GERENTE',
+  'MECANICO',
+  'BODEGUERO',
+  'CONTADOR',
+  'CLIENTE',
+  'PROVEEDOR',
+];
 
 export default function UsersList() {
   const { user } = useAuth();
@@ -1984,7 +2010,13 @@ export default function UsersList() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'CLIENTE' as Role });
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'CLIENTE' as Role,
+    supplierId: '',
+  });
 
   const loadUsers = async () => {
     try {
@@ -2010,9 +2042,12 @@ export default function UsersList() {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post('/auth/admin/create', form);
+      await api.post('/auth/admin/create', {
+        ...form,
+        supplierId: form.role === 'PROVEEDOR' ? Number(form.supplierId) : undefined,
+      });
       toast.success('Usuario creado correctamente.');
-      setForm({ name: '', email: '', password: '', role: 'CLIENTE' });
+      setForm({ name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' });
       setIsModalOpen(false);
       await loadUsers();
     } catch (error: any) {
@@ -2080,6 +2115,17 @@ export default function UsersList() {
             <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl px-4 py-3 text-white glass-input">
               {roles.map((role) => <option key={role} value={role}>{role}</option>)}
             </select>
+            {form.role === 'PROVEEDOR' && (
+              <input
+                required
+                min={1}
+                type="number"
+                value={form.supplierId}
+                placeholder="ID del proveedor"
+                onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
+                className="w-full rounded-xl px-4 py-3 text-white glass-input"
+              />
+            )}
             <button disabled={saving} className="w-full rounded-xl px-4 py-3 font-semibold text-white disabled:opacity-50 btn-primary">{saving ? 'Guardando...' : 'Crear usuario'}</button>
           </form>
         </div>
@@ -2106,7 +2152,14 @@ interface ManagedUser {
   isActive: boolean;
 }
 
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+const roles: Role[] = [
+  'GERENTE',
+  'MECANICO',
+  'BODEGUERO',
+  'CONTADOR',
+  'CLIENTE',
+  'PROVEEDOR',
+];
 
 export default function UsersManagement() {
   const { user } = useAuth();
@@ -3610,6 +3663,11 @@ export default function Dashboard() {
       return <GerenteDashboard />;
     case 'MECANICO':
       return <MecanicoDashboard />;
+    case 'BODEGUERO':
+      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+    case 'CONTADOR':
+    case 'PROVEEDOR':
+      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
     case 'CLIENTE':
       return <ClienteDashboard />;
     default:
@@ -4028,7 +4086,7 @@ const SECTIONS: NavigationSection[] = ['General', 'Servicio técnico', 'Abasteci
 
 /** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
 export const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO'], section: 'General' },
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'PROVEEDOR'], section: 'General' },
   { label: 'Mi vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'], section: 'General' },
   { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'], section: 'Servicio técnico' },
   { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos, section: 'Servicio técnico' },
@@ -4037,6 +4095,7 @@ export const navigationItems: NavigationItem[] = [
   { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores, section: 'Abastecimiento' },
   { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras, section: 'Abastecimiento' },
   { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion, section: 'Administración' },
+  { label: 'Pedidos recibidos', path: '/portal-proveedor', icon: Truck, roles: ROUTE_ROLES['portal-proveedor'], section: 'Abastecimiento' },
   { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios, section: 'Administración' },
   { label: 'Historial de búsquedas', path: '/logs', icon: History, roles: ROUTE_ROLES.logs, section: 'Administración' },
 ];
@@ -4171,7 +4230,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 
-export type Role = 'GERENTE' | 'MECANICO' | 'CLIENTE';
+export type Role = 'GERENTE' | 'MECANICO' | 'BODEGUERO' | 'CONTADOR' | 'CLIENTE' | 'PROVEEDOR';
 
 export interface User {
   id: number;
@@ -4975,6 +5034,80 @@ export default function ProveedoresPage() {
 }
 
 ================
+File: src/pages/ProveedorPortalPage.tsx
+================
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import { supplierPortalApi } from '../api/resources';
+import { PurchaseOrder } from '../api/types';
+
+export default function ProveedorPortalPage() {
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadOrders = async () => {
+    try {
+      setOrders(await supplierPortalApi.list());
+    } catch {
+      toast.error('No se pudieron cargar los pedidos asignados.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadOrders();
+  }, []);
+
+  const respond = async (id: number, status: 'CONFIRMADA' | 'RECHAZADA') => {
+    try {
+      await supplierPortalApi.respond(id, { status });
+      toast.success(status === 'CONFIRMADA' ? 'Pedido confirmado.' : 'Pedido rechazado.');
+      await loadOrders();
+    } catch {
+      toast.error('No se pudo actualizar el pedido.');
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <header>
+        <h2 className="text-2xl font-bold text-white">Pedidos asignados</h2>
+        <p className="text-sm text-slate-400">Confirma o rechaza pedidos de compra del taller.</p>
+      </header>
+      <div className="glass overflow-hidden rounded-2xl">
+        {loading ? (
+          <p className="p-8 text-center text-slate-400">Cargando pedidos...</p>
+        ) : orders.length === 0 ? (
+          <p className="p-8 text-center text-slate-400">No tienes pedidos asignados.</p>
+        ) : (
+          <div className="divide-y divide-white/5">
+            {orders.map((order) => (
+              <div key={order.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
+                <div>
+                  <p className="font-semibold text-white">{order.number}</p>
+                  <p className="text-sm text-slate-400">Estado: {order.status}</p>
+                </div>
+                {order.status === 'PENDIENTE' && (
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-primary rounded-lg px-3 py-2 text-sm" onClick={() => void respond(order.id, 'CONFIRMADA')}>
+                      Confirmar
+                    </button>
+                    <button type="button" className="btn-secondary rounded-lg px-3 py-2 text-sm" onClick={() => void respond(order.id, 'RECHAZADA')}>
+                      Rechazar
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+================
 File: src/pages/UsuariosPage.tsx
 ================
 import { useState } from 'react';
@@ -5229,15 +5362,16 @@ import type { Role } from '../contexts/AuthContext';
  * ruta rechazaría.
  */
 export const ROUTE_ROLES = {
-  inventory: ['GERENTE', 'MECANICO'],
+  inventory: ['GERENTE', 'BODEGUERO'],
   logs: ['GERENTE', 'MECANICO'],
   usuarios: ['GERENTE'],
   vehiculos: ['GERENTE', 'MECANICO'],
   'ordenes-trabajo': ['GERENTE', 'MECANICO'],
   citas: ['GERENTE', 'MECANICO', 'CLIENTE'],
-  proveedores: ['GERENTE'],
-  compras: ['GERENTE'],
-  facturacion: ['GERENTE'],
+  proveedores: ['GERENTE', 'BODEGUERO'],
+  compras: ['GERENTE', 'BODEGUERO'],
+  facturacion: ['GERENTE', 'CONTADOR'],
+  'portal-proveedor': ['PROVEEDOR'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type AppRoute = keyof typeof ROUTE_ROLES;
@@ -5353,7 +5487,10 @@ interface StatusMeta {
 export const ROLE_META: Record<Role, StatusMeta> = {
   GERENTE: { label: 'Gerente', tone: 'brand' },
   MECANICO: { label: 'Mecánico', tone: 'info' },
+  BODEGUERO: { label: 'Bodeguero', tone: 'warning' },
+  CONTADOR: { label: 'Contador', tone: 'success' },
   CLIENTE: { label: 'Cliente', tone: 'neutral' },
+  PROVEEDOR: { label: 'Proveedor', tone: 'neutral' },
 };
 
 export const WORK_ORDER_STATUS: Record<WorkOrderStatus, StatusMeta> = {
@@ -5372,8 +5509,10 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, StatusMeta> = {
 
 export const PURCHASE_STATUS: Record<PurchaseOrderStatus, StatusMeta> = {
   PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  CONFIRMADA: { label: 'Confirmada', tone: 'info' },
   RECIBIDA: { label: 'Recibida', tone: 'success' },
   CANCELADA: { label: 'Cancelada', tone: 'danger' },
+  RECHAZADA: { label: 'Rechazada', tone: 'danger' },
 };
 
 export const INVOICE_STATUS: Record<InvoiceStatus, StatusMeta> = {
@@ -5400,6 +5539,7 @@ import CitasPage from './pages/CitasPage'
 import ProveedoresPage from './pages/ProveedoresPage'
 import ComprasPage from './pages/ComprasPage'
 import FacturacionPage from './pages/FacturacionPage'
+import ProveedorPortalPage from './pages/ProveedorPortalPage'
 import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
@@ -5417,6 +5557,7 @@ const protectedRoutes: Record<AppRoute, ReactNode> = {
   compras: <ComprasPage />,
   // Facturación (FIN)
   facturacion: <FacturacionPage />,
+  'portal-proveedor': <ProveedorPortalPage />,
 }
 
 /** Rutas anteriores en inglés: redirigen a la ruta canónica en español. */

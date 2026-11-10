@@ -12,7 +12,14 @@ interface ManagedUser {
   isActive: boolean;
 }
 
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+const roles: Role[] = [
+  'GERENTE',
+  'MECANICO',
+  'BODEGUERO',
+  'CONTADOR',
+  'CLIENTE',
+  'PROVEEDOR',
+];
 
 export default function UsersList() {
   const { user } = useAuth();
@@ -20,7 +27,13 @@ export default function UsersList() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'CLIENTE' as Role });
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'CLIENTE' as Role,
+    supplierId: '',
+  });
 
   const loadUsers = async () => {
     try {
@@ -46,9 +59,12 @@ export default function UsersList() {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post('/auth/admin/create', form);
+      await api.post('/auth/admin/create', {
+        ...form,
+        supplierId: form.role === 'PROVEEDOR' ? Number(form.supplierId) : undefined,
+      });
       toast.success('Usuario creado correctamente.');
-      setForm({ name: '', email: '', password: '', role: 'CLIENTE' });
+      setForm({ name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' });
       setIsModalOpen(false);
       await loadUsers();
     } catch (error: any) {
@@ -116,6 +132,17 @@ export default function UsersList() {
             <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl px-4 py-3 text-white glass-input">
               {roles.map((role) => <option key={role} value={role}>{role}</option>)}
             </select>
+            {form.role === 'PROVEEDOR' && (
+              <input
+                required
+                min={1}
+                type="number"
+                value={form.supplierId}
+                placeholder="ID del proveedor"
+                onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
+                className="w-full rounded-xl px-4 py-3 text-white glass-input"
+              />
+            )}
             <button disabled={saving} className="w-full rounded-xl px-4 py-3 font-semibold text-white disabled:opacity-50 btn-primary">{saving ? 'Guardando...' : 'Crear usuario'}</button>
           </form>
         </div>

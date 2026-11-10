@@ -61,6 +61,10 @@ prisma/
       migration.sql
     20261110120000_used_part_price_and_appointment_work_order/
       migration.sql
+    20261110130000_add_ers_roles/
+      migration.sql
+    20261110130100_supplier_purchase_responses/
+      migration.sql
   schema.prisma
   seed.sql
   seed.ts
@@ -584,6 +588,32 @@ ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_appointment_id_fkey" FOREI
 UPDATE "used_parts" u SET "unit_price" = p."unit_price" FROM "parts" p WHERE p."id" = u."part_id" AND u."unit_price" IS NULL;
 
 ================
+File: prisma/migrations/20261110130000_add_ers_roles/migration.sql
+================
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'BODEGUERO';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'CONTADOR';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'PROVEEDOR';
+
+ALTER TABLE "users"
+ADD COLUMN "supplier_id" INTEGER;
+
+CREATE UNIQUE INDEX "users_supplier_id_key" ON "users"("supplier_id");
+
+ALTER TABLE "users"
+ADD CONSTRAINT "users_supplier_id_fkey"
+FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id")
+ON DELETE SET NULL ON UPDATE CASCADE;
+
+================
+File: prisma/migrations/20261110130100_supplier_purchase_responses/migration.sql
+================
+ALTER TYPE "PurchaseOrderStatus" ADD VALUE IF NOT EXISTS 'CONFIRMADA';
+ALTER TYPE "PurchaseOrderStatus" ADD VALUE IF NOT EXISTS 'RECHAZADA';
+
+ALTER TABLE "purchase_orders"
+ADD COLUMN "expected_delivery_at" TIMESTAMP(3);
+
+================
 File: prisma/schema.prisma
 ================
 // ============================================================
@@ -611,7 +641,10 @@ datasource db {
 enum Role {
   GERENTE
   MECANICO
+  BODEGUERO
+  CONTADOR
   CLIENTE
+  PROVEEDOR
 }
 
 // Flujo SER: EN_DIAGNOSTICO → EN_PROCESO ⇄ ESPERA_REPUESTOS → CONCLUIDO
@@ -632,8 +665,10 @@ enum AppointmentStatus {
 
 enum PurchaseOrderStatus {
   PENDIENTE
+  CONFIRMADA
   RECIBIDA
   CANCELADA
+  RECHAZADA
 }
 
 enum InvoiceStatus {
@@ -663,6 +698,8 @@ model User {
   vehicles   Vehicle[]
   workOrders WorkOrder[] @relation("AssignedMechanic")
   invoices   Invoice[]   @relation("InvoiceClient")
+  supplierId Int?        @unique @map("supplier_id")
+  supplier   Supplier?   @relation("SupplierUser", fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@map("users")
 }
@@ -874,6 +911,7 @@ model Supplier {
   phone          String?         @db.VarChar(50)
   address        String?         @db.VarChar(255)
   purchaseOrders PurchaseOrder[]
+  user           User?           @relation("SupplierUser")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -887,6 +925,7 @@ model PurchaseOrder {
   status     PurchaseOrderStatus @default(PENDIENTE)
   orderedAt  DateTime            @default(now()) @map("ordered_at")
   receivedAt DateTime?           @map("received_at")
+  expectedDeliveryAt DateTime?   @map("expected_delivery_at")
   supplierId Int                 @map("supplier_id")
   supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   items      PurchaseOrderItem[]
@@ -2274,7 +2313,7 @@ export const CurrentUser = createParamDecorator(
 ================
 File: src/auth/dto/auth.dto.ts
 ================
-import { IsEmail, IsString, MinLength, MaxLength, IsEnum, IsOptional } from 'class-validator';
+import { IsEmail, IsInt, IsString, MinLength, MaxLength, IsEnum, IsOptional, Min } from 'class-validator';
 import { Role } from '@prisma/client';
 
 export class LoginDto {
@@ -2300,14 +2339,19 @@ export class RegisterDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
   role?: Role;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
 }
 
 ================
 File: src/auth/dto/update-user.dto.ts
 ================
-import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { Role } from '@prisma/client';
 
 export class UpdateUserDto {
@@ -2333,6 +2377,11 @@ export class UpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
 }
 
 ================
@@ -2391,10 +2440,8 @@ import { AuthenticatedUser } from '../auth.types';
  * IMPORTANTE: Siempre debe usarse DESPUÉS de JwtAuthGuard:
  *   @UseGuards(JwtAuthGuard, RolesGuard)
  *
- * Jerarquía de permisos GearTrace:
- *   GERENTE  → puede todo
- *   MECANICO → puede operar inventario y LEDs
- *   CLIENTE  → solo puede consultar
+ * Cada endpoint declara explícitamente sus roles permitidos. El gerente se
+ * incluye en las rutas administrativas donde corresponde.
  */
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -2417,11 +2464,6 @@ export class RolesGuard implements CanActivate {
 
     if (!user) {
       throw new ForbiddenException('Usuario no autenticado');
-    }
-
-    // GERENTE siempre tiene acceso a todo
-    if (user.role === Role.GERENTE) {
-      return true;
     }
 
     // Verificar si el rol del usuario está en la lista de roles permitidos
@@ -2476,7 +2518,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Verificar que el usuario sigue existiendo y activo en la BD
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, role: true, name: true, isActive: true },
+      select: { id: true, email: true, role: true, name: true, isActive: true, supplierId: true },
     });
 
     if (!user || !user.isActive) {
@@ -2490,6 +2532,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: user.email,
       role: user.role,
       name: user.name,
+      supplierId: user.supplierId ?? undefined,
     };
   }
 }
@@ -2540,7 +2583,7 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   register(@Body() dto: RegisterDto) {
     // Forzar CLIENTE en registro público
-    return this.authService.register({ ...dto, role: Role.CLIENTE });
+    return this.authService.register({ ...dto, role: Role.CLIENTE, supplierId: undefined });
   }
 
   // ── Rutas autenticadas ─────────────────────────────────────
@@ -2686,6 +2729,19 @@ export class AuthService {
       );
     }
 
+    if (dto.role === Role.PROVEEDOR && !dto.supplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (dto.role !== Role.PROVEEDOR && dto.supplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (dto.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
+    }
+
     // Hashear la contraseña con bcrypt
     const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
@@ -2695,6 +2751,7 @@ export class AuthService {
         email: dto.email,
         password: hashedPassword,
         role: dto.role ?? Role.CLIENTE,
+        supplierId: dto.supplierId,
       },
       select: { id: true, name: true, email: true, role: true, createdAt: true },
     });
@@ -2771,6 +2828,17 @@ export class AuthService {
   }
 
   async changeUserRole(userId: number, role: Role) {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { supplierId: true },
+    });
+    if (!current) throw new NotFoundException('Usuario no encontrado');
+    if (role === Role.PROVEEDOR && !current.supplierId) {
+      throw new ConflictException('Asocia un proveedor antes de asignar el rol PROVEEDOR');
+    }
+    if (role !== Role.PROVEEDOR && current.supplierId) {
+      throw new ConflictException('Desvincula el proveedor antes de cambiar este rol');
+    }
     return this.prisma.user.update({
       where: { id: userId },
       data: { role },
@@ -2782,6 +2850,20 @@ export class AuthService {
     const existing = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!existing) {
       throw new NotFoundException('Usuario no encontrado');
+    }
+    const targetRole = dto.role ?? existing.role;
+    const targetSupplierId = dto.supplierId ?? existing.supplierId ?? undefined;
+    if (targetRole === Role.PROVEEDOR && !targetSupplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (targetRole !== Role.PROVEEDOR && targetSupplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (dto.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     }
 
     const data = {
@@ -2852,6 +2934,7 @@ export interface JwtPayload {
   email: string;
   role: Role;
   name: string;
+  supplierId?: number;
 }
 
 /**
@@ -2863,6 +2946,7 @@ export interface AuthenticatedUser {
   email: string;
   role: Role;
   name: string;
+  supplierId?: number;
 }
 
 ================
@@ -3317,7 +3401,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
  */
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
@@ -3353,7 +3437,7 @@ export class InventoryController {
 
   /** DELETE /api/inventory/boxes/:id → Eliminar una caja vacía */
   @Delete('boxes/:id')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   removeBox(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.removeBox(id);
@@ -3426,7 +3510,7 @@ export class InventoryController {
 
   /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
   @Delete('parts/:id')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   removePart(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.removePart(id);
@@ -3784,7 +3868,7 @@ import { InvoicesService } from './invoices.service';
 /** /api/invoices — Facturación (solo GERENTE). */
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE)
+@Roles(Role.GERENTE, Role.CONTADOR)
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
@@ -5070,7 +5154,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 File: src/purchases/dto/purchase.dto.ts
 ================
 import { PurchaseOrderStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, Min } from 'class-validator';
 import { CreatePurchaseOrderDto } from '../../supplier/dto/purchase-order.dto';
 
 /**
@@ -5096,6 +5180,17 @@ export class UpdatePurchaseDto {
   status?: PurchaseOrderStatus;
 }
 
+export class SupplierPurchaseResponseDto {
+  @IsEnum(PurchaseOrderStatus, {
+    message: 'El estado debe ser CONFIRMADA o RECHAZADA',
+  })
+  status: 'CONFIRMADA' | 'RECHAZADA';
+
+  @IsOptional()
+  @IsDateString()
+  expectedDeliveryAt?: string;
+}
+
 ================
 File: src/purchases/purchases.controller.ts
 ================
@@ -5116,13 +5211,19 @@ import { Role } from '@prisma/client';
 import { Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser } from '../auth/decorators/auth.decorators';
+import {
+  CreatePurchaseDto,
+  SupplierPurchaseResponseDto,
+  UpdatePurchaseDto,
+} from './dto/purchase.dto';
 import { PurchasesService } from './purchases.service';
 
 /** /api/purchases — CRUD de órdenes de compra (abastecimiento). */
 @Controller('purchases')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class PurchasesController {
   constructor(private readonly purchasesService: PurchasesService) {}
 
@@ -5148,10 +5249,26 @@ export class PurchasesController {
   }
 
   @Delete(':id(\\d+)')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.purchasesService.remove(id);
+  }
+
+  @Get('supplier-portal')
+  @Roles(Role.PROVEEDOR)
+  findSupplierOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.purchasesService.findSupplierOrders(user);
+  }
+
+  @Patch('supplier-portal/:id(\\d+)')
+  @Roles(Role.PROVEEDOR)
+  respondAsSupplier(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SupplierPurchaseResponseDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasesService.respondAsSupplier(id, dto, user);
   }
 }
 
@@ -5179,10 +5296,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PurchaseOrderStatus } from '@prisma/client';
+import { PurchaseOrderStatus, Role } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
+import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupplierService } from '../supplier/supplier.service';
-import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
+import {
+  CreatePurchaseDto,
+  SupplierPurchaseResponseDto,
+  UpdatePurchaseDto,
+} from './dto/purchase.dto';
 
 const PURCHASE_INCLUDE = {
   supplier: true,
@@ -5243,8 +5366,47 @@ export class PurchasesService {
         'No se puede eliminar un pedido recibido: ya incrementó el inventario',
       );
     }
+
     // Los PurchaseOrderItem se eliminan en cascada.
     await this.prisma.purchaseOrder.delete({ where: { id } });
+  }
+
+  findSupplierOrders(user: AuthenticatedUser) {
+    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
+      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
+    }
+    return this.prisma.purchaseOrder.findMany({
+      where: { supplierId: user.supplierId },
+      include: PURCHASE_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async respondAsSupplier(
+    id: number,
+    dto: SupplierPurchaseResponseDto,
+    user: AuthenticatedUser,
+  ) {
+    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
+      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
+    }
+    const order = await this.prisma.purchaseOrder.findFirst({
+      where: { id, supplierId: user.supplierId },
+    });
+    if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
+    if (order.status !== PurchaseOrderStatus.PENDIENTE) {
+      throw new ConflictException('Solo se pueden responder pedidos pendientes');
+    }
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        expectedDeliveryAt: dto.expectedDeliveryAt
+          ? new Date(dto.expectedDeliveryAt)
+          : undefined,
+      },
+      include: PURCHASE_INCLUDE,
+    });
   }
 
   private async ensureSupplier(id: number) {
@@ -5571,7 +5733,7 @@ import { SupplierService } from './supplier.service';
  */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class SupplierController {
   constructor(private readonly supplierService: SupplierService) {}
 
@@ -5801,7 +5963,7 @@ import { SuppliersService } from './suppliers.service';
  */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}
 
@@ -5827,7 +5989,7 @@ export class SuppliersController {
   }
 
   @Delete(':id(\\d+)')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.suppliersService.remove(id);
@@ -5936,6 +6098,8 @@ import {
   IsEnum,
   IsOptional,
   IsString,
+  IsInt,
+  Min,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -5955,19 +6119,24 @@ export class CreateUserDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
   role?: Role;
 
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
 }
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {}
 
 /** GET /api/users/lookup?role=CLIENTE → selectores de formularios. */
 export class UserLookupQueryDto {
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
   role: Role;
 }
 
@@ -6079,6 +6248,7 @@ const USER_SELECT = {
   isActive: true,
   createdAt: true,
   updatedAt: true,
+  supplierId: true,
 } satisfies Prisma.UserSelect;
 
 @Injectable()
@@ -6111,6 +6281,7 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
+    await this.validateSupplierAssignment(dto.role ?? Role.CLIENTE, dto.supplierId);
     try {
       return await this.prisma.user.create({
         data: {
@@ -6127,7 +6298,12 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto) {
-    await this.findOne(id);
+    const current = await this.prisma.user.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    await this.validateSupplierAssignment(
+      dto.role ?? current.role,
+      dto.supplierId ?? current.supplierId ?? undefined,
+    );
     try {
       return await this.prisma.user.update({
         where: { id },
@@ -6165,6 +6341,19 @@ export class UsersService {
   private throwDuplicateEmail(error: unknown) {
     if (isPrismaError(error, 'P2002')) {
       throw new ConflictException('El correo electrónico ya está registrado');
+    }
+  }
+
+  private async validateSupplierAssignment(role: Role, supplierId?: number) {
+    if (role === Role.PROVEEDOR && !supplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (role !== Role.PROVEEDOR && supplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({ where: { id: supplierId } });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     }
   }
 }
@@ -6559,6 +6748,7 @@ export function nextWorkOrderNumber(tx: Prisma.TransactionClient, date?: Date): 
 File: src/work-orders/work-order-scope.ts
 ================
 import { Prisma, Role } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
 
 /**
@@ -6576,6 +6766,8 @@ export function workOrderScope(user: AuthenticatedUser): Prisma.WorkOrderWhereIn
       return { mechanicId: user.id };
     case Role.CLIENTE:
       return { vehicle: { ownerId: user.id } };
+    default:
+      throw new ForbiddenException('Este rol no puede acceder a órdenes de trabajo');
   }
 }
 

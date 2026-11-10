@@ -61,6 +61,10 @@ backend/
         migration.sql
       20261110120000_used_part_price_and_appointment_work_order/
         migration.sql
+      20261110130000_add_ers_roles/
+        migration.sql
+      20261110130100_supplier_purchase_responses/
+        migration.sql
       migration_lock.toml
     schema.prisma
     seed.sql
@@ -251,6 +255,7 @@ frontend/
       FacturacionPage.tsx
       OrdenesTrabajoPage.tsx
       ProveedoresPage.tsx
+      ProveedorPortalPage.tsx
       UsuariosPage.tsx
       VehiculosPage.tsx
     routes/
@@ -281,10 +286,834 @@ CLAUDE.md
 docker-compose.yml
 package.json
 README.md
+REVISION-FLUJO-USUARIOS.md
 
 ================================================================
 Files
 ================================================================
+
+================
+File: backend/prisma/migrations/20261110130000_add_ers_roles/migration.sql
+================
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'BODEGUERO';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'CONTADOR';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'PROVEEDOR';
+
+ALTER TABLE "users"
+ADD COLUMN "supplier_id" INTEGER;
+
+CREATE UNIQUE INDEX "users_supplier_id_key" ON "users"("supplier_id");
+
+ALTER TABLE "users"
+ADD CONSTRAINT "users_supplier_id_fkey"
+FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id")
+ON DELETE SET NULL ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/20261110130100_supplier_purchase_responses/migration.sql
+================
+ALTER TYPE "PurchaseOrderStatus" ADD VALUE IF NOT EXISTS 'CONFIRMADA';
+ALTER TYPE "PurchaseOrderStatus" ADD VALUE IF NOT EXISTS 'RECHAZADA';
+
+ALTER TABLE "purchase_orders"
+ADD COLUMN "expected_delivery_at" TIMESTAMP(3);
+
+================
+File: frontend/src/pages/ProveedorPortalPage.tsx
+================
+import { useEffect, useState } from 'react';
+import toast from 'react-hot-toast';
+import { supplierPortalApi } from '../api/resources';
+import { PurchaseOrder } from '../api/types';
+
+export default function ProveedorPortalPage() {
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadOrders = async () => {
+    try {
+      setOrders(await supplierPortalApi.list());
+    } catch {
+      toast.error('No se pudieron cargar los pedidos asignados.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadOrders();
+  }, []);
+
+  const respond = async (id: number, status: 'CONFIRMADA' | 'RECHAZADA') => {
+    try {
+      await supplierPortalApi.respond(id, { status });
+      toast.success(status === 'CONFIRMADA' ? 'Pedido confirmado.' : 'Pedido rechazado.');
+      await loadOrders();
+    } catch {
+      toast.error('No se pudo actualizar el pedido.');
+    }
+  };
+
+  return (
+    <section className="space-y-6">
+      <header>
+        <h2 className="text-2xl font-bold text-white">Pedidos asignados</h2>
+        <p className="text-sm text-slate-400">Confirma o rechaza pedidos de compra del taller.</p>
+      </header>
+      <div className="glass overflow-hidden rounded-2xl">
+        {loading ? (
+          <p className="p-8 text-center text-slate-400">Cargando pedidos...</p>
+        ) : orders.length === 0 ? (
+          <p className="p-8 text-center text-slate-400">No tienes pedidos asignados.</p>
+        ) : (
+          <div className="divide-y divide-white/5">
+            {orders.map((order) => (
+              <div key={order.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
+                <div>
+                  <p className="font-semibold text-white">{order.number}</p>
+                  <p className="text-sm text-slate-400">Estado: {order.status}</p>
+                </div>
+                {order.status === 'PENDIENTE' && (
+                  <div className="flex gap-2">
+                    <button type="button" className="btn-primary rounded-lg px-3 py-2 text-sm" onClick={() => void respond(order.id, 'CONFIRMADA')}>
+                      Confirmar
+                    </button>
+                    <button type="button" className="btn-secondary rounded-lg px-3 py-2 text-sm" onClick={() => void respond(order.id, 'RECHAZADA')}>
+                      Rechazar
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+================
+File: REVISION-FLUJO-USUARIOS.md
+================
+# GearTrace — matriz de capacidades y pruebas
+
+Documento de comparación funcional basado en:
+
+- `backend/repomix-output.xml`
+- `backend/clinerules.md`
+- `frontend/repomix-output.xml`
+- `frontend/clinerules.md`
+
+## Roles
+
+| Rol | Propósito |
+|---|---|
+| `GERENTE` | Administración completa del taller, inventario, operación y facturación. |
+| `MECANICO` | Operación técnica, inventario, proveedores, hardware y órdenes asignadas. |
+| `CLIENTE` | Sus vehículos, sus citas y el seguimiento de sus órdenes. |
+
+## Capacidades del GERENTE
+
+### Acceso y usuarios
+
+- Iniciar sesión.
+- Consultar su perfil.
+- Registrar clientes públicamente; el registro público siempre crea `CLIENTE`.
+- Crear usuarios administrativos con rol `GERENTE`, `MECANICO` o `CLIENTE`.
+- Listar usuarios.
+- Crear, editar y eliminar usuarios.
+- Cambiar roles.
+- Activar o desactivar usuarios.
+- No debe poder eliminarse a sí mismo.
+- Las contraseñas nunca deben devolverse en las respuestas.
+
+### Inventario
+
+- Listar cajas y piezas.
+- Consultar el detalle de una caja o pieza.
+- Crear y editar cajas.
+- Crear y editar piezas.
+- Subir imágenes de piezas.
+- Buscar piezas.
+- Consultar piezas con stock bajo.
+- Eliminar cajas o piezas.
+- Una caja con piezas no debe eliminarse.
+
+### Vehículos y citas
+
+- Listar, consultar, crear, editar y eliminar vehículos.
+- La placa debe normalizarse con `trim` y mayúsculas y ser única.
+- El dueño de un vehículo debe ser un cliente activo.
+- No debe eliminar vehículos con citas u órdenes relacionadas.
+- Listar, consultar, crear y editar citas.
+- Confirmar o cancelar citas abiertas.
+- No debe editar citas `COMPLETADA` o `CANCELADA`.
+- La fecha de una cita nueva o reprogramada debe ser futura.
+- Generar una orden de trabajo desde una cita `AGENDADA` o `CONFIRMADA`.
+- Al generar la orden, la cita pasa a `COMPLETADA`.
+- Una cita no debe generar dos órdenes.
+
+### Órdenes de trabajo
+
+- Ver todas las órdenes.
+- Crear órdenes.
+- El número `OT-YYYY-NNN` lo genera el servidor.
+- Editar descripción, diagnóstico, kilometraje, costo estimado, mecánico y estado según las transiciones permitidas.
+- Asignar mecánicos activos.
+- Agregar repuestos.
+- Descontar stock al agregar un repuesto.
+- Quitar repuestos y devolver stock.
+- Concluir una orden mediante el flujo de cierre.
+- Concluirla con costo final.
+- El cierre no debe descontar stock nuevamente.
+- Eliminar órdenes no concluidas y devolver sus repuestos al inventario.
+- No editar, eliminar ni agregar repuestos a órdenes concluidas.
+
+### Proveedores y compras
+
+- Listar, consultar, crear, editar y eliminar proveedores.
+- Consultar el conteo de órdenes por proveedor.
+- No eliminar proveedores con pedidos asociados.
+- Consultar piezas bajo stock.
+- Crear órdenes de compra con piezas bajo o igual al stock mínimo.
+- El número `OC-YYYY-NNN` lo genera el servidor.
+- Editar pedidos pendientes.
+- Recibir pedidos.
+- Al recibir un pedido, incrementar el stock dentro de una transacción.
+- Cancelar pedidos pendientes.
+- No editar ni eliminar pedidos recibidos.
+
+### Facturación
+
+- Listar, consultar, crear, editar y eliminar facturas.
+- Crear facturas únicamente para órdenes concluidas sin factura.
+- El número `FAC-YYYY-NNN` lo genera el servidor.
+- Calcular el subtotal usando costo final, costo estimado o repuestos utilizados.
+- Mantener el precio congelado de cada repuesto consumido.
+- Agregar impuestos y calcular el total.
+- Marcar facturas como pagadas.
+- No editar ni eliminar facturas pagadas.
+
+### Hardware y auditoría
+
+- Consultar logs de búsqueda.
+- Usar el dashboard del gerente para consultar métricas, órdenes activas y estado del hardware.
+- El dashboard del gerente debe observar el estado del hardware sin controlar LEDs.
+
+## Capacidades del MECANICO
+
+### Inventario
+
+- Listar cajas y piezas.
+- Consultar detalles y buscar piezas.
+- Consultar stock bajo.
+- Crear y editar cajas y piezas.
+- Subir imágenes de piezas.
+- No eliminar cajas ni piezas; esa acción es exclusiva de `GERENTE`.
+
+### Vehículos y citas
+
+- Listar, consultar, crear y editar vehículos según las reglas del dominio.
+- Listar, consultar, crear y editar citas.
+- Confirmar citas.
+- Cancelar citas abiertas.
+- Generar órdenes de trabajo desde citas abiertas.
+- No eliminar vehículos ni citas; esa acción es exclusiva de `GERENTE`.
+
+### Órdenes de trabajo
+
+- Ver únicamente las órdenes asignadas a su usuario.
+- Crear una orden y autoasignarse.
+- No asignarse una orden de otro mecánico.
+- Editar y operar únicamente sus órdenes.
+- Cambiar estados permitidos.
+- Registrar diagnóstico y kilometraje.
+- Agregar repuestos y descontar stock.
+- Quitar repuestos y devolver stock.
+- Concluir órdenes asignadas mediante el cierre.
+- No concluir mediante el `PATCH` genérico.
+- No eliminar órdenes; esa acción es exclusiva de `GERENTE`.
+
+### Proveedores y compras
+
+- Según el backend, puede listar, consultar, crear y editar proveedores.
+- Según el backend, puede consultar, crear y editar órdenes de compra.
+- Puede recibir pedidos si el endpoint lo permite para su rol.
+- No eliminar proveedores ni compras.
+- No administrar facturación.
+
+### Hardware, búsqueda y auditoría
+
+- Ver sus órdenes asignadas.
+- Buscar repuestos.
+- Probar LEDs.
+- Apagar LEDs.
+- Ver el estado de la tira WS2812B.
+- Consultar logs de búsqueda.
+- Recibir señales de LEDs activadas por Alexa mediante Socket.io.
+
+## Capacidades del CLIENTE
+
+### Cuenta
+
+- Registrarse públicamente como `CLIENTE`.
+- Iniciar sesión.
+- Consultar su perfil.
+- Ser rechazado si su usuario fue desactivado.
+
+### Vehículos
+
+- Consultar únicamente sus vehículos.
+- No consultar vehículos de otros clientes.
+- No crear, editar ni eliminar vehículos desde el flujo público de cliente.
+
+### Citas
+
+- Solicitar una cita para uno de sus vehículos.
+- Seleccionar únicamente vehículos propios.
+- Usar una fecha futura.
+- Consultar únicamente sus citas.
+- Ver la orden de trabajo vinculada cuando exista.
+- No confirmar ni cancelar directamente una cita desde el API de cliente.
+
+### Órdenes de trabajo
+
+- Consultar únicamente las órdenes de sus vehículos.
+- Ver estado, diagnóstico, progreso, vehículo y repuestos relacionados según lo expuesto por el dashboard.
+- No crear, editar, eliminar, asignar ni concluir órdenes.
+- No agregar ni quitar repuestos.
+
+### Restricciones
+
+- No acceder al inventario global.
+- No acceder a LEDs ni hardware.
+- No acceder a logs.
+- No acceder a usuarios, proveedores, compras ni facturación.
+- No acceder a órdenes de otros clientes manipulando un ID.
+
+## Alexa
+
+- El endpoint público es `POST /api/webhook/alexa`.
+- `LaunchRequest` debe responder bienvenida y mantener la sesión abierta.
+- `AMAZON.HelpIntent` debe explicar ejemplos de uso.
+- `AMAZON.StopIntent` y `AMAZON.CancelIntent` deben cerrar la sesión.
+- `BuscarPiezaIntent` debe aceptar el slot `nombrePieza`.
+- La búsqueda debe devolver pieza, caja, ubicación y stock.
+- La búsqueda debe activar el LED de la caja correspondiente.
+- `ListarCajasIntent` debe listar las cajas.
+- `StockBajoIntent` debe listar piezas con stock bajo.
+- Un intent no registrado debe responder fallback sin romper el webhook.
+- En producción `ALEXA_SKILL_ID` debe ser el Application ID real.
+- El modelo de Alexa debe usar el Invocation Name configurado en Alexa Developer Console.
+
+## Flujo de inventario y stock
+
+1. Crear o editar una pieza.
+2. Consultar su stock actual y mínimo.
+3. Crear una orden de trabajo.
+4. Agregar un repuesto a la orden.
+5. Descontar stock en la misma transacción.
+6. Si no hay stock suficiente, responder `409` y no crear el consumo.
+7. Quitar el repuesto si la orden no está concluida.
+8. Devolver stock al quitarlo.
+9. Crear una compra para piezas bajo mínimo.
+10. Recibir la compra.
+11. Incrementar stock en la misma transacción.
+
+## Flujo de orden de trabajo
+
+1. El gerente o mecánico crea la orden, o el gerente/mecánico la genera desde una cita.
+2. El servidor asigna el número `OT-YYYY-NNN`.
+3. La orden inicia en `EN_DIAGNOSTICO`.
+4. Puede pasar a `EN_PROCESO`.
+5. Puede pasar a `ESPERA_REPUESTOS` y regresar a `EN_PROCESO`.
+6. Se agregan repuestos durante la operación, descontando stock.
+7. Se registra diagnóstico y costo final.
+8. Se cierra por `/service/work-orders/:id/close`.
+9. Pasa a `CONCLUIDO` y registra `completedAt`.
+10. Se puede generar una sola factura para la orden concluida.
+
+## Diferencias que deben comprobarse
+
+Estas diferencias aparecen entre el alcance del backend y la navegación del frontend:
+
+1. El backend permite a `MECANICO` operar proveedores y compras, pero el frontend declara `/proveedores` y `/compras` únicamente para `GERENTE`.
+   - Si es intencional, el frontend está restringiendo la interfaz sin contradecir la seguridad del backend.
+   - Si el mecánico debe usar esos módulos, hay que agregarlo en `frontend/src/routes/routeRoles.ts` y en la navegación.
+2. El cliente no usa el CRUD general de órdenes; consulta sus órdenes por `/api/client/work-orders` y por su dashboard.
+3. El cliente no usa el CRUD general de citas; usa `/api/client/appointments`.
+4. El `MECANICO` puede ver órdenes asignadas por alcance del backend; el frontend debe evitar depender solo de filtros locales para seguridad.
+5. El seed contiene datos demo y debe ejecutarse únicamente fuera de producción.
+
+## Prueba mínima por usuario
+
+### GERENTE
+
+- [ ] Login y consulta de perfil.
+- [ ] Crear un mecánico y un cliente.
+- [ ] Crear caja y pieza.
+- [ ] Crear vehículo y cita.
+- [ ] Confirmar cita y generar OT.
+- [ ] Agregar y quitar repuesto verificando stock.
+- [ ] Cambiar estado y cerrar OT.
+- [ ] Crear y recibir compra verificando stock.
+- [ ] Crear y pagar factura.
+- [ ] Consultar logs.
+- [ ] Confirmar que no puede usar datos inválidos o duplicados.
+
+### MECANICO
+
+- [ ] Login.
+- [ ] Ver solo sus órdenes.
+- [ ] Crear o autoasignar OT.
+- [ ] Intentar consultar una OT ajena y recibir `404`.
+- [ ] Cambiar estado, registrar diagnóstico y kilometraje.
+- [ ] Agregar repuesto con stock suficiente.
+- [ ] Intentar agregar repuesto sin stock y recibir `409`.
+- [ ] Probar y apagar LEDs.
+- [ ] Buscar repuestos.
+- [ ] Consultar logs.
+- [ ] Confirmar que no puede eliminar inventario, vehículos, citas u órdenes.
+
+### CLIENTE
+
+- [ ] Registrar o iniciar sesión.
+- [ ] Ver únicamente sus vehículos.
+- [ ] Solicitar una cita para un vehículo propio.
+- [ ] Intentar solicitar una cita usando vehículo ajeno y recibir error.
+- [ ] Ver únicamente sus citas.
+- [ ] Ver únicamente sus órdenes.
+- [ ] Intentar acceder a inventario, usuarios, compras, facturas, logs y hardware.
+- [ ] Confirmar que no puede leer órdenes de otro cliente cambiando el ID.
+
+## Criterio de aceptación
+
+El sistema cumple el flujo esperado si:
+
+- Cada rol solo ve y ejecuta las capacidades descritas.
+- Las restricciones se cumplen igualmente llamando directamente al API.
+- El stock nunca queda negativo.
+- Los números OT, OC y FAC nunca vienen del cliente.
+- Las órdenes concluidas no se modifican.
+- Los datos de un cliente no son visibles para otro.
+- Alexa diferencia correctamente `LaunchRequest`, búsqueda, cajas, stock bajo y salida.
+- La configuración de producción usa secretos reales, Skill ID real y hardware real cuando corresponde.
+
+================
+File: backend/prisma/migrations/20260930141834_init/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "Role" AS ENUM ('GERENTE', 'MECANICO', 'CLIENTE');
+
+-- CreateTable
+CREATE TABLE "users" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "email" VARCHAR(255) NOT NULL,
+    "password" VARCHAR(255) NOT NULL,
+    "role" "Role" NOT NULL DEFAULT 'CLIENTE',
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "boxes" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(100) NOT NULL,
+    "description" VARCHAR(255),
+    "led_index" INTEGER NOT NULL,
+    "location" VARCHAR(150),
+    "color_hex" VARCHAR(7) NOT NULL DEFAULT '#FF6600',
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "boxes_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "parts" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "code" VARCHAR(50) NOT NULL,
+    "quantity" INTEGER NOT NULL DEFAULT 0,
+    "photo_url" VARCHAR(500),
+    "description" TEXT,
+    "keywords" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "min_stock" INTEGER NOT NULL DEFAULT 1,
+    "unit_price" DECIMAL(10,2),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "box_id" INTEGER NOT NULL,
+
+    CONSTRAINT "parts_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "search_logs" (
+    "id" SERIAL NOT NULL,
+    "query" VARCHAR(255) NOT NULL,
+    "part_id" INTEGER,
+    "found" BOOLEAN NOT NULL DEFAULT false,
+    "alexa_response" TEXT,
+    "user_id" INTEGER,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "search_logs_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "boxes_led_index_key" ON "boxes"("led_index");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "parts_code_key" ON "parts"("code");
+
+-- CreateIndex
+CREATE INDEX "parts_name_idx" ON "parts"("name");
+
+-- CreateIndex
+CREATE INDEX "parts_box_id_idx" ON "parts"("box_id");
+
+-- CreateIndex
+CREATE INDEX "search_logs_query_idx" ON "search_logs"("query");
+
+-- CreateIndex
+CREATE INDEX "search_logs_user_id_idx" ON "search_logs"("user_id");
+
+-- AddForeignKey
+ALTER TABLE "parts" ADD CONSTRAINT "parts_box_id_fkey" FOREIGN KEY ("box_id") REFERENCES "boxes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "search_logs" ADD CONSTRAINT "search_logs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/20261107210444_add_service_and_supply_models/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "WorkOrderStatus" AS ENUM ('PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA');
+
+-- CreateEnum
+CREATE TYPE "AppointmentStatus" AS ENUM ('AGENDADA', 'CONFIRMADA', 'COMPLETADA', 'CANCELADA');
+
+-- CreateEnum
+CREATE TYPE "PurchaseOrderStatus" AS ENUM ('PENDIENTE', 'RECIBIDA', 'CANCELADA');
+
+-- CreateTable
+CREATE TABLE "vehicles" (
+    "id" SERIAL NOT NULL,
+    "plate" VARCHAR(20) NOT NULL,
+    "make" VARCHAR(80) NOT NULL,
+    "model" VARCHAR(80) NOT NULL,
+    "year" INTEGER,
+    "vin" VARCHAR(17),
+    "color" VARCHAR(50),
+    "owner_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "vehicles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "work_orders" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "description" TEXT NOT NULL,
+    "diagnosis" TEXT,
+    "status" "WorkOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "estimated_cost" DECIMAL(10,2),
+    "final_cost" DECIMAL(10,2),
+    "vehicle_id" INTEGER NOT NULL,
+    "mechanic_id" INTEGER,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    "started_at" TIMESTAMP(3),
+    "completed_at" TIMESTAMP(3),
+
+    CONSTRAINT "work_orders_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "appointments" (
+    "id" SERIAL NOT NULL,
+    "scheduled_at" TIMESTAMP(3) NOT NULL,
+    "reason" VARCHAR(255),
+    "status" "AppointmentStatus" NOT NULL DEFAULT 'AGENDADA',
+    "vehicle_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "appointments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "suppliers" (
+    "id" SERIAL NOT NULL,
+    "name" VARCHAR(150) NOT NULL,
+    "tax_id" VARCHAR(50),
+    "contact_name" VARCHAR(150),
+    "email" VARCHAR(255),
+    "phone" VARCHAR(50),
+    "address" VARCHAR(255),
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "suppliers_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "purchase_orders" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "status" "PurchaseOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "ordered_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "received_at" TIMESTAMP(3),
+    "supplier_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "purchase_orders_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "purchase_order_items" (
+    "id" SERIAL NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "unit_price" DECIMAL(10,2),
+    "purchase_order_id" INTEGER NOT NULL,
+    "part_id" INTEGER NOT NULL,
+
+    CONSTRAINT "purchase_order_items_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "vehicles_plate_key" ON "vehicles"("plate");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "vehicles_vin_key" ON "vehicles"("vin");
+
+-- CreateIndex
+CREATE INDEX "vehicles_owner_id_idx" ON "vehicles"("owner_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_orders_number_key" ON "work_orders"("number");
+
+-- CreateIndex
+CREATE INDEX "work_orders_vehicle_id_idx" ON "work_orders"("vehicle_id");
+
+-- CreateIndex
+CREATE INDEX "work_orders_mechanic_id_idx" ON "work_orders"("mechanic_id");
+
+-- CreateIndex
+CREATE INDEX "work_orders_status_idx" ON "work_orders"("status");
+
+-- CreateIndex
+CREATE INDEX "appointments_vehicle_id_scheduled_at_idx" ON "appointments"("vehicle_id", "scheduled_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "suppliers_tax_id_key" ON "suppliers"("tax_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "purchase_orders_number_key" ON "purchase_orders"("number");
+
+-- CreateIndex
+CREATE INDEX "purchase_orders_supplier_id_idx" ON "purchase_orders"("supplier_id");
+
+-- CreateIndex
+CREATE INDEX "purchase_orders_status_idx" ON "purchase_orders"("status");
+
+-- CreateIndex
+CREATE INDEX "purchase_order_items_part_id_idx" ON "purchase_order_items"("part_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "purchase_order_items_purchase_order_id_part_id_key" ON "purchase_order_items"("purchase_order_id", "part_id");
+
+-- AddForeignKey
+ALTER TABLE "vehicles" ADD CONSTRAINT "vehicles_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_mechanic_id_fkey" FOREIGN KEY ("mechanic_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "appointments" ADD CONSTRAINT "appointments_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_orders" ADD CONSTRAINT "purchase_orders_supplier_id_fkey" FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/20261107210844_add_work_order_parts/migration.sql
+================
+-- CreateTable
+CREATE TABLE "work_order_items" (
+    "id" SERIAL NOT NULL,
+    "quantity" INTEGER NOT NULL,
+    "work_order_id" INTEGER NOT NULL,
+    "part_id" INTEGER NOT NULL,
+
+    CONSTRAINT "work_order_items_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE INDEX "work_order_items_part_id_idx" ON "work_order_items"("part_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_order_items_work_order_id_part_id_key" ON "work_order_items"("work_order_id", "part_id");
+
+-- AddForeignKey
+ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/20261107215134_add_invoice_model/migration.sql
+================
+-- CreateEnum
+CREATE TYPE "InvoiceStatus" AS ENUM ('PENDIENTE', 'PAGADA');
+
+-- CreateTable
+CREATE TABLE "invoices" (
+    "id" SERIAL NOT NULL,
+    "number" VARCHAR(30) NOT NULL,
+    "subtotal" DECIMAL(10,2) NOT NULL,
+    "tax" DECIMAL(10,2) NOT NULL DEFAULT 0,
+    "total" DECIMAL(10,2) NOT NULL,
+    "status" "InvoiceStatus" NOT NULL DEFAULT 'PENDIENTE',
+    "issued_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "paid_at" TIMESTAMP(3),
+    "work_order_id" INTEGER NOT NULL,
+    "client_id" INTEGER NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "invoices_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "invoices_number_key" ON "invoices"("number");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "invoices_work_order_id_key" ON "invoices"("work_order_id");
+
+-- CreateIndex
+CREATE INDEX "invoices_client_id_idx" ON "invoices"("client_id");
+
+-- CreateIndex
+CREATE INDEX "invoices_status_idx" ON "invoices"("status");
+
+-- AddForeignKey
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+================
+File: backend/prisma/migrations/20261107230000_ser_work_order_states_and_used_parts/migration.sql
+================
+-- Migración escrita a mano: conserva datos (Prisma generaba DROP/CREATE).
+
+-- 1. WorkOrderStatus: PENDIENTE/EN_DIAGNOSTICO/EN_PROGRESO/CERRADA
+--    → EN_DIAGNOSTICO/EN_PROCESO/ESPERA_REPUESTOS/CONCLUIDO
+ALTER TABLE "work_orders" ALTER COLUMN "status" DROP DEFAULT;
+CREATE TYPE "WorkOrderStatus_new" AS ENUM ('EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS', 'CONCLUIDO');
+ALTER TABLE "work_orders" ALTER COLUMN "status" TYPE "WorkOrderStatus_new" USING (
+  CASE "status"::text
+    WHEN 'PENDIENTE'   THEN 'EN_DIAGNOSTICO'
+    WHEN 'EN_PROGRESO' THEN 'EN_PROCESO'
+    WHEN 'CERRADA'     THEN 'CONCLUIDO'
+    ELSE "status"::text
+  END
+)::"WorkOrderStatus_new";
+DROP TYPE "WorkOrderStatus";
+ALTER TYPE "WorkOrderStatus_new" RENAME TO "WorkOrderStatus";
+ALTER TABLE "work_orders" ALTER COLUMN "status" SET DEFAULT 'EN_DIAGNOSTICO';
+
+-- 2. Kilometraje de ingreso
+ALTER TABLE "work_orders" ADD COLUMN "mileage" INTEGER;
+
+-- 3. WorkOrderItem → UsedPart: renombrar tabla y objetos asociados
+ALTER TABLE "work_order_items" RENAME TO "used_parts";
+ALTER SEQUENCE "work_order_items_id_seq" RENAME TO "used_parts_id_seq";
+ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_pkey" TO "used_parts_pkey";
+ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_work_order_id_fkey" TO "used_parts_work_order_id_fkey";
+ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_part_id_fkey" TO "used_parts_part_id_fkey";
+ALTER INDEX "work_order_items_part_id_idx" RENAME TO "used_parts_part_id_idx";
+ALTER INDEX "work_order_items_work_order_id_part_id_key" RENAME TO "used_parts_work_order_id_part_id_key";
+
+================
+File: backend/prisma/migrations/20261110120000_used_part_price_and_appointment_work_order/migration.sql
+================
+-- Aditiva: precio congelado del repuesto y vínculo cita → OT.
+-- AlterTable
+ALTER TABLE "used_parts" ADD COLUMN     "unit_price" DECIMAL(10,2);
+
+-- AlterTable
+ALTER TABLE "work_orders" ADD COLUMN     "appointment_id" INTEGER;
+
+-- CreateIndex
+CREATE UNIQUE INDEX "work_orders_appointment_id_key" ON "work_orders"("appointment_id");
+
+-- AddForeignKey
+ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_appointment_id_fkey" FOREIGN KEY ("appointment_id") REFERENCES "appointments"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+
+-- Repuestos ya registrados: toman el precio actual de su pieza.
+UPDATE "used_parts" u SET "unit_price" = p."unit_price" FROM "parts" p WHERE p."id" = u."part_id" AND u."unit_price" IS NULL;
+
+================
+File: backend/prisma/migrations/migration_lock.toml
+================
+# Please do not edit this file manually
+# It should be added in your version-control system (i.e. Git)
+provider = "postgresql"
+
+================
+File: backend/prisma/seed.sql
+================
+-- GearTrace: Seed de datos iniciales para desarrollo y pruebas
+-- Ejecutar con: npx prisma db seed
+-- (o después de: npx prisma migrate dev)
+
+-- 5 Cajas físicas, cada una con su ledIndex (0-4)
+INSERT INTO boxes (name, description, led_index, location, color_hex, created_at, updated_at)
+VALUES
+  ('Caja A - Filtros',       'Filtros de aceite, aire y combustible',   0, 'Estante 1, Nivel A', '#FF4500', NOW(), NOW()),
+  ('Caja B - Frenos',        'Pastillas, discos y lainas de freno',     1, 'Estante 1, Nivel B', '#1E90FF', NOW(), NOW()),
+  ('Caja C - Correas',       'Correas de distribución y alternador',    2, 'Estante 2, Nivel A', '#32CD32', NOW(), NOW()),
+  ('Caja D - Eléctrico',     'Fusibles, relés y bombillas',             3, 'Estante 2, Nivel B', '#FFD700', NOW(), NOW()),
+  ('Caja E - Lubricantes',   'Aceites, grasas y líquidos de freno',     4, 'Estante 3, Nivel A', '#9400D3', NOW(), NOW())
+ON CONFLICT DO NOTHING;
+
+-- Piezas de ejemplo por caja
+INSERT INTO parts (name, code, quantity, description, keywords, min_stock, box_id, created_at, updated_at)
+VALUES
+  -- Caja 1 (Filtros)
+  ('Filtro de aceite Toyota',  'FLT-OIL-001', 15, 'Filtro de aceite para motores Toyota 1.6-2.0', ARRAY['filtro aceite', 'filtro toyota', 'filtro'], 3, 1, NOW(), NOW()),
+  ('Filtro de aire universal', 'FLT-AIR-001', 8,  'Filtro de aire rectangular universal',           ARRAY['filtro aire', 'filtro', 'aire'],          2, 1, NOW(), NOW()),
+  -- Caja 2 (Frenos)
+  ('Pastillas de freno Brembo','BRK-PAD-001', 6,  'Juego de pastillas delanteras Brembo',           ARRAY['pastillas', 'frenos', 'pastillas freno'], 2, 2, NOW(), NOW()),
+  ('Disco de freno ventilado', 'BRK-DSC-001', 4,  'Disco ventilado 280mm diámetro',                 ARRAY['disco', 'disco freno', 'rotor'],          1, 2, NOW(), NOW()),
+  -- Caja 3 (Correas)
+  ('Correa de distribución',   'BLT-TIM-001', 5,  'Correa dentada de distribución 120 dientes',     ARRAY['correa', 'distribución', 'timing'],       2, 3, NOW(), NOW()),
+  -- Caja 4 (Eléctrico)
+  ('Fusible 20A',              'ELC-FUS-020', 50, 'Fusible de cuchilla 20 amperios',                ARRAY['fusible', 'fusible 20', 'plano'],         10, 4, NOW(), NOW()),
+  -- Caja 5 (Lubricantes)
+  ('Aceite 5W-30 Sintético',   'LUB-OIL-530', 20, 'Aceite de motor sintético 5W-30 1 litro',       ARRAY['aceite', 'aceite motor', '5w30'],         5, 5, NOW(), NOW())
+ON CONFLICT DO NOTHING;
 
 ================
 File: backend/src/alexa/intents/alexa-intent-handler.ts
@@ -816,6 +1645,701 @@ describe('AlexaService', () => {
     expect(() => new AlexaService({ skillId: null }, [handler, { ...handler }])).toThrow(/más de un handler/);
   });
 });
+
+================
+File: backend/src/alexa/alexa.types.ts
+================
+// ══════════════════════════════════════════════════════════════════════════
+// Tipos TypeScript que mapean el JSON real que Amazon envía al webhook.
+// Basado en la especificación oficial del Alexa Skills Kit (ASK).
+// Referencia: https://developer.amazon.com/docs/custom-skills/request-and-response-json-reference.html
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Estructura raíz de cualquier request que llega desde Alexa */
+export interface AlexaRequestEnvelope {
+  version: string;
+  session?: AlexaSession;
+  context: AlexaContext;
+  request: AlexaRequest;
+}
+
+export interface AlexaSession {
+  new: boolean;
+  sessionId: string;
+  application: { applicationId: string };
+  user: { userId: string };
+}
+
+export interface AlexaContext {
+  System: {
+    application: { applicationId: string };
+    user: { userId: string };
+    device: { deviceId: string };
+  };
+}
+
+/** Un request puede ser de tipo LaunchRequest, IntentRequest o SessionEndedRequest */
+export type AlexaRequest =
+  | AlexaLaunchRequest
+  | AlexaIntentRequest
+  | AlexaSessionEndedRequest;
+
+export interface AlexaLaunchRequest {
+  type: 'LaunchRequest';
+  requestId: string;
+  timestamp: string;
+  locale: string;
+}
+
+export interface AlexaIntentRequest {
+  type: 'IntentRequest';
+  requestId: string;
+  timestamp: string;
+  locale: string;
+  intent: AlexaIntent;
+}
+
+export interface AlexaSessionEndedRequest {
+  type: 'SessionEndedRequest';
+  requestId: string;
+  timestamp: string;
+  reason: 'USER_INITIATED' | 'ERROR' | 'EXCEEDED_MAX_REPROMPTS';
+}
+
+export interface AlexaIntent {
+  name: string;
+  confirmationStatus: 'NONE' | 'CONFIRMED' | 'DENIED';
+  slots?: Record<string, AlexaSlot>;
+}
+
+export interface AlexaSlot {
+  name: string;
+  value?: string;        // El valor que el usuario pronunció
+  confirmationStatus: 'NONE' | 'CONFIRMED' | 'DENIED';
+  resolutions?: {
+    resolutionsPerAuthority: Array<{
+      authority: string;
+      status: { code: 'ER_SUCCESS_MATCH' | 'ER_SUCCESS_NO_MATCH' | string };
+      values?: Array<{ value: { name: string; id: string } }>;
+    }>;
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tipos de RESPUESTA que GearTrace devuelve a Alexa
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface AlexaResponseEnvelope {
+  version: '1.0';
+  response: AlexaResponse;
+}
+
+export interface AlexaResponse {
+  outputSpeech: AlexaOutputSpeech;
+  card?: AlexaCard;
+  shouldEndSession: boolean;
+  reprompt?: { outputSpeech: AlexaOutputSpeech };
+}
+
+export interface AlexaOutputSpeech {
+  type: 'PlainText' | 'SSML';
+  text?: string;   // Para tipo PlainText
+  ssml?: string;   // Para tipo SSML (permite control de pronunciación)
+}
+
+export interface AlexaCard {
+  type: 'Simple' | 'Standard';
+  title: string;
+  text?: string;
+  content?: string;
+}
+
+================
+File: backend/src/appointments/dto/appointment.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { AppointmentStatus } from '@prisma/client';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
+
+export class CreateAppointmentDto {
+  /** Fecha y hora ISO 8601; debe ser futura */
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+}
+
+export class UpdateAppointmentDto extends PartialType(CreateAppointmentDto) {
+  @IsOptional()
+  @IsEnum(AppointmentStatus)
+  status?: AppointmentStatus;
+}
+
+================
+File: backend/src/auth/decorators/auth.decorators.ts
+================
+import { SetMetadata } from '@nestjs/common';
+import { Role } from '@prisma/client';
+
+export const ROLES_KEY = 'roles';
+
+/**
+ * Decorador @Roles() para declarar qué roles pueden acceder a un endpoint.
+ *
+ * Uso:
+ *   @Roles(Role.GERENTE, Role.MECANICO)
+ *   @UseGuards(JwtAuthGuard, RolesGuard)
+ *   @Get('endpoint-protegido')
+ *   getEndpoint() { ... }
+ */
+export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
+
+/**
+ * Decorador @CurrentUser() para extraer el usuario autenticado del request.
+ *
+ * Uso:
+ *   getProfile(@CurrentUser() user: AuthenticatedUser) { ... }
+ */
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.user;
+  },
+);
+
+================
+File: backend/src/auth/dto/auth.dto.ts
+================
+import { IsEmail, IsInt, IsString, MinLength, MaxLength, IsEnum, IsOptional, Min } from 'class-validator';
+import { Role } from '@prisma/client';
+
+export class LoginDto {
+  @IsEmail({}, { message: 'El correo electrónico no es válido' })
+  email: string;
+
+  @IsString()
+  @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })
+  password: string;
+}
+
+export class RegisterDto {
+  @IsString()
+  @MaxLength(150)
+  name: string;
+
+  @IsEmail({}, { message: 'El correo electrónico no es válido' })
+  email: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72) // bcrypt tiene límite de 72 bytes
+  password: string;
+
+  @IsOptional()
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  role?: Role;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
+}
+
+================
+File: backend/src/auth/dto/update-user.dto.ts
+================
+import { IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { Role } from '@prisma/client';
+
+export class UpdateUserDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  name?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(72)
+  password?: string;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
+}
+
+================
+File: backend/src/auth/guards/jwt-auth.guard.ts
+================
+import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+/**
+ * JwtAuthGuard
+ *
+ * Protege endpoints verificando el JWT en el header Authorization.
+ * Si el token es inválido o no existe → 401 Unauthorized.
+ *
+ * Uso:
+ *   @UseGuards(JwtAuthGuard)
+ *   @Get('perfil')
+ *   getProfile() { ... }
+ */
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  override canActivate(context: ExecutionContext) {
+    return super.canActivate(context);
+  }
+
+  override handleRequest<TUser>(err: Error, user: TUser): TUser {
+    if (err || !user) {
+      throw new UnauthorizedException(
+        'Token inválido o expirado. Por favor, inicia sesión nuevamente.',
+      );
+    }
+    return user;
+  }
+}
+
+================
+File: backend/src/auth/guards/roles.guard.ts
+================
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Role } from '@prisma/client';
+import { ROLES_KEY } from '../decorators/auth.decorators';
+import { AuthenticatedUser } from '../auth.types';
+
+/**
+ * RolesGuard
+ *
+ * Verifica que el usuario autenticado tenga uno de los roles
+ * declarados con @Roles() en el endpoint.
+ *
+ * IMPORTANTE: Siempre debe usarse DESPUÉS de JwtAuthGuard:
+ *   @UseGuards(JwtAuthGuard, RolesGuard)
+ *
+ * Cada endpoint declara explícitamente sus roles permitidos. El gerente se
+ * incluye en las rutas administrativas donde corresponde.
+ */
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    // Leer los roles requeridos del decorador @Roles()
+    const requiredRoles = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    // Si el endpoint no tiene @Roles(), está abierto a todos los autenticados
+    if (!requiredRoles || requiredRoles.length === 0) {
+      return true;
+    }
+
+    const request = context.switchToHttp().getRequest<{ user: AuthenticatedUser }>();
+    const user = request.user;
+
+    if (!user) {
+      throw new ForbiddenException('Usuario no autenticado');
+    }
+
+    // Verificar si el rol del usuario está en la lista de roles permitidos
+    const hasRole = requiredRoles.includes(user.role);
+
+    if (!hasRole) {
+      throw new ForbiddenException(
+        `Acceso denegado. Se requiere uno de los roles: ${requiredRoles.join(', ')}. Tu rol actual es: ${user.role}`,
+      );
+    }
+
+    return true;
+  }
+}
+
+================
+File: backend/src/auth/auth.types.ts
+================
+import { Role } from '@prisma/client';
+
+/**
+ * Payload que se firma dentro del JWT.
+ * Debe ser mínimo para no exponer datos sensibles.
+ */
+export interface JwtPayload {
+  sub: number;    // User ID (estándar JWT)
+  email: string;
+  role: Role;
+  name: string;
+  supplierId?: number;
+}
+
+/**
+ * Datos del usuario autenticado disponibles en los guards y decoradores.
+ * Se adjunta en req.user por la JwtStrategy.
+ */
+export interface AuthenticatedUser {
+  id: number;
+  email: string;
+  role: Role;
+  name: string;
+  supplierId?: number;
+}
+
+================
+File: backend/src/client/dto/create-appointment.dto.ts
+================
+import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+
+export class CreateAppointmentDto {
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+
+  @IsInt()
+  @Min(1)
+  vehicleId: number;
+}
+
+================
+File: backend/src/client/client.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ClientController } from './client.controller';
+import { ClientService } from './client.service';
+
+@Module({
+  controllers: [ClientController],
+  providers: [ClientService],
+})
+export class ClientModule {}
+
+================
+File: backend/src/common/cors.ts
+================
+/**
+ * Política de orígenes única para HTTP (main.ts) y Socket.io (led.gateway.ts).
+ *
+ * Permitidos:
+ *  1. Orígenes exactos de CORS_ORIGIN (separados por coma), p. ej. el dominio
+ *     de producción en Vercel: https://geartrace.vercel.app
+ *  2. Túneles ngrok por SUFIJO de dominio y solo HTTPS (*.ngrok-free.app, ...).
+ *  3. localhost y red privada (desarrollo / Raspberry Pi en LAN).
+ *  4. Previews de Vercel (*.vercel.app) SOLO si CORS_ALLOW_VERCEL_PREVIEWS=true:
+ *     cualquiera puede publicar en vercel.app, así que no se aceptan por defecto.
+ *
+ * Las variables se leen en cada llamada (no al importar), porque los
+ * decoradores se evalúan antes de que ConfigModule cargue el .env.
+ */
+
+const NGROK_SUFFIXES = ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'];
+
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]', 'geartrace.local']);
+
+const PRIVATE_NETWORK = [
+  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+  /^192\.168\.\d{1,3}\.\d{1,3}$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
+];
+
+/** Headers que el frontend envía (incluye el bypass de la advertencia de ngrok). */
+export const CORS_ALLOWED_HEADERS = [
+  'Content-Type',
+  'Authorization',
+  'Accept',
+  'ngrok-skip-browser-warning',
+];
+
+const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '').toLowerCase();
+
+function configuredOrigins(): string[] {
+  return (process.env.CORS_ORIGIN ?? '').split(',').map(normalizeOrigin).filter(Boolean);
+}
+
+/**
+ * `undefined` = petición sin header Origin (Alexa, curl, servidor a servidor):
+ * se permite; CORS solo protege a navegadores y la API exige JWT igualmente.
+ */
+export function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true;
+
+  const normalized = normalizeOrigin(origin);
+  if (configuredOrigins().includes(normalized)) return true;
+
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    return false;
+  }
+  const { protocol, hostname } = url;
+  if (protocol !== 'https:' && protocol !== 'http:') return false;
+
+  if (protocol === 'https:' && NGROK_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
+    return true;
+  }
+  if (LOCAL_HOSTNAMES.has(hostname) || PRIVATE_NETWORK.some((range) => range.test(hostname))) {
+    return true;
+  }
+  return (
+    process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
+    protocol === 'https:' &&
+    hostname.endsWith('.vercel.app')
+  );
+}
+
+/** Adaptador para la opción `origin` de `cors` / Socket.io. */
+export function corsOriginCallback(
+  origin: string | undefined,
+  callback: (error: Error | null, allow?: boolean) => void,
+): void {
+  // Rechazo sin Error: se omiten las cabeceras CORS en lugar de responder 500.
+  callback(null, isAllowedOrigin(origin));
+}
+
+================
+File: backend/src/common/document-number.ts
+================
+import { Prisma } from '@prisma/client';
+
+/**
+ * Códigos correlativos por año, formato PREFIJO-YYYY-NNN (NNN crece a 4+ dígitos):
+ *  - OT  → work_orders     (RF-SER-05)
+ *  - OC  → purchase_orders
+ *  - FAC → invoices
+ * La tabla sale de este mapa fijo (nunca de la entrada del usuario).
+ */
+const DOCUMENTS = {
+  OT: { table: 'work_orders' },
+  OC: { table: 'purchase_orders' },
+  FAC: { table: 'invoices' },
+} as const;
+
+export type DocumentPrefix = keyof typeof DOCUMENTS;
+
+export function formatDocumentNumber(prefix: DocumentPrefix, year: number, sequence: number): string {
+  return `${prefix}-${year}-${String(sequence).padStart(3, '0')}`;
+}
+
+/**
+ * Siguiente código del año. DEBE ejecutarse dentro de la misma transacción que
+ * crea el registro: el advisory lock (uno por tipo de documento) serializa
+ * creaciones concurrentes y se libera solo al confirmar o revertir.
+ */
+export async function nextDocumentNumber(
+  tx: Prisma.TransactionClient,
+  prefix: DocumentPrefix,
+  date: Date = new Date(),
+): Promise<string> {
+  const year = date.getFullYear();
+  const table = Prisma.raw(`"${DOCUMENTS[prefix].table}"`);
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`geartrace:document_number:${prefix}`}))`;
+
+  // MAX numérico (no orden de texto): PRE-2026-1000 debe ganar a PRE-2026-999.
+  const pattern = `^${prefix}-${year}-[0-9]+$`;
+  const [row] = await tx.$queryRaw<Array<{ last: number | null }>>`
+    SELECT MAX(CAST(split_part(number, '-', 3) AS INTEGER)) AS last
+    FROM ${table}
+    WHERE number ~ ${pattern}
+  `;
+
+  return formatDocumentNumber(prefix, year, (row?.last ?? 0) + 1);
+}
+
+================
+File: backend/src/common/prisma-errors.ts
+================
+import { Prisma } from '@prisma/client';
+
+/** P2002: violación de restricción única. P2003: violación de llave foránea. */
+export type PrismaErrorCode = 'P2002' | 'P2003';
+
+export function isPrismaError(error: unknown, code: PrismaErrorCode): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
+}
+
+================
+File: backend/src/inventory/dto/create-box.dto.ts
+================
+import {
+  IsString,
+  IsInt,
+  IsOptional,
+  Min,
+  Max,
+  MaxLength,
+  Matches,
+} from 'class-validator';
+
+export class CreateBoxDto {
+  @IsString()
+  @MaxLength(100)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  description?: string;
+
+  @IsInt()
+  @Min(0)
+  @Max(4)
+  ledIndex: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  location?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^#[0-9A-Fa-f]{6}$/, {
+    message: 'colorHex debe ser un color hexadecimal válido (ej: #FF6600)',
+  })
+  colorHex?: string;
+}
+
+================
+File: backend/src/inventory/dto/update-box.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { CreateBoxDto } from './create-box.dto';
+
+export class UpdateBoxDto extends PartialType(CreateBoxDto) {}
+
+================
+File: backend/src/inventory/dto/update-part.dto.ts
+================
+import { PartialType } from '@nestjs/mapped-types';
+import { CreatePartDto } from './create-part.dto';
+
+export class UpdatePartDto extends PartialType(CreatePartDto) {}
+
+================
+File: backend/src/inventory/inventory.module.ts
+================
+import { Module } from '@nestjs/common';
+import { InventoryService } from './inventory.service';
+import { InventoryController } from './inventory.controller';
+
+@Module({
+  controllers: [InventoryController],
+  providers: [InventoryService],
+  // Exportamos el servicio para que AlexaModule pueda inyectarlo
+  exports: [InventoryService],
+})
+export class InventoryModule {}
+
+================
+File: backend/src/invoices/invoices.controller.ts
+================
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
+import { InvoicesService } from './invoices.service';
+
+/** /api/invoices — Facturación (solo GERENTE). */
+@Controller('invoices')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.CONTADOR)
+export class InvoicesController {
+  constructor(private readonly invoicesService: InvoicesService) {}
+
+  @Get()
+  findAll() {
+    return this.invoicesService.findAll();
+  }
+
+  @Get(':id(\\d+)')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.invoicesService.findOne(id);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  create(@Body() dto: CreateInvoiceDto) {
+    return this.invoicesService.create(dto);
+  }
+
+  @Patch(':id(\\d+)')
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateInvoiceDto) {
+    return this.invoicesService.update(id, dto);
+  }
+
+  @Delete(':id(\\d+)')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.invoicesService.remove(id);
+  }
+}
+
+================
+File: backend/src/invoices/invoices.module.ts
+================
+import { Module } from '@nestjs/common';
+import { InvoicesController } from './invoices.controller';
+import { InvoicesService } from './invoices.service';
+
+@Module({
+  controllers: [InvoicesController],
+  providers: [InvoicesService],
+})
+export class InvoicesModule {}
 
 ================
 File: backend/src/led/drivers/led-driver.provider.ts
@@ -1531,1277 +3055,6 @@ export const LOCATION_INDICATOR = Symbol('LOCATION_INDICATOR');
 export class LedRequestError extends Error {}
 
 ================
-File: backend/prisma/migrations/20260930141834_init/migration.sql
-================
--- CreateEnum
-CREATE TYPE "Role" AS ENUM ('GERENTE', 'MECANICO', 'CLIENTE');
-
--- CreateTable
-CREATE TABLE "users" (
-    "id" SERIAL NOT NULL,
-    "name" VARCHAR(150) NOT NULL,
-    "email" VARCHAR(255) NOT NULL,
-    "password" VARCHAR(255) NOT NULL,
-    "role" "Role" NOT NULL DEFAULT 'CLIENTE',
-    "is_active" BOOLEAN NOT NULL DEFAULT true,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "boxes" (
-    "id" SERIAL NOT NULL,
-    "name" VARCHAR(100) NOT NULL,
-    "description" VARCHAR(255),
-    "led_index" INTEGER NOT NULL,
-    "location" VARCHAR(150),
-    "color_hex" VARCHAR(7) NOT NULL DEFAULT '#FF6600',
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "boxes_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "parts" (
-    "id" SERIAL NOT NULL,
-    "name" VARCHAR(150) NOT NULL,
-    "code" VARCHAR(50) NOT NULL,
-    "quantity" INTEGER NOT NULL DEFAULT 0,
-    "photo_url" VARCHAR(500),
-    "description" TEXT,
-    "keywords" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "min_stock" INTEGER NOT NULL DEFAULT 1,
-    "unit_price" DECIMAL(10,2),
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-    "box_id" INTEGER NOT NULL,
-
-    CONSTRAINT "parts_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "search_logs" (
-    "id" SERIAL NOT NULL,
-    "query" VARCHAR(255) NOT NULL,
-    "part_id" INTEGER,
-    "found" BOOLEAN NOT NULL DEFAULT false,
-    "alexa_response" TEXT,
-    "user_id" INTEGER,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "search_logs_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
-
--- CreateIndex
-CREATE UNIQUE INDEX "boxes_led_index_key" ON "boxes"("led_index");
-
--- CreateIndex
-CREATE UNIQUE INDEX "parts_code_key" ON "parts"("code");
-
--- CreateIndex
-CREATE INDEX "parts_name_idx" ON "parts"("name");
-
--- CreateIndex
-CREATE INDEX "parts_box_id_idx" ON "parts"("box_id");
-
--- CreateIndex
-CREATE INDEX "search_logs_query_idx" ON "search_logs"("query");
-
--- CreateIndex
-CREATE INDEX "search_logs_user_id_idx" ON "search_logs"("user_id");
-
--- AddForeignKey
-ALTER TABLE "parts" ADD CONSTRAINT "parts_box_id_fkey" FOREIGN KEY ("box_id") REFERENCES "boxes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "search_logs" ADD CONSTRAINT "search_logs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
-================
-File: backend/prisma/migrations/20261107210444_add_service_and_supply_models/migration.sql
-================
--- CreateEnum
-CREATE TYPE "WorkOrderStatus" AS ENUM ('PENDIENTE', 'EN_DIAGNOSTICO', 'EN_PROGRESO', 'CERRADA');
-
--- CreateEnum
-CREATE TYPE "AppointmentStatus" AS ENUM ('AGENDADA', 'CONFIRMADA', 'COMPLETADA', 'CANCELADA');
-
--- CreateEnum
-CREATE TYPE "PurchaseOrderStatus" AS ENUM ('PENDIENTE', 'RECIBIDA', 'CANCELADA');
-
--- CreateTable
-CREATE TABLE "vehicles" (
-    "id" SERIAL NOT NULL,
-    "plate" VARCHAR(20) NOT NULL,
-    "make" VARCHAR(80) NOT NULL,
-    "model" VARCHAR(80) NOT NULL,
-    "year" INTEGER,
-    "vin" VARCHAR(17),
-    "color" VARCHAR(50),
-    "owner_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "vehicles_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "work_orders" (
-    "id" SERIAL NOT NULL,
-    "number" VARCHAR(30) NOT NULL,
-    "description" TEXT NOT NULL,
-    "diagnosis" TEXT,
-    "status" "WorkOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
-    "estimated_cost" DECIMAL(10,2),
-    "final_cost" DECIMAL(10,2),
-    "vehicle_id" INTEGER NOT NULL,
-    "mechanic_id" INTEGER,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-    "started_at" TIMESTAMP(3),
-    "completed_at" TIMESTAMP(3),
-
-    CONSTRAINT "work_orders_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "appointments" (
-    "id" SERIAL NOT NULL,
-    "scheduled_at" TIMESTAMP(3) NOT NULL,
-    "reason" VARCHAR(255),
-    "status" "AppointmentStatus" NOT NULL DEFAULT 'AGENDADA',
-    "vehicle_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "appointments_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "suppliers" (
-    "id" SERIAL NOT NULL,
-    "name" VARCHAR(150) NOT NULL,
-    "tax_id" VARCHAR(50),
-    "contact_name" VARCHAR(150),
-    "email" VARCHAR(255),
-    "phone" VARCHAR(50),
-    "address" VARCHAR(255),
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "suppliers_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "purchase_orders" (
-    "id" SERIAL NOT NULL,
-    "number" VARCHAR(30) NOT NULL,
-    "status" "PurchaseOrderStatus" NOT NULL DEFAULT 'PENDIENTE',
-    "ordered_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "received_at" TIMESTAMP(3),
-    "supplier_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "purchase_orders_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "purchase_order_items" (
-    "id" SERIAL NOT NULL,
-    "quantity" INTEGER NOT NULL,
-    "unit_price" DECIMAL(10,2),
-    "purchase_order_id" INTEGER NOT NULL,
-    "part_id" INTEGER NOT NULL,
-
-    CONSTRAINT "purchase_order_items_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "vehicles_plate_key" ON "vehicles"("plate");
-
--- CreateIndex
-CREATE UNIQUE INDEX "vehicles_vin_key" ON "vehicles"("vin");
-
--- CreateIndex
-CREATE INDEX "vehicles_owner_id_idx" ON "vehicles"("owner_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "work_orders_number_key" ON "work_orders"("number");
-
--- CreateIndex
-CREATE INDEX "work_orders_vehicle_id_idx" ON "work_orders"("vehicle_id");
-
--- CreateIndex
-CREATE INDEX "work_orders_mechanic_id_idx" ON "work_orders"("mechanic_id");
-
--- CreateIndex
-CREATE INDEX "work_orders_status_idx" ON "work_orders"("status");
-
--- CreateIndex
-CREATE INDEX "appointments_vehicle_id_scheduled_at_idx" ON "appointments"("vehicle_id", "scheduled_at");
-
--- CreateIndex
-CREATE UNIQUE INDEX "suppliers_tax_id_key" ON "suppliers"("tax_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "purchase_orders_number_key" ON "purchase_orders"("number");
-
--- CreateIndex
-CREATE INDEX "purchase_orders_supplier_id_idx" ON "purchase_orders"("supplier_id");
-
--- CreateIndex
-CREATE INDEX "purchase_orders_status_idx" ON "purchase_orders"("status");
-
--- CreateIndex
-CREATE INDEX "purchase_order_items_part_id_idx" ON "purchase_order_items"("part_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "purchase_order_items_purchase_order_id_part_id_key" ON "purchase_order_items"("purchase_order_id", "part_id");
-
--- AddForeignKey
-ALTER TABLE "vehicles" ADD CONSTRAINT "vehicles_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_mechanic_id_fkey" FOREIGN KEY ("mechanic_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "appointments" ADD CONSTRAINT "appointments_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "vehicles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "purchase_orders" ADD CONSTRAINT "purchase_orders_supplier_id_fkey" FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_purchase_order_id_fkey" FOREIGN KEY ("purchase_order_id") REFERENCES "purchase_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "purchase_order_items" ADD CONSTRAINT "purchase_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-================
-File: backend/prisma/migrations/20261107210844_add_work_order_parts/migration.sql
-================
--- CreateTable
-CREATE TABLE "work_order_items" (
-    "id" SERIAL NOT NULL,
-    "quantity" INTEGER NOT NULL,
-    "work_order_id" INTEGER NOT NULL,
-    "part_id" INTEGER NOT NULL,
-
-    CONSTRAINT "work_order_items_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE INDEX "work_order_items_part_id_idx" ON "work_order_items"("part_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "work_order_items_work_order_id_part_id_key" ON "work_order_items"("work_order_id", "part_id");
-
--- AddForeignKey
-ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "work_order_items" ADD CONSTRAINT "work_order_items_part_id_fkey" FOREIGN KEY ("part_id") REFERENCES "parts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-================
-File: backend/prisma/migrations/20261107215134_add_invoice_model/migration.sql
-================
--- CreateEnum
-CREATE TYPE "InvoiceStatus" AS ENUM ('PENDIENTE', 'PAGADA');
-
--- CreateTable
-CREATE TABLE "invoices" (
-    "id" SERIAL NOT NULL,
-    "number" VARCHAR(30) NOT NULL,
-    "subtotal" DECIMAL(10,2) NOT NULL,
-    "tax" DECIMAL(10,2) NOT NULL DEFAULT 0,
-    "total" DECIMAL(10,2) NOT NULL,
-    "status" "InvoiceStatus" NOT NULL DEFAULT 'PENDIENTE',
-    "issued_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "paid_at" TIMESTAMP(3),
-    "work_order_id" INTEGER NOT NULL,
-    "client_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "invoices_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "invoices_number_key" ON "invoices"("number");
-
--- CreateIndex
-CREATE UNIQUE INDEX "invoices_work_order_id_key" ON "invoices"("work_order_id");
-
--- CreateIndex
-CREATE INDEX "invoices_client_id_idx" ON "invoices"("client_id");
-
--- CreateIndex
-CREATE INDEX "invoices_status_idx" ON "invoices"("status");
-
--- AddForeignKey
-ALTER TABLE "invoices" ADD CONSTRAINT "invoices_work_order_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "invoices" ADD CONSTRAINT "invoices_client_id_fkey" FOREIGN KEY ("client_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-================
-File: backend/prisma/migrations/20261107230000_ser_work_order_states_and_used_parts/migration.sql
-================
--- Migración escrita a mano: conserva datos (Prisma generaba DROP/CREATE).
-
--- 1. WorkOrderStatus: PENDIENTE/EN_DIAGNOSTICO/EN_PROGRESO/CERRADA
---    → EN_DIAGNOSTICO/EN_PROCESO/ESPERA_REPUESTOS/CONCLUIDO
-ALTER TABLE "work_orders" ALTER COLUMN "status" DROP DEFAULT;
-CREATE TYPE "WorkOrderStatus_new" AS ENUM ('EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS', 'CONCLUIDO');
-ALTER TABLE "work_orders" ALTER COLUMN "status" TYPE "WorkOrderStatus_new" USING (
-  CASE "status"::text
-    WHEN 'PENDIENTE'   THEN 'EN_DIAGNOSTICO'
-    WHEN 'EN_PROGRESO' THEN 'EN_PROCESO'
-    WHEN 'CERRADA'     THEN 'CONCLUIDO'
-    ELSE "status"::text
-  END
-)::"WorkOrderStatus_new";
-DROP TYPE "WorkOrderStatus";
-ALTER TYPE "WorkOrderStatus_new" RENAME TO "WorkOrderStatus";
-ALTER TABLE "work_orders" ALTER COLUMN "status" SET DEFAULT 'EN_DIAGNOSTICO';
-
--- 2. Kilometraje de ingreso
-ALTER TABLE "work_orders" ADD COLUMN "mileage" INTEGER;
-
--- 3. WorkOrderItem → UsedPart: renombrar tabla y objetos asociados
-ALTER TABLE "work_order_items" RENAME TO "used_parts";
-ALTER SEQUENCE "work_order_items_id_seq" RENAME TO "used_parts_id_seq";
-ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_pkey" TO "used_parts_pkey";
-ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_work_order_id_fkey" TO "used_parts_work_order_id_fkey";
-ALTER TABLE "used_parts" RENAME CONSTRAINT "work_order_items_part_id_fkey" TO "used_parts_part_id_fkey";
-ALTER INDEX "work_order_items_part_id_idx" RENAME TO "used_parts_part_id_idx";
-ALTER INDEX "work_order_items_work_order_id_part_id_key" RENAME TO "used_parts_work_order_id_part_id_key";
-
-================
-File: backend/prisma/migrations/20261110120000_used_part_price_and_appointment_work_order/migration.sql
-================
--- Aditiva: precio congelado del repuesto y vínculo cita → OT.
--- AlterTable
-ALTER TABLE "used_parts" ADD COLUMN     "unit_price" DECIMAL(10,2);
-
--- AlterTable
-ALTER TABLE "work_orders" ADD COLUMN     "appointment_id" INTEGER;
-
--- CreateIndex
-CREATE UNIQUE INDEX "work_orders_appointment_id_key" ON "work_orders"("appointment_id");
-
--- AddForeignKey
-ALTER TABLE "work_orders" ADD CONSTRAINT "work_orders_appointment_id_fkey" FOREIGN KEY ("appointment_id") REFERENCES "appointments"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
-
--- Repuestos ya registrados: toman el precio actual de su pieza.
-UPDATE "used_parts" u SET "unit_price" = p."unit_price" FROM "parts" p WHERE p."id" = u."part_id" AND u."unit_price" IS NULL;
-
-================
-File: backend/prisma/migrations/migration_lock.toml
-================
-# Please do not edit this file manually
-# It should be added in your version-control system (i.e. Git)
-provider = "postgresql"
-
-================
-File: backend/prisma/seed.sql
-================
--- GearTrace: Seed de datos iniciales para desarrollo y pruebas
--- Ejecutar con: npx prisma db seed
--- (o después de: npx prisma migrate dev)
-
--- 5 Cajas físicas, cada una con su ledIndex (0-4)
-INSERT INTO boxes (name, description, led_index, location, color_hex, created_at, updated_at)
-VALUES
-  ('Caja A - Filtros',       'Filtros de aceite, aire y combustible',   0, 'Estante 1, Nivel A', '#FF4500', NOW(), NOW()),
-  ('Caja B - Frenos',        'Pastillas, discos y lainas de freno',     1, 'Estante 1, Nivel B', '#1E90FF', NOW(), NOW()),
-  ('Caja C - Correas',       'Correas de distribución y alternador',    2, 'Estante 2, Nivel A', '#32CD32', NOW(), NOW()),
-  ('Caja D - Eléctrico',     'Fusibles, relés y bombillas',             3, 'Estante 2, Nivel B', '#FFD700', NOW(), NOW()),
-  ('Caja E - Lubricantes',   'Aceites, grasas y líquidos de freno',     4, 'Estante 3, Nivel A', '#9400D3', NOW(), NOW())
-ON CONFLICT DO NOTHING;
-
--- Piezas de ejemplo por caja
-INSERT INTO parts (name, code, quantity, description, keywords, min_stock, box_id, created_at, updated_at)
-VALUES
-  -- Caja 1 (Filtros)
-  ('Filtro de aceite Toyota',  'FLT-OIL-001', 15, 'Filtro de aceite para motores Toyota 1.6-2.0', ARRAY['filtro aceite', 'filtro toyota', 'filtro'], 3, 1, NOW(), NOW()),
-  ('Filtro de aire universal', 'FLT-AIR-001', 8,  'Filtro de aire rectangular universal',           ARRAY['filtro aire', 'filtro', 'aire'],          2, 1, NOW(), NOW()),
-  -- Caja 2 (Frenos)
-  ('Pastillas de freno Brembo','BRK-PAD-001', 6,  'Juego de pastillas delanteras Brembo',           ARRAY['pastillas', 'frenos', 'pastillas freno'], 2, 2, NOW(), NOW()),
-  ('Disco de freno ventilado', 'BRK-DSC-001', 4,  'Disco ventilado 280mm diámetro',                 ARRAY['disco', 'disco freno', 'rotor'],          1, 2, NOW(), NOW()),
-  -- Caja 3 (Correas)
-  ('Correa de distribución',   'BLT-TIM-001', 5,  'Correa dentada de distribución 120 dientes',     ARRAY['correa', 'distribución', 'timing'],       2, 3, NOW(), NOW()),
-  -- Caja 4 (Eléctrico)
-  ('Fusible 20A',              'ELC-FUS-020', 50, 'Fusible de cuchilla 20 amperios',                ARRAY['fusible', 'fusible 20', 'plano'],         10, 4, NOW(), NOW()),
-  -- Caja 5 (Lubricantes)
-  ('Aceite 5W-30 Sintético',   'LUB-OIL-530', 20, 'Aceite de motor sintético 5W-30 1 litro',       ARRAY['aceite', 'aceite motor', '5w30'],         5, 5, NOW(), NOW())
-ON CONFLICT DO NOTHING;
-
-================
-File: backend/src/alexa/alexa.module.ts
-================
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { InventoryModule } from '../inventory/inventory.module';
-import { LedModule } from '../led/led.module';
-import { alexaConfig } from './alexa.config';
-import { AlexaController } from './alexa.controller';
-import { AlexaService } from './alexa.service';
-import { ALEXA_INTENT_HANDLERS, AlexaIntentHandler } from './intents/alexa-intent-handler';
-import { HelpIntentHandler, StopIntentHandler } from './intents/built-in.handlers';
-import { FindPartIntentHandler } from './intents/find-part.handler';
-import { ListBoxesIntentHandler } from './intents/list-boxes.handler';
-import { LowStockIntentHandler } from './intents/low-stock.handler';
-
-/** Registro de intents: agregar aquí cada handler nuevo. */
-const INTENT_HANDLERS = [
-  FindPartIntentHandler,
-  ListBoxesIntentHandler,
-  LowStockIntentHandler,
-  HelpIntentHandler,
-  StopIntentHandler,
-];
-
-@Module({
-  imports: [
-    ConfigModule.forFeature(alexaConfig),
-    InventoryModule, // datos de piezas y cajas
-    LedModule, // puerto LOCATION_INDICATOR (dependencia en un solo sentido)
-  ],
-  controllers: [AlexaController],
-  providers: [
-    ...INTENT_HANDLERS,
-    {
-      provide: ALEXA_INTENT_HANDLERS,
-      inject: INTENT_HANDLERS,
-      useFactory: (...handlers: AlexaIntentHandler[]) => handlers,
-    },
-    AlexaService,
-  ],
-  exports: [AlexaService],
-})
-export class AlexaModule {}
-
-================
-File: backend/src/alexa/alexa.types.ts
-================
-// ══════════════════════════════════════════════════════════════════════════
-// Tipos TypeScript que mapean el JSON real que Amazon envía al webhook.
-// Basado en la especificación oficial del Alexa Skills Kit (ASK).
-// Referencia: https://developer.amazon.com/docs/custom-skills/request-and-response-json-reference.html
-// ══════════════════════════════════════════════════════════════════════════
-
-/** Estructura raíz de cualquier request que llega desde Alexa */
-export interface AlexaRequestEnvelope {
-  version: string;
-  session?: AlexaSession;
-  context: AlexaContext;
-  request: AlexaRequest;
-}
-
-export interface AlexaSession {
-  new: boolean;
-  sessionId: string;
-  application: { applicationId: string };
-  user: { userId: string };
-}
-
-export interface AlexaContext {
-  System: {
-    application: { applicationId: string };
-    user: { userId: string };
-    device: { deviceId: string };
-  };
-}
-
-/** Un request puede ser de tipo LaunchRequest, IntentRequest o SessionEndedRequest */
-export type AlexaRequest =
-  | AlexaLaunchRequest
-  | AlexaIntentRequest
-  | AlexaSessionEndedRequest;
-
-export interface AlexaLaunchRequest {
-  type: 'LaunchRequest';
-  requestId: string;
-  timestamp: string;
-  locale: string;
-}
-
-export interface AlexaIntentRequest {
-  type: 'IntentRequest';
-  requestId: string;
-  timestamp: string;
-  locale: string;
-  intent: AlexaIntent;
-}
-
-export interface AlexaSessionEndedRequest {
-  type: 'SessionEndedRequest';
-  requestId: string;
-  timestamp: string;
-  reason: 'USER_INITIATED' | 'ERROR' | 'EXCEEDED_MAX_REPROMPTS';
-}
-
-export interface AlexaIntent {
-  name: string;
-  confirmationStatus: 'NONE' | 'CONFIRMED' | 'DENIED';
-  slots?: Record<string, AlexaSlot>;
-}
-
-export interface AlexaSlot {
-  name: string;
-  value?: string;        // El valor que el usuario pronunció
-  confirmationStatus: 'NONE' | 'CONFIRMED' | 'DENIED';
-  resolutions?: {
-    resolutionsPerAuthority: Array<{
-      authority: string;
-      status: { code: 'ER_SUCCESS_MATCH' | 'ER_SUCCESS_NO_MATCH' | string };
-      values?: Array<{ value: { name: string; id: string } }>;
-    }>;
-  };
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// Tipos de RESPUESTA que GearTrace devuelve a Alexa
-// ──────────────────────────────────────────────────────────────────────────
-
-export interface AlexaResponseEnvelope {
-  version: '1.0';
-  response: AlexaResponse;
-}
-
-export interface AlexaResponse {
-  outputSpeech: AlexaOutputSpeech;
-  card?: AlexaCard;
-  shouldEndSession: boolean;
-  reprompt?: { outputSpeech: AlexaOutputSpeech };
-}
-
-export interface AlexaOutputSpeech {
-  type: 'PlainText' | 'SSML';
-  text?: string;   // Para tipo PlainText
-  ssml?: string;   // Para tipo SSML (permite control de pronunciación)
-}
-
-export interface AlexaCard {
-  type: 'Simple' | 'Standard';
-  title: string;
-  text?: string;
-  content?: string;
-}
-
-================
-File: backend/src/appointments/dto/appointment.dto.ts
-================
-import { PartialType } from '@nestjs/mapped-types';
-import { AppointmentStatus } from '@prisma/client';
-import {
-  IsDateString,
-  IsEnum,
-  IsInt,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-} from 'class-validator';
-
-export class CreateAppointmentDto {
-  /** Fecha y hora ISO 8601; debe ser futura */
-  @IsDateString()
-  scheduledAt: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  reason?: string;
-
-  @IsInt()
-  @Min(1)
-  vehicleId: number;
-}
-
-export class UpdateAppointmentDto extends PartialType(CreateAppointmentDto) {
-  @IsOptional()
-  @IsEnum(AppointmentStatus)
-  status?: AppointmentStatus;
-}
-
-================
-File: backend/src/auth/decorators/auth.decorators.ts
-================
-import { SetMetadata } from '@nestjs/common';
-import { Role } from '@prisma/client';
-
-export const ROLES_KEY = 'roles';
-
-/**
- * Decorador @Roles() para declarar qué roles pueden acceder a un endpoint.
- *
- * Uso:
- *   @Roles(Role.GERENTE, Role.MECANICO)
- *   @UseGuards(JwtAuthGuard, RolesGuard)
- *   @Get('endpoint-protegido')
- *   getEndpoint() { ... }
- */
-export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
-
-/**
- * Decorador @CurrentUser() para extraer el usuario autenticado del request.
- *
- * Uso:
- *   getProfile(@CurrentUser() user: AuthenticatedUser) { ... }
- */
-import { createParamDecorator, ExecutionContext } from '@nestjs/common';
-
-export const CurrentUser = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext) => {
-    const request = ctx.switchToHttp().getRequest();
-    return request.user;
-  },
-);
-
-================
-File: backend/src/auth/dto/auth.dto.ts
-================
-import { IsEmail, IsString, MinLength, MaxLength, IsEnum, IsOptional } from 'class-validator';
-import { Role } from '@prisma/client';
-
-export class LoginDto {
-  @IsEmail({}, { message: 'El correo electrónico no es válido' })
-  email: string;
-
-  @IsString()
-  @MinLength(6, { message: 'La contraseña debe tener al menos 6 caracteres' })
-  password: string;
-}
-
-export class RegisterDto {
-  @IsString()
-  @MaxLength(150)
-  name: string;
-
-  @IsEmail({}, { message: 'El correo electrónico no es válido' })
-  email: string;
-
-  @IsString()
-  @MinLength(6)
-  @MaxLength(72) // bcrypt tiene límite de 72 bytes
-  password: string;
-
-  @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
-  role?: Role;
-}
-
-================
-File: backend/src/auth/dto/update-user.dto.ts
-================
-import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
-import { Role } from '@prisma/client';
-
-export class UpdateUserDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  name?: string;
-
-  @IsOptional()
-  @IsEmail()
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(6)
-  @MaxLength(72)
-  password?: string;
-
-  @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
-
-  @IsOptional()
-  @IsBoolean()
-  isActive?: boolean;
-}
-
-================
-File: backend/src/auth/guards/jwt-auth.guard.ts
-================
-import { Injectable, ExecutionContext, UnauthorizedException } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-
-/**
- * JwtAuthGuard
- *
- * Protege endpoints verificando el JWT en el header Authorization.
- * Si el token es inválido o no existe → 401 Unauthorized.
- *
- * Uso:
- *   @UseGuards(JwtAuthGuard)
- *   @Get('perfil')
- *   getProfile() { ... }
- */
-@Injectable()
-export class JwtAuthGuard extends AuthGuard('jwt') {
-  override canActivate(context: ExecutionContext) {
-    return super.canActivate(context);
-  }
-
-  override handleRequest<TUser>(err: Error, user: TUser): TUser {
-    if (err || !user) {
-      throw new UnauthorizedException(
-        'Token inválido o expirado. Por favor, inicia sesión nuevamente.',
-      );
-    }
-    return user;
-  }
-}
-
-================
-File: backend/src/auth/guards/roles.guard.ts
-================
-import {
-  Injectable,
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-} from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-import { Role } from '@prisma/client';
-import { ROLES_KEY } from '../decorators/auth.decorators';
-import { AuthenticatedUser } from '../auth.types';
-
-/**
- * RolesGuard
- *
- * Verifica que el usuario autenticado tenga uno de los roles
- * declarados con @Roles() en el endpoint.
- *
- * IMPORTANTE: Siempre debe usarse DESPUÉS de JwtAuthGuard:
- *   @UseGuards(JwtAuthGuard, RolesGuard)
- *
- * Jerarquía de permisos GearTrace:
- *   GERENTE  → puede todo
- *   MECANICO → puede operar inventario y LEDs
- *   CLIENTE  → solo puede consultar
- */
-@Injectable()
-export class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
-
-  canActivate(context: ExecutionContext): boolean {
-    // Leer los roles requeridos del decorador @Roles()
-    const requiredRoles = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-
-    // Si el endpoint no tiene @Roles(), está abierto a todos los autenticados
-    if (!requiredRoles || requiredRoles.length === 0) {
-      return true;
-    }
-
-    const request = context.switchToHttp().getRequest<{ user: AuthenticatedUser }>();
-    const user = request.user;
-
-    if (!user) {
-      throw new ForbiddenException('Usuario no autenticado');
-    }
-
-    // GERENTE siempre tiene acceso a todo
-    if (user.role === Role.GERENTE) {
-      return true;
-    }
-
-    // Verificar si el rol del usuario está en la lista de roles permitidos
-    const hasRole = requiredRoles.includes(user.role);
-
-    if (!hasRole) {
-      throw new ForbiddenException(
-        `Acceso denegado. Se requiere uno de los roles: ${requiredRoles.join(', ')}. Tu rol actual es: ${user.role}`,
-      );
-    }
-
-    return true;
-  }
-}
-
-================
-File: backend/src/auth/strategies/jwt.strategy.ts
-================
-import { Injectable, Logger } from '@nestjs/common';
-import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../../prisma/prisma.service';
-import { JwtPayload, AuthenticatedUser } from '../auth.types';
-import { UnauthorizedException } from '@nestjs/common';
-
-/**
- * JwtStrategy
- *
- * Passport strategy para validar JWT en cada request.
- * El JWT se extrae del header: Authorization: Bearer <token>
- *
- * validate() se llama automáticamente en cada request protegido.
- * El valor retornado se asigna a req.user.
- */
-@Injectable()
-export class JwtStrategy extends PassportStrategy(Strategy) {
-  private readonly logger = new Logger(JwtStrategy.name);
-
-  constructor(
-    private readonly config: ConfigService,
-    private readonly prisma: PrismaService,
-  ) {
-    super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      ignoreExpiration: false,
-      secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
-    });
-  }
-
-  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
-    // Verificar que el usuario sigue existiendo y activo en la BD
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, email: true, role: true, name: true, isActive: true },
-    });
-
-    if (!user || !user.isActive) {
-      this.logger.warn(`Token válido pero usuario ${payload.sub} inactivo o eliminado`);
-      throw new UnauthorizedException('Usuario no encontrado o inactivo');
-    }
-
-    // Este objeto estará disponible en req.user en todos los endpoints
-    return {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.name,
-    };
-  }
-}
-
-================
-File: backend/src/auth/auth.module.ts
-================
-import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
-import { PassportModule } from '@nestjs/passport';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { AuthController } from './auth.controller';
-import { AuthService } from './auth.service';
-import { JwtStrategy } from './strategies/jwt.strategy';
-
-@Module({
-  imports: [
-    PassportModule.register({ defaultStrategy: 'jwt' }),
-
-    // JWT con secret tomado del .env y expiración configurable
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.getOrThrow<string>('JWT_SECRET'),
-        signOptions: {
-          expiresIn: config.get<string>('JWT_EXPIRES_IN', '8h'),
-        },
-      }),
-    }),
-  ],
-  controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [JwtModule, PassportModule, AuthService],
-})
-export class AuthModule {}
-
-================
-File: backend/src/auth/auth.types.ts
-================
-import { Role } from '@prisma/client';
-
-/**
- * Payload que se firma dentro del JWT.
- * Debe ser mínimo para no exponer datos sensibles.
- */
-export interface JwtPayload {
-  sub: number;    // User ID (estándar JWT)
-  email: string;
-  role: Role;
-  name: string;
-}
-
-/**
- * Datos del usuario autenticado disponibles en los guards y decoradores.
- * Se adjunta en req.user por la JwtStrategy.
- */
-export interface AuthenticatedUser {
-  id: number;
-  email: string;
-  role: Role;
-  name: string;
-}
-
-================
-File: backend/src/client/dto/create-appointment.dto.ts
-================
-import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
-
-export class CreateAppointmentDto {
-  @IsDateString()
-  scheduledAt: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  reason?: string;
-
-  @IsInt()
-  @Min(1)
-  vehicleId: number;
-}
-
-================
-File: backend/src/client/client.module.ts
-================
-import { Module } from '@nestjs/common';
-import { ClientController } from './client.controller';
-import { ClientService } from './client.service';
-
-@Module({
-  controllers: [ClientController],
-  providers: [ClientService],
-})
-export class ClientModule {}
-
-================
-File: backend/src/common/cors.ts
-================
-/**
- * Política de orígenes única para HTTP (main.ts) y Socket.io (led.gateway.ts).
- *
- * Permitidos:
- *  1. Orígenes exactos de CORS_ORIGIN (separados por coma), p. ej. el dominio
- *     de producción en Vercel: https://geartrace.vercel.app
- *  2. Túneles ngrok por SUFIJO de dominio y solo HTTPS (*.ngrok-free.app, ...).
- *  3. localhost y red privada (desarrollo / Raspberry Pi en LAN).
- *  4. Previews de Vercel (*.vercel.app) SOLO si CORS_ALLOW_VERCEL_PREVIEWS=true:
- *     cualquiera puede publicar en vercel.app, así que no se aceptan por defecto.
- *
- * Las variables se leen en cada llamada (no al importar), porque los
- * decoradores se evalúan antes de que ConfigModule cargue el .env.
- */
-
-const NGROK_SUFFIXES = ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'];
-
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]', 'geartrace.local']);
-
-const PRIVATE_NETWORK = [
-  /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
-  /^192\.168\.\d{1,3}\.\d{1,3}$/,
-  /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/,
-];
-
-/** Headers que el frontend envía (incluye el bypass de la advertencia de ngrok). */
-export const CORS_ALLOWED_HEADERS = [
-  'Content-Type',
-  'Authorization',
-  'Accept',
-  'ngrok-skip-browser-warning',
-];
-
-const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '').toLowerCase();
-
-function configuredOrigins(): string[] {
-  return (process.env.CORS_ORIGIN ?? '').split(',').map(normalizeOrigin).filter(Boolean);
-}
-
-/**
- * `undefined` = petición sin header Origin (Alexa, curl, servidor a servidor):
- * se permite; CORS solo protege a navegadores y la API exige JWT igualmente.
- */
-export function isAllowedOrigin(origin: string | undefined): boolean {
-  if (!origin) return true;
-
-  const normalized = normalizeOrigin(origin);
-  if (configuredOrigins().includes(normalized)) return true;
-
-  let url: URL;
-  try {
-    url = new URL(normalized);
-  } catch {
-    return false;
-  }
-  const { protocol, hostname } = url;
-  if (protocol !== 'https:' && protocol !== 'http:') return false;
-
-  if (protocol === 'https:' && NGROK_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
-    return true;
-  }
-  if (LOCAL_HOSTNAMES.has(hostname) || PRIVATE_NETWORK.some((range) => range.test(hostname))) {
-    return true;
-  }
-  return (
-    process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
-    protocol === 'https:' &&
-    hostname.endsWith('.vercel.app')
-  );
-}
-
-/** Adaptador para la opción `origin` de `cors` / Socket.io. */
-export function corsOriginCallback(
-  origin: string | undefined,
-  callback: (error: Error | null, allow?: boolean) => void,
-): void {
-  // Rechazo sin Error: se omiten las cabeceras CORS en lugar de responder 500.
-  callback(null, isAllowedOrigin(origin));
-}
-
-================
-File: backend/src/common/document-number.ts
-================
-import { Prisma } from '@prisma/client';
-
-/**
- * Códigos correlativos por año, formato PREFIJO-YYYY-NNN (NNN crece a 4+ dígitos):
- *  - OT  → work_orders     (RF-SER-05)
- *  - OC  → purchase_orders
- *  - FAC → invoices
- * La tabla sale de este mapa fijo (nunca de la entrada del usuario).
- */
-const DOCUMENTS = {
-  OT: { table: 'work_orders' },
-  OC: { table: 'purchase_orders' },
-  FAC: { table: 'invoices' },
-} as const;
-
-export type DocumentPrefix = keyof typeof DOCUMENTS;
-
-export function formatDocumentNumber(prefix: DocumentPrefix, year: number, sequence: number): string {
-  return `${prefix}-${year}-${String(sequence).padStart(3, '0')}`;
-}
-
-/**
- * Siguiente código del año. DEBE ejecutarse dentro de la misma transacción que
- * crea el registro: el advisory lock (uno por tipo de documento) serializa
- * creaciones concurrentes y se libera solo al confirmar o revertir.
- */
-export async function nextDocumentNumber(
-  tx: Prisma.TransactionClient,
-  prefix: DocumentPrefix,
-  date: Date = new Date(),
-): Promise<string> {
-  const year = date.getFullYear();
-  const table = Prisma.raw(`"${DOCUMENTS[prefix].table}"`);
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`geartrace:document_number:${prefix}`}))`;
-
-  // MAX numérico (no orden de texto): PRE-2026-1000 debe ganar a PRE-2026-999.
-  const pattern = `^${prefix}-${year}-[0-9]+$`;
-  const [row] = await tx.$queryRaw<Array<{ last: number | null }>>`
-    SELECT MAX(CAST(split_part(number, '-', 3) AS INTEGER)) AS last
-    FROM ${table}
-    WHERE number ~ ${pattern}
-  `;
-
-  return formatDocumentNumber(prefix, year, (row?.last ?? 0) + 1);
-}
-
-================
-File: backend/src/common/prisma-errors.ts
-================
-import { Prisma } from '@prisma/client';
-
-/** P2002: violación de restricción única. P2003: violación de llave foránea. */
-export type PrismaErrorCode = 'P2002' | 'P2003';
-
-export function isPrismaError(error: unknown, code: PrismaErrorCode): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
-}
-
-================
-File: backend/src/inventory/dto/create-box.dto.ts
-================
-import {
-  IsString,
-  IsInt,
-  IsOptional,
-  Min,
-  Max,
-  MaxLength,
-  Matches,
-} from 'class-validator';
-
-export class CreateBoxDto {
-  @IsString()
-  @MaxLength(100)
-  name: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  description?: string;
-
-  @IsInt()
-  @Min(0)
-  @Max(4)
-  ledIndex: number;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(150)
-  location?: string;
-
-  @IsOptional()
-  @IsString()
-  @Matches(/^#[0-9A-Fa-f]{6}$/, {
-    message: 'colorHex debe ser un color hexadecimal válido (ej: #FF6600)',
-  })
-  colorHex?: string;
-}
-
-================
-File: backend/src/inventory/dto/update-box.dto.ts
-================
-import { PartialType } from '@nestjs/mapped-types';
-import { CreateBoxDto } from './create-box.dto';
-
-export class UpdateBoxDto extends PartialType(CreateBoxDto) {}
-
-================
-File: backend/src/inventory/dto/update-part.dto.ts
-================
-import { PartialType } from '@nestjs/mapped-types';
-import { CreatePartDto } from './create-part.dto';
-
-export class UpdatePartDto extends PartialType(CreatePartDto) {}
-
-================
-File: backend/src/inventory/inventory.module.ts
-================
-import { Module } from '@nestjs/common';
-import { InventoryService } from './inventory.service';
-import { InventoryController } from './inventory.controller';
-
-@Module({
-  controllers: [InventoryController],
-  providers: [InventoryService],
-  // Exportamos el servicio para que AlexaModule pueda inyectarlo
-  exports: [InventoryService],
-})
-export class InventoryModule {}
-
-================
-File: backend/src/invoices/invoices.controller.ts
-================
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  ParseIntPipe,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
-import { Role } from '@prisma/client';
-import { Roles } from '../auth/decorators/auth.decorators';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
-import { InvoicesService } from './invoices.service';
-
-/** /api/invoices — Facturación (solo GERENTE). */
-@Controller('invoices')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE)
-export class InvoicesController {
-  constructor(private readonly invoicesService: InvoicesService) {}
-
-  @Get()
-  findAll() {
-    return this.invoicesService.findAll();
-  }
-
-  @Get(':id(\\d+)')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.invoicesService.findOne(id);
-  }
-
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  create(@Body() dto: CreateInvoiceDto) {
-    return this.invoicesService.create(dto);
-  }
-
-  @Patch(':id(\\d+)')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateInvoiceDto) {
-    return this.invoicesService.update(id, dto);
-  }
-
-  @Delete(':id(\\d+)')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.invoicesService.remove(id);
-  }
-}
-
-================
-File: backend/src/invoices/invoices.module.ts
-================
-import { Module } from '@nestjs/common';
-import { InvoicesController } from './invoices.controller';
-import { InvoicesService } from './invoices.service';
-
-@Module({
-  controllers: [InvoicesController],
-  providers: [InvoicesService],
-})
-export class InvoicesModule {}
-
-================
-File: backend/src/led/led.module.ts
-================
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ledDriverProvider } from './drivers/led-driver.provider';
-import { LedControllerService } from './led-controller.service';
-import { LedIndicatorService } from './led-indicator.service';
-import { ledConfig } from './led.config';
-import { LedGateway } from './led.gateway';
-import { LOCATION_INDICATOR } from './led.types';
-
-/**
- * Hardware de señalización (tira WS2812B + Socket.io).
- * No depende de ningún otro módulo de negocio. Otros módulos encienden LEDs
- * inyectando el puerto `LOCATION_INDICATOR`.
- */
-@Module({
-  imports: [ConfigModule.forFeature(ledConfig)],
-  providers: [
-    ledDriverProvider,
-    LedControllerService,
-    LedIndicatorService,
-    { provide: LOCATION_INDICATOR, useExisting: LedIndicatorService },
-    LedGateway,
-  ],
-  exports: [LedControllerService, LedIndicatorService, LOCATION_INDICATOR],
-})
-export class LedModule {}
-
-================
 File: backend/src/logs/search-log.module.ts
 ================
 import { Module } from '@nestjs/common';
@@ -2906,13 +3159,19 @@ import { Role } from '@prisma/client';
 import { Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser } from '../auth/decorators/auth.decorators';
+import {
+  CreatePurchaseDto,
+  SupplierPurchaseResponseDto,
+  UpdatePurchaseDto,
+} from './dto/purchase.dto';
 import { PurchasesService } from './purchases.service';
 
 /** /api/purchases — CRUD de órdenes de compra (abastecimiento). */
 @Controller('purchases')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class PurchasesController {
   constructor(private readonly purchasesService: PurchasesService) {}
 
@@ -2938,10 +3197,26 @@ export class PurchasesController {
   }
 
   @Delete(':id(\\d+)')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.purchasesService.remove(id);
+  }
+
+  @Get('supplier-portal')
+  @Roles(Role.PROVEEDOR)
+  findSupplierOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.purchasesService.findSupplierOrders(user);
+  }
+
+  @Patch('supplier-portal/:id(\\d+)')
+  @Roles(Role.PROVEEDOR)
+  respondAsSupplier(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SupplierPurchaseResponseDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasesService.respondAsSupplier(id, dto, user);
   }
 }
 
@@ -3030,7 +3305,7 @@ import { SuppliersService } from './suppliers.service';
  */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}
 
@@ -3056,7 +3331,7 @@ export class SuppliersController {
   }
 
   @Delete(':id(\\d+)')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.suppliersService.remove(id);
@@ -3230,6 +3505,7 @@ export class VehiclesController {
 File: backend/src/work-orders/work-order-scope.ts
 ================
 import { Prisma, Role } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
 
 /**
@@ -3247,6 +3523,8 @@ export function workOrderScope(user: AuthenticatedUser): Prisma.WorkOrderWhereIn
       return { mechanicId: user.id };
     case Role.CLIENTE:
       return { vehicle: { ownerId: user.id } };
+    default:
+      throw new ForbiddenException('Este rol no puede acceder a órdenes de trabajo');
   }
 }
 
@@ -3656,7 +3934,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
 
-export type Role = 'GERENTE' | 'MECANICO' | 'CLIENTE';
+export type Role = 'GERENTE' | 'MECANICO' | 'BODEGUERO' | 'CONTADOR' | 'CLIENTE' | 'PROVEEDOR';
 
 export interface User {
   id: number;
@@ -4188,134 +4466,49 @@ File: package.json
 }
 
 ================
-File: backend/src/alexa/alexa.controller.ts
+File: backend/src/alexa/alexa.module.ts
 ================
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpException,
-  HttpStatus,
-  Logger,
-  Post,
-} from '@nestjs/common';
-import { tell } from './alexa-response';
-import { ALEXA_MESSAGES } from './alexa.messages';
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { InventoryModule } from '../inventory/inventory.module';
+import { LedModule } from '../led/led.module';
+import { alexaConfig } from './alexa.config';
+import { AlexaController } from './alexa.controller';
 import { AlexaService } from './alexa.service';
-import { AlexaRequestEnvelope, AlexaResponseEnvelope } from './alexa.types';
-
-/**
- * POST /api/webhook/alexa — Amazon lo invoca cuando el usuario habla con la skill.
- *
- *   Usuario → Alexa → Amazon → webhook → AlexaService → handler del intent
- *                                                          ├─ InventoryService (datos)
- *                                                          └─ LocationIndicator (LED + dashboard)
- *
- * El controller solo adapta HTTP: no contiene lógica de negocio.
- */
-@Controller('webhook')
-export class AlexaController {
-  private readonly logger = new Logger(AlexaController.name);
-
-  constructor(private readonly alexaService: AlexaService) {}
-
-  @Post('alexa')
-  @HttpCode(HttpStatus.OK)
-  async handleAlexaWebhook(@Body() envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
-    try {
-      return await this.alexaService.handleRequest(envelope);
-    } catch (error: unknown) {
-      // Request inválido o skill no autorizada: se responde con su código HTTP.
-      if (error instanceof HttpException) throw error;
-
-      // Fallo interno: respuesta de voz válida para que Alexa no quede en silencio.
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error procesando solicitud de Alexa: ${message}`);
-      return tell(ALEXA_MESSAGES.error());
-    }
-  }
-}
-
-================
-File: backend/src/alexa/alexa.service.ts
-================
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
-import { ask, tell } from './alexa-response';
-import { plain } from './alexa-speech';
-import { AlexaConfig, alexaConfig } from './alexa.config';
-import { ALEXA_MESSAGES } from './alexa.messages';
-import { AlexaRequestEnvelope, AlexaResponseEnvelope } from './alexa.types';
 import { ALEXA_INTENT_HANDLERS, AlexaIntentHandler } from './intents/alexa-intent-handler';
+import { HelpIntentHandler, StopIntentHandler } from './intents/built-in.handlers';
+import { FindPartIntentHandler } from './intents/find-part.handler';
+import { ListBoxesIntentHandler } from './intents/list-boxes.handler';
+import { LowStockIntentHandler } from './intents/low-stock.handler';
 
-/**
- * Despachador de la skill: valida el origen y enruta cada request a su
- * handler. No contiene lógica de negocio ni textos; los intents viven en
- * `intents/` y las frases en `alexa.messages.ts`.
- */
-@Injectable()
-export class AlexaService {
-  private readonly logger = new Logger(AlexaService.name);
-  private readonly handlers = new Map<string, AlexaIntentHandler>();
+/** Registro de intents: agregar aquí cada handler nuevo. */
+const INTENT_HANDLERS = [
+  FindPartIntentHandler,
+  ListBoxesIntentHandler,
+  LowStockIntentHandler,
+  HelpIntentHandler,
+  StopIntentHandler,
+];
 
-  constructor(
-    @Inject(alexaConfig.KEY) private readonly config: AlexaConfig,
-    @Inject(ALEXA_INTENT_HANDLERS) handlers: AlexaIntentHandler[],
-  ) {
-    for (const handler of handlers) {
-      for (const intent of handler.intents) {
-        if (this.handlers.has(intent)) {
-          throw new Error(`El intent "${intent}" tiene más de un handler registrado`);
-        }
-        this.handlers.set(intent, handler);
-      }
-    }
-  }
-
-  /** Punto de entrada: recibe el envelope de Amazon y devuelve la respuesta. */
-  async handleRequest(envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
-    const request = envelope?.request;
-    if (!request?.type) {
-      throw new BadRequestException('Request de Alexa inválido');
-    }
-    this.assertAuthorizedSkill(envelope);
-
-    switch (request.type) {
-      case 'LaunchRequest':
-        return ask(ALEXA_MESSAGES.welcome());
-
-      case 'IntentRequest': {
-        const intentName = request.intent?.name;
-        this.logger.log(`Intent recibido: "${intentName}"`);
-        const handler = this.handlers.get(intentName);
-        // AMAZON.FallbackIntent y cualquier intent sin handler: pedir que repita.
-        return handler ? handler.handle(request) : ask(ALEXA_MESSAGES.fallback());
-      }
-
-      case 'SessionEndedRequest':
-        // Alexa ignora el cuerpo de esta respuesta; solo espera un 200.
-        this.logger.log(`Sesión de Alexa finalizada (${request.reason})`);
-        return tell(plain(''));
-
-      default:
-        return tell(ALEXA_MESSAGES.unknownRequest());
-    }
-  }
-
-  /** Si hay un Skill ID real configurado, rechaza requests de otra skill. */
-  private assertAuthorizedSkill(envelope: AlexaRequestEnvelope): void {
-    const { skillId } = this.config;
-    if (!skillId) return;
-
-    const incoming =
-      envelope.session?.application?.applicationId ??
-      envelope.context?.System?.application?.applicationId;
-
-    if (incoming && incoming !== skillId) {
-      this.logger.warn(`Skill ID no autorizado: ${incoming}`);
-      throw new BadRequestException('Skill ID no autorizado');
-    }
-  }
-}
+@Module({
+  imports: [
+    ConfigModule.forFeature(alexaConfig),
+    InventoryModule, // datos de piezas y cajas
+    LedModule, // puerto LOCATION_INDICATOR (dependencia en un solo sentido)
+  ],
+  controllers: [AlexaController],
+  providers: [
+    ...INTENT_HANDLERS,
+    {
+      provide: ALEXA_INTENT_HANDLERS,
+      inject: INTENT_HANDLERS,
+      useFactory: (...handlers: AlexaIntentHandler[]) => handlers,
+    },
+    AlexaService,
+  ],
+  exports: [AlexaService],
+})
+export class AlexaModule {}
 
 ================
 File: backend/src/appointments/appointments.controller.ts
@@ -4508,6 +4701,64 @@ export class AppointmentsService {
 }
 
 ================
+File: backend/src/auth/strategies/jwt.strategy.ts
+================
+import { Injectable, Logger } from '@nestjs/common';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../../prisma/prisma.service';
+import { JwtPayload, AuthenticatedUser } from '../auth.types';
+import { UnauthorizedException } from '@nestjs/common';
+
+/**
+ * JwtStrategy
+ *
+ * Passport strategy para validar JWT en cada request.
+ * El JWT se extrae del header: Authorization: Bearer <token>
+ *
+ * validate() se llama automáticamente en cada request protegido.
+ * El valor retornado se asigna a req.user.
+ */
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
+    });
+  }
+
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    // Verificar que el usuario sigue existiendo y activo en la BD
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, email: true, role: true, name: true, isActive: true, supplierId: true },
+    });
+
+    if (!user || !user.isActive) {
+      this.logger.warn(`Token válido pero usuario ${payload.sub} inactivo o eliminado`);
+      throw new UnauthorizedException('Usuario no encontrado o inactivo');
+    }
+
+    // Este objeto estará disponible en req.user en todos los endpoints
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      supplierId: user.supplierId ?? undefined,
+    };
+  }
+}
+
+================
 File: backend/src/auth/auth.controller.ts
 ================
 import {
@@ -4553,7 +4804,7 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   register(@Body() dto: RegisterDto) {
     // Forzar CLIENTE en registro público
-    return this.authService.register({ ...dto, role: Role.CLIENTE });
+    return this.authService.register({ ...dto, role: Role.CLIENTE, supplierId: undefined });
   }
 
   // ── Rutas autenticadas ─────────────────────────────────────
@@ -4619,6 +4870,39 @@ export class AuthController {
     return this.authService.toggleUserActive(id, isActive);
   }
 }
+
+================
+File: backend/src/auth/auth.module.ts
+================
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtStrategy } from './strategies/jwt.strategy';
+
+@Module({
+  imports: [
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+
+    // JWT con secret tomado del .env y expiración configurable
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.getOrThrow<string>('JWT_SECRET'),
+        signOptions: {
+          expiresIn: config.get<string>('JWT_EXPIRES_IN', '8h'),
+        },
+      }),
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy],
+  exports: [JwtModule, PassportModule, AuthService],
+})
+export class AuthModule {}
 
 ================
 File: backend/src/client/client.controller.ts
@@ -4732,6 +5016,36 @@ export class CreatePartDto {
 }
 
 ================
+File: backend/src/led/led.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ledDriverProvider } from './drivers/led-driver.provider';
+import { LedControllerService } from './led-controller.service';
+import { LedIndicatorService } from './led-indicator.service';
+import { ledConfig } from './led.config';
+import { LedGateway } from './led.gateway';
+import { LOCATION_INDICATOR } from './led.types';
+
+/**
+ * Hardware de señalización (tira WS2812B + Socket.io).
+ * No depende de ningún otro módulo de negocio. Otros módulos encienden LEDs
+ * inyectando el puerto `LOCATION_INDICATOR`.
+ */
+@Module({
+  imports: [ConfigModule.forFeature(ledConfig)],
+  providers: [
+    ledDriverProvider,
+    LedControllerService,
+    LedIndicatorService,
+    { provide: LOCATION_INDICATOR, useExisting: LedIndicatorService },
+    LedGateway,
+  ],
+  exports: [LedControllerService, LedIndicatorService, LOCATION_INDICATOR],
+})
+export class LedModule {}
+
+================
 File: backend/src/logs/search-log.controller.ts
 ================
 import { Controller, Get, UseGuards } from '@nestjs/common';
@@ -4758,7 +5072,7 @@ export class SearchLogController {
 File: backend/src/purchases/dto/purchase.dto.ts
 ================
 import { PurchaseOrderStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsOptional, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsInt, IsOptional, Min } from 'class-validator';
 import { CreatePurchaseOrderDto } from '../../supplier/dto/purchase-order.dto';
 
 /**
@@ -4784,6 +5098,17 @@ export class UpdatePurchaseDto {
   status?: PurchaseOrderStatus;
 }
 
+export class SupplierPurchaseResponseDto {
+  @IsEnum(PurchaseOrderStatus, {
+    message: 'El estado debe ser CONFIRMADA o RECHAZADA',
+  })
+  status: 'CONFIRMADA' | 'RECHAZADA';
+
+  @IsOptional()
+  @IsDateString()
+  expectedDeliveryAt?: string;
+}
+
 ================
 File: backend/src/purchases/purchases.service.ts
 ================
@@ -4793,10 +5118,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PurchaseOrderStatus } from '@prisma/client';
+import { PurchaseOrderStatus, Role } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
+import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupplierService } from '../supplier/supplier.service';
-import { CreatePurchaseDto, UpdatePurchaseDto } from './dto/purchase.dto';
+import {
+  CreatePurchaseDto,
+  SupplierPurchaseResponseDto,
+  UpdatePurchaseDto,
+} from './dto/purchase.dto';
 
 const PURCHASE_INCLUDE = {
   supplier: true,
@@ -4857,8 +5188,47 @@ export class PurchasesService {
         'No se puede eliminar un pedido recibido: ya incrementó el inventario',
       );
     }
+
     // Los PurchaseOrderItem se eliminan en cascada.
     await this.prisma.purchaseOrder.delete({ where: { id } });
+  }
+
+  findSupplierOrders(user: AuthenticatedUser) {
+    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
+      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
+    }
+    return this.prisma.purchaseOrder.findMany({
+      where: { supplierId: user.supplierId },
+      include: PURCHASE_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async respondAsSupplier(
+    id: number,
+    dto: SupplierPurchaseResponseDto,
+    user: AuthenticatedUser,
+  ) {
+    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
+      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
+    }
+    const order = await this.prisma.purchaseOrder.findFirst({
+      where: { id, supplierId: user.supplierId },
+    });
+    if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
+    if (order.status !== PurchaseOrderStatus.PENDIENTE) {
+      throw new ConflictException('Solo se pueden responder pedidos pendientes');
+    }
+    return this.prisma.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        expectedDeliveryAt: dto.expectedDeliveryAt
+          ? new Date(dto.expectedDeliveryAt)
+          : undefined,
+      },
+      include: PURCHASE_INCLUDE,
+    });
   }
 
   private async ensureSupplier(id: number) {
@@ -5151,7 +5521,7 @@ import { SupplierService } from './supplier.service';
  */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class SupplierController {
   constructor(private readonly supplierService: SupplierService) {}
 
@@ -5202,6 +5572,8 @@ import {
   IsEnum,
   IsOptional,
   IsString,
+  IsInt,
+  Min,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -5221,19 +5593,24 @@ export class CreateUserDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
   role?: Role;
 
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  supplierId?: number;
 }
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {}
 
 /** GET /api/users/lookup?role=CLIENTE → selectores de formularios. */
 export class UserLookupQueryDto {
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO o CLIENTE' })
+  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
   role: Role;
 }
 
@@ -5332,6 +5709,7 @@ const USER_SELECT = {
   isActive: true,
   createdAt: true,
   updatedAt: true,
+  supplierId: true,
 } satisfies Prisma.UserSelect;
 
 @Injectable()
@@ -5364,6 +5742,7 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
+    await this.validateSupplierAssignment(dto.role ?? Role.CLIENTE, dto.supplierId);
     try {
       return await this.prisma.user.create({
         data: {
@@ -5380,7 +5759,12 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto) {
-    await this.findOne(id);
+    const current = await this.prisma.user.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
+    await this.validateSupplierAssignment(
+      dto.role ?? current.role,
+      dto.supplierId ?? current.supplierId ?? undefined,
+    );
     try {
       return await this.prisma.user.update({
         where: { id },
@@ -5418,6 +5802,19 @@ export class UsersService {
   private throwDuplicateEmail(error: unknown) {
     if (isPrismaError(error, 'P2002')) {
       throw new ConflictException('El correo electrónico ya está registrado');
+    }
+  }
+
+  private async validateSupplierAssignment(role: Role, supplierId?: number) {
+    if (role === Role.PROVEEDOR && !supplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (role !== Role.PROVEEDOR && supplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({ where: { id: supplierId } });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     }
   }
 }
@@ -6751,7 +7148,14 @@ interface ManagedUser {
   isActive: boolean;
 }
 
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+const roles: Role[] = [
+  'GERENTE',
+  'MECANICO',
+  'BODEGUERO',
+  'CONTADOR',
+  'CLIENTE',
+  'PROVEEDOR',
+];
 
 export default function UsersList() {
   const { user } = useAuth();
@@ -6759,7 +7163,13 @@ export default function UsersList() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'CLIENTE' as Role });
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'CLIENTE' as Role,
+    supplierId: '',
+  });
 
   const loadUsers = async () => {
     try {
@@ -6785,9 +7195,12 @@ export default function UsersList() {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post('/auth/admin/create', form);
+      await api.post('/auth/admin/create', {
+        ...form,
+        supplierId: form.role === 'PROVEEDOR' ? Number(form.supplierId) : undefined,
+      });
       toast.success('Usuario creado correctamente.');
-      setForm({ name: '', email: '', password: '', role: 'CLIENTE' });
+      setForm({ name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' });
       setIsModalOpen(false);
       await loadUsers();
     } catch (error: any) {
@@ -6855,6 +7268,17 @@ export default function UsersList() {
             <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl px-4 py-3 text-white glass-input">
               {roles.map((role) => <option key={role} value={role}>{role}</option>)}
             </select>
+            {form.role === 'PROVEEDOR' && (
+              <input
+                required
+                min={1}
+                type="number"
+                value={form.supplierId}
+                placeholder="ID del proveedor"
+                onChange={(event) => setForm({ ...form, supplierId: event.target.value })}
+                className="w-full rounded-xl px-4 py-3 text-white glass-input"
+              />
+            )}
             <button disabled={saving} className="w-full rounded-xl px-4 py-3 font-semibold text-white disabled:opacity-50 btn-primary">{saving ? 'Guardando...' : 'Crear usuario'}</button>
           </form>
         </div>
@@ -6881,7 +7305,14 @@ interface ManagedUser {
   isActive: boolean;
 }
 
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+const roles: Role[] = [
+  'GERENTE',
+  'MECANICO',
+  'BODEGUERO',
+  'CONTADOR',
+  'CLIENTE',
+  'PROVEEDOR',
+];
 
 export default function UsersManagement() {
   const { user } = useAuth();
@@ -8431,7 +8862,7 @@ const SECTIONS: NavigationSection[] = ['General', 'Servicio técnico', 'Abasteci
 
 /** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
 export const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO'], section: 'General' },
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'PROVEEDOR'], section: 'General' },
   { label: 'Mi vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'], section: 'General' },
   { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'], section: 'Servicio técnico' },
   { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos, section: 'Servicio técnico' },
@@ -8440,6 +8871,7 @@ export const navigationItems: NavigationItem[] = [
   { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores, section: 'Abastecimiento' },
   { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras, section: 'Abastecimiento' },
   { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion, section: 'Administración' },
+  { label: 'Pedidos recibidos', path: '/portal-proveedor', icon: Truck, roles: ROUTE_ROLES['portal-proveedor'], section: 'Abastecimiento' },
   { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios, section: 'Administración' },
   { label: 'Historial de búsquedas', path: '/logs', icon: History, roles: ROUTE_ROLES.logs, section: 'Administración' },
 ];
@@ -9402,15 +9834,16 @@ import type { Role } from '../contexts/AuthContext';
  * ruta rechazaría.
  */
 export const ROUTE_ROLES = {
-  inventory: ['GERENTE', 'MECANICO'],
+  inventory: ['GERENTE', 'BODEGUERO'],
   logs: ['GERENTE', 'MECANICO'],
   usuarios: ['GERENTE'],
   vehiculos: ['GERENTE', 'MECANICO'],
   'ordenes-trabajo': ['GERENTE', 'MECANICO'],
   citas: ['GERENTE', 'MECANICO', 'CLIENTE'],
-  proveedores: ['GERENTE'],
-  compras: ['GERENTE'],
-  facturacion: ['GERENTE'],
+  proveedores: ['GERENTE', 'BODEGUERO'],
+  compras: ['GERENTE', 'BODEGUERO'],
+  facturacion: ['GERENTE', 'CONTADOR'],
+  'portal-proveedor': ['PROVEEDOR'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type AppRoute = keyof typeof ROUTE_ROLES;
@@ -9439,7 +9872,10 @@ interface StatusMeta {
 export const ROLE_META: Record<Role, StatusMeta> = {
   GERENTE: { label: 'Gerente', tone: 'brand' },
   MECANICO: { label: 'Mecánico', tone: 'info' },
+  BODEGUERO: { label: 'Bodeguero', tone: 'warning' },
+  CONTADOR: { label: 'Contador', tone: 'success' },
   CLIENTE: { label: 'Cliente', tone: 'neutral' },
+  PROVEEDOR: { label: 'Proveedor', tone: 'neutral' },
 };
 
 export const WORK_ORDER_STATUS: Record<WorkOrderStatus, StatusMeta> = {
@@ -9458,8 +9894,10 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, StatusMeta> = {
 
 export const PURCHASE_STATUS: Record<PurchaseOrderStatus, StatusMeta> = {
   PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  CONFIRMADA: { label: 'Confirmada', tone: 'info' },
   RECIBIDA: { label: 'Recibida', tone: 'success' },
   CANCELADA: { label: 'Cancelada', tone: 'danger' },
+  RECHAZADA: { label: 'Rechazada', tone: 'danger' },
 };
 
 export const INVOICE_STATUS: Record<InvoiceStatus, StatusMeta> = {
@@ -9879,6 +10317,136 @@ Tras ejecutar `npm run prisma:seed`, tienes a disposición los siguientes usuari
 | **Cargar Datos Demo** | `npm run prisma:seed` | N/A |
 
 ================
+File: backend/src/alexa/alexa.controller.ts
+================
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpException,
+  HttpStatus,
+  Logger,
+  Post,
+} from '@nestjs/common';
+import { tell } from './alexa-response';
+import { ALEXA_MESSAGES } from './alexa.messages';
+import { AlexaService } from './alexa.service';
+import { AlexaRequestEnvelope, AlexaResponseEnvelope } from './alexa.types';
+
+/**
+ * POST /api/webhook/alexa — Amazon lo invoca cuando el usuario habla con la skill.
+ *
+ *   Usuario → Alexa → Amazon → webhook → AlexaService → handler del intent
+ *                                                          ├─ InventoryService (datos)
+ *                                                          └─ LocationIndicator (LED + dashboard)
+ *
+ * El controller solo adapta HTTP: no contiene lógica de negocio.
+ */
+@Controller('webhook')
+export class AlexaController {
+  private readonly logger = new Logger(AlexaController.name);
+
+  constructor(private readonly alexaService: AlexaService) {}
+
+  @Post('alexa')
+  @HttpCode(HttpStatus.OK)
+  async handleAlexaWebhook(@Body() envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
+    try {
+      return await this.alexaService.handleRequest(envelope);
+    } catch (error: unknown) {
+      // Request inválido o skill no autorizada: se responde con su código HTTP.
+      if (error instanceof HttpException) throw error;
+
+      // Fallo interno: respuesta de voz válida para que Alexa no quede en silencio.
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error procesando solicitud de Alexa: ${message}`);
+      return tell(ALEXA_MESSAGES.error());
+    }
+  }
+}
+
+================
+File: backend/src/alexa/alexa.service.ts
+================
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import { ask, tell } from './alexa-response';
+import { plain } from './alexa-speech';
+import { AlexaConfig, alexaConfig } from './alexa.config';
+import { ALEXA_MESSAGES } from './alexa.messages';
+import { AlexaRequestEnvelope, AlexaResponseEnvelope } from './alexa.types';
+import { ALEXA_INTENT_HANDLERS, AlexaIntentHandler } from './intents/alexa-intent-handler';
+
+/**
+ * Despachador de la skill: valida el origen y enruta cada request a su
+ * handler. No contiene lógica de negocio ni textos; los intents viven en
+ * `intents/` y las frases en `alexa.messages.ts`.
+ */
+@Injectable()
+export class AlexaService {
+  private readonly logger = new Logger(AlexaService.name);
+  private readonly handlers = new Map<string, AlexaIntentHandler>();
+
+  constructor(
+    @Inject(alexaConfig.KEY) private readonly config: AlexaConfig,
+    @Inject(ALEXA_INTENT_HANDLERS) handlers: AlexaIntentHandler[],
+  ) {
+    for (const handler of handlers) {
+      for (const intent of handler.intents) {
+        if (this.handlers.has(intent)) {
+          throw new Error(`El intent "${intent}" tiene más de un handler registrado`);
+        }
+        this.handlers.set(intent, handler);
+      }
+    }
+  }
+
+  /** Punto de entrada: recibe el envelope de Amazon y devuelve la respuesta. */
+  async handleRequest(envelope: AlexaRequestEnvelope): Promise<AlexaResponseEnvelope> {
+    const request = envelope?.request;
+    if (!request?.type) {
+      throw new BadRequestException('Request de Alexa inválido');
+    }
+    this.assertAuthorizedSkill(envelope);
+
+    switch (request.type) {
+      case 'LaunchRequest':
+        return ask(ALEXA_MESSAGES.welcome());
+
+      case 'IntentRequest': {
+        const intentName = request.intent?.name;
+        this.logger.log(`Intent recibido: "${intentName}"`);
+        const handler = this.handlers.get(intentName);
+        // AMAZON.FallbackIntent y cualquier intent sin handler: pedir que repita.
+        return handler ? handler.handle(request) : ask(ALEXA_MESSAGES.fallback());
+      }
+
+      case 'SessionEndedRequest':
+        // Alexa ignora el cuerpo de esta respuesta; solo espera un 200.
+        this.logger.log(`Sesión de Alexa finalizada (${request.reason})`);
+        return tell(plain(''));
+
+      default:
+        return tell(ALEXA_MESSAGES.unknownRequest());
+    }
+  }
+
+  /** Si hay un Skill ID real configurado, rechaza requests de otra skill. */
+  private assertAuthorizedSkill(envelope: AlexaRequestEnvelope): void {
+    const { skillId } = this.config;
+    if (!skillId) return;
+
+    const incoming =
+      envelope.session?.application?.applicationId ??
+      envelope.context?.System?.application?.applicationId;
+
+    if (incoming && incoming !== skillId) {
+      this.logger.warn(`Skill ID no autorizado: ${incoming}`);
+      throw new BadRequestException('Skill ID no autorizado');
+    }
+  }
+}
+
+================
 File: backend/src/auth/auth.service.ts
 ================
 import {
@@ -9924,6 +10492,19 @@ export class AuthService {
       );
     }
 
+    if (dto.role === Role.PROVEEDOR && !dto.supplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (dto.role !== Role.PROVEEDOR && dto.supplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (dto.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
+    }
+
     // Hashear la contraseña con bcrypt
     const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
@@ -9933,6 +10514,7 @@ export class AuthService {
         email: dto.email,
         password: hashedPassword,
         role: dto.role ?? Role.CLIENTE,
+        supplierId: dto.supplierId,
       },
       select: { id: true, name: true, email: true, role: true, createdAt: true },
     });
@@ -10009,6 +10591,17 @@ export class AuthService {
   }
 
   async changeUserRole(userId: number, role: Role) {
+    const current = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { supplierId: true },
+    });
+    if (!current) throw new NotFoundException('Usuario no encontrado');
+    if (role === Role.PROVEEDOR && !current.supplierId) {
+      throw new ConflictException('Asocia un proveedor antes de asignar el rol PROVEEDOR');
+    }
+    if (role !== Role.PROVEEDOR && current.supplierId) {
+      throw new ConflictException('Desvincula el proveedor antes de cambiar este rol');
+    }
     return this.prisma.user.update({
       where: { id: userId },
       data: { role },
@@ -10020,6 +10613,20 @@ export class AuthService {
     const existing = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!existing) {
       throw new NotFoundException('Usuario no encontrado');
+    }
+    const targetRole = dto.role ?? existing.role;
+    const targetSupplierId = dto.supplierId ?? existing.supplierId ?? undefined;
+    if (targetRole === Role.PROVEEDOR && !targetSupplierId) {
+      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+    }
+    if (targetRole !== Role.PROVEEDOR && targetSupplierId) {
+      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+    }
+    if (dto.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
     }
 
     const data = {
@@ -10582,120 +11189,6 @@ export class InvoicesService {
   private async ensureUser(id: number) {
     const count = await this.prisma.user.count({ where: { id } });
     if (count === 0) throw new NotFoundException(`Cliente con id ${id} no encontrado`);
-  }
-}
-
-================
-File: backend/src/led/led-controller.service.ts
-================
-import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { LED_DRIVER, LedDriver } from './drivers/led-driver';
-import { isHexColor } from './led-color';
-import { LedConfig, ledConfig } from './led.config';
-import { LedHardwareStatus, LedRequestError } from './led.types';
-
-/**
- * Control de bajo nivel de la tira: encender, apagar y parpadear un LED.
- * No sabe de hardware concreto (usa `LedDriver`) ni de Socket.io o temporizadores
- * de auto-apagado (eso es `LedIndicatorService`).
- */
-@Injectable()
-export class LedControllerService implements OnModuleDestroy {
-  private readonly logger = new Logger(LedControllerService.name);
-
-  constructor(
-    @Inject(LED_DRIVER) private readonly driver: LedDriver,
-    @Inject(ledConfig.KEY) private readonly config: LedConfig,
-  ) {}
-
-  onModuleDestroy(): void {
-    this.safely('liberar la tira', () => this.driver.shutdown());
-  }
-
-  /** Enciende un LED. Sin color usa `LED_FALLBACK_COLOR`. */
-  turnOn(ledIndex: number, colorHex?: string): void {
-    this.assertValidIndex(ledIndex);
-    const color = this.resolveColor(colorHex);
-    this.safely(`encender LED ${ledIndex}`, () => this.driver.setPixel(ledIndex, color));
-  }
-
-  turnOff(ledIndex: number): void {
-    this.assertValidIndex(ledIndex);
-    this.safely(`apagar LED ${ledIndex}`, () => this.driver.setPixel(ledIndex, null));
-  }
-
-  turnOffAll(): void {
-    this.safely('apagar todos los LEDs', () => this.driver.clear());
-  }
-
-  /**
-   * Parpadea `times` veces y deja el LED encendido.
-   * `isCancelled` permite abortar entre fases (p. ej. apagado manual o una
-   * señal más reciente sobre el mismo LED); al cancelar no se toca más el LED.
-   */
-  async blink(
-    ledIndex: number,
-    times: number,
-    colorHex?: string,
-    isCancelled: () => boolean = () => false,
-  ): Promise<void> {
-    this.assertValidIndex(ledIndex);
-    if (!Number.isInteger(times) || times < 0) {
-      throw new LedRequestError(`El número de parpadeos debe ser un entero no negativo: ${times}`);
-    }
-    const color = this.resolveColor(colorHex);
-    const { onMs, offMs } = this.config.blink;
-
-    for (let i = 0; i < times; i++) {
-      if (isCancelled()) return;
-      this.turnOn(ledIndex, color);
-      await this.sleep(onMs);
-      if (isCancelled()) return;
-      this.turnOff(ledIndex);
-      await this.sleep(offMs);
-    }
-
-    if (isCancelled()) return;
-    this.turnOn(ledIndex, color);
-  }
-
-  getStatus(): LedHardwareStatus {
-    return {
-      simulationMode: this.driver.simulated,
-      ledCount: this.config.ledCount,
-      gpioPin: this.config.gpioPin,
-    };
-  }
-
-  /** Color efectivo de una señal: el indicado o el de respaldo. Lanza si es inválido. */
-  resolveColor(colorHex?: string): string {
-    if (colorHex === undefined) return this.config.fallbackColor;
-    if (!isHexColor(colorHex)) {
-      throw new LedRequestError(`Color inválido "${colorHex}": se espera #RRGGBB`);
-    }
-    return colorHex;
-  }
-
-  assertValidIndex(ledIndex: number): void {
-    if (!Number.isInteger(ledIndex) || ledIndex < 0 || ledIndex >= this.config.ledCount) {
-      throw new LedRequestError(
-        `ledIndex ${ledIndex} fuera de rango (0-${this.config.ledCount - 1})`,
-      );
-    }
-  }
-
-  /** Un fallo del hardware se registra; nunca tumba una petición ni el proceso. */
-  private safely(action: string, operation: () => void): void {
-    try {
-      operation();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error de hardware al ${action}: ${message}`);
-    }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
@@ -11411,52 +11904,6 @@ export class WorkOrdersService {
 }
 
 ================
-File: backend/.env.example
-================
-# ─── Base de Datos ──────────────────────────────────────────────────────────
-# Debe coincidir con los valores del docker-compose.yml en la raíz
-POSTGRES_USER=geartrace
-POSTGRES_PASSWORD=geartrace_secret
-POSTGRES_DB=geartrace_db
-POSTGRES_PORT=5432
-POSTGRES_HOST=localhost
-
-# URL de conexión para Prisma ORM
-DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?schema=public"
-
-# ─── Aplicación NestJS ──────────────────────────────────────────────────────
-PORT=3000
-NODE_ENV=production
-
-# ─── CORS Origins ────────────────────────────────────────────────────────────
-# Orígenes adicionales separados por coma (ej. https://tu-app.vercel.app)
-# Ya se permiten por defecto: localhost, la red privada (192.168.x.x, 10.x, 172.16-31.x)
-# y túneles ngrok por HTTPS (*.ngrok-free.app, *.ngrok-free.dev, *.ngrok.app, *.ngrok.io).
-# El dominio de Vercel debe ir aquí de forma explícita (sin "/" final).
-CORS_ORIGIN=https://geartrace.vercel.app
-# Previews de Vercel (*.vercel.app). Desactivado: cualquiera puede publicar en vercel.app.
-CORS_ALLOW_VERCEL_PREVIEWS=false
-
-# ─── JWT Auth ───────────────────────────────────────────────────────────────
-# Genera un valor aleatorio de al menos 32 caracteres. Nunca uses un valor de ejemplo.
-JWT_SECRET=REEMPLAZAR_CON_UN_SECRETO_ALEATORIO_LARGO
-JWT_EXPIRES_IN=8h
-
-# ─── Hardware IoT ───────────────────────────────────────────────────────────
-# Número total de LEDs en la tira WS2812B
-LED_COUNT=5
-# Pin GPIO en la Raspberry Pi (pin 18 = PWM0)
-LED_GPIO_PIN=18
-# Modo Simulación:
-# - CachyOS / PC Desarrollo: SIMULATE_HARDWARE=true (logs en consola, sin librerías nativas)
-# - Raspberry Pi (Hardware Real): SIMULATE_HARDWARE=false (controla pines GPIO reales vía rpi-ws281x-native)
-SIMULATE_HARDWARE=true
-
-# ─── Alexa Webhook ──────────────────────────────────────────────────────────
-# Application ID real de Alexa Developer Console (obligatorio en producción)
-ALEXA_SKILL_ID=amzn1.ask.skill.4e14d93d-0d45-48fe-a443-4fe2101e8f07
-
-================
 File: frontend/src/api/resources.ts
 ================
 import api from './axios';
@@ -11478,6 +11925,7 @@ import type {
   CreateWorkOrderPayload,
   Invoice,
   PurchaseOrder,
+  SupplierPurchaseResponsePayload,
   Supplier,
   UpdateAppointmentPayload,
   UpdateInvoicePayload,
@@ -11535,6 +11983,12 @@ export const purchasesApi = createCrudApi<
   UpdatePurchasePayload
 >('/purchases');
 
+export const supplierPortalApi = {
+  list: async () => (await api.get<PurchaseOrder[]>('/purchases/supplier-portal')).data,
+  respond: async (id: number, payload: SupplierPurchaseResponsePayload) =>
+    (await api.patch<PurchaseOrder>(`/purchases/supplier-portal/${id}`, payload)).data,
+};
+
 export const invoicesApi = createCrudApi<Invoice, CreateInvoicePayload, UpdateInvoicePayload>(
   '/invoices',
 );
@@ -11590,7 +12044,12 @@ export type ISODateString = string;
 
 export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
 export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
-export type PurchaseOrderStatus = 'PENDIENTE' | 'RECIBIDA' | 'CANCELADA';
+export type PurchaseOrderStatus =
+  | 'PENDIENTE'
+  | 'CONFIRMADA'
+  | 'RECIBIDA'
+  | 'CANCELADA'
+  | 'RECHAZADA';
 export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
 
 /** Respuesta de GET /users/lookup?role= (selectores de formularios). */
@@ -11785,6 +12244,7 @@ export interface PurchaseOrder {
   status: PurchaseOrderStatus;
   orderedAt: ISODateString;
   receivedAt: ISODateString | null;
+  expectedDeliveryAt: ISODateString | null;
   supplierId: number;
   supplier?: Supplier;
   items?: PurchaseOrderItem[];
@@ -11802,6 +12262,11 @@ export interface CreatePurchasePayload {
 export interface UpdatePurchasePayload {
   supplierId?: number;
   status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
+}
+
+export interface SupplierPurchaseResponsePayload {
+  status: 'CONFIRMADA' | 'RECHAZADA';
+  expectedDeliveryAt?: ISODateString;
 }
 
 // ── Facturas ────────────────────────────────────────────────
@@ -12212,6 +12677,554 @@ export default function FacturacionPage() {
     />
   );
 }
+
+================
+File: backend/src/inventory/inventory.controller.ts
+================
+import {
+  Controller,
+  Delete,
+  Get,
+  Patch,
+  Post,
+  Body,
+  Param,
+  ParseIntPipe,
+  HttpCode,
+  HttpStatus,
+  ParseFilePipe,
+  FileTypeValidator,
+  MaxFileSizeValidator,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { randomUUID } from 'node:crypto';
+import { extname, join } from 'node:path';
+import { InventoryService } from './inventory.service';
+import { CreatePartDto } from './dto/create-part.dto';
+import { CreateBoxDto } from './dto/create-box.dto';
+import { UpdatePartDto } from './dto/update-part.dto';
+import { UpdateBoxDto } from './dto/update-box.dto';
+import { Roles } from '../auth/decorators/auth.decorators';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+
+/**
+ * Inventario: solo personal del taller autenticado. Alexa no usa estas rutas
+ * (consume InventoryService directamente desde /api/webhook/alexa).
+ * Eliminar cajas o piezas queda reservado al GERENTE.
+ */
+@Controller('inventory')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.GERENTE, Role.BODEGUERO)
+export class InventoryController {
+  constructor(private readonly inventoryService: InventoryService) {}
+
+  // ── Boxes ─────────────────────────────────────────────────
+
+  /** GET /api/inventory/boxes → Lista todas las cajas con sus piezas */
+  @Get('boxes')
+  findAllBoxes() {
+    return this.inventoryService.findAllBoxes();
+  }
+
+  /** GET /api/inventory/boxes/:id → Detalle de una caja */
+  @Get('boxes/:id')
+  findOneBox(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.findOneBox(id);
+  }
+
+  /** POST /api/inventory/boxes → Crear nueva caja */
+  @Post('boxes')
+  @HttpCode(HttpStatus.CREATED)
+  createBox(@Body() dto: CreateBoxDto) {
+    return this.inventoryService.createBox(dto);
+  }
+
+  /** PATCH /api/inventory/boxes/:id → Actualizar una caja */
+  @Patch('boxes/:id')
+  updateBox(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateBoxDto,
+  ) {
+    return this.inventoryService.updateBox(id, dto);
+  }
+
+  /** DELETE /api/inventory/boxes/:id → Eliminar una caja vacía */
+  @Delete('boxes/:id')
+  @Roles(Role.GERENTE, Role.BODEGUERO)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removeBox(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.removeBox(id);
+  }
+
+  // ── Parts ─────────────────────────────────────────────────
+
+  /** GET /api/inventory/parts → Lista todas las piezas */
+  @Get('parts')
+  findAllParts() {
+    return this.inventoryService.findAllParts();
+  }
+
+  /** GET /api/inventory/parts/low-stock → Piezas bajo stock mínimo */
+  @Get('parts/low-stock')
+  getLowStockParts() {
+    return this.inventoryService.getLowStockParts();
+  }
+
+  /** GET /api/inventory/parts/:id → Detalle de una pieza */
+  @Get('parts/:id')
+  findOnePart(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.findOnePart(id);
+  }
+
+  /** POST /api/inventory/parts → Crear nueva pieza */
+  @Post('parts')
+  @HttpCode(HttpStatus.CREATED)
+  createPart(@Body() dto: CreatePartDto) {
+    return this.inventoryService.createPart(dto);
+  }
+
+  /** POST /api/inventory/parts/:id/image → Subir imagen de una pieza */
+  @Post('parts/:id/image')
+  @UseInterceptors(
+    FileInterceptor('image', {
+      storage: diskStorage({
+        destination: join(process.cwd(), 'uploads'),
+        filename: (_request, file, callback) => {
+          callback(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`);
+        },
+      }),
+    }),
+  )
+  uploadPartImage(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
+          new FileTypeValidator({
+            fileType: /^image\/(jpeg|png|gif|webp)$/,
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    return this.inventoryService.updatePartPhoto(id, `/uploads/${file.filename}`);
+  }
+
+  /** PATCH /api/inventory/parts/:id → Actualizar una pieza */
+  @Patch('parts/:id')
+  updatePart(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePartDto,
+  ) {
+    return this.inventoryService.updatePart(id, dto);
+  }
+
+  /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
+  @Delete('parts/:id')
+  @Roles(Role.GERENTE, Role.BODEGUERO)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  removePart(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.removePart(id);
+  }
+
+  /** GET /api/inventory/search/:query → Búsqueda de piezas (usado internamente y por Alexa) */
+  @Get('search/:query')
+  searchPart(@Param('query') query: string) {
+    return this.inventoryService.searchPartByName(query);
+  }
+}
+
+================
+File: backend/src/led/led-controller.service.ts
+================
+import { Inject, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { LED_DRIVER, LedDriver } from './drivers/led-driver';
+import { isHexColor } from './led-color';
+import { LedConfig, ledConfig } from './led.config';
+import { LedHardwareStatus, LedRequestError } from './led.types';
+
+/**
+ * Control de bajo nivel de la tira: encender, apagar y parpadear un LED.
+ * No sabe de hardware concreto (usa `LedDriver`) ni de Socket.io o temporizadores
+ * de auto-apagado (eso es `LedIndicatorService`).
+ */
+@Injectable()
+export class LedControllerService implements OnModuleDestroy {
+  private readonly logger = new Logger(LedControllerService.name);
+
+  constructor(
+    @Inject(LED_DRIVER) private readonly driver: LedDriver,
+    @Inject(ledConfig.KEY) private readonly config: LedConfig,
+  ) {}
+
+  onModuleDestroy(): void {
+    this.safely('liberar la tira', () => this.driver.shutdown());
+  }
+
+  /** Enciende un LED. Sin color usa `LED_FALLBACK_COLOR`. */
+  turnOn(ledIndex: number, colorHex?: string): void {
+    this.assertValidIndex(ledIndex);
+    const color = this.resolveColor(colorHex);
+    this.safely(`encender LED ${ledIndex}`, () => this.driver.setPixel(ledIndex, color));
+  }
+
+  turnOff(ledIndex: number): void {
+    this.assertValidIndex(ledIndex);
+    this.safely(`apagar LED ${ledIndex}`, () => this.driver.setPixel(ledIndex, null));
+  }
+
+  turnOffAll(): void {
+    this.safely('apagar todos los LEDs', () => this.driver.clear());
+  }
+
+  /**
+   * Parpadea `times` veces y deja el LED encendido.
+   * `isCancelled` permite abortar entre fases (p. ej. apagado manual o una
+   * señal más reciente sobre el mismo LED); al cancelar no se toca más el LED.
+   */
+  async blink(
+    ledIndex: number,
+    times: number,
+    colorHex?: string,
+    isCancelled: () => boolean = () => false,
+  ): Promise<void> {
+    this.assertValidIndex(ledIndex);
+    if (!Number.isInteger(times) || times < 0) {
+      throw new LedRequestError(`El número de parpadeos debe ser un entero no negativo: ${times}`);
+    }
+    const color = this.resolveColor(colorHex);
+    const { onMs, offMs } = this.config.blink;
+
+    for (let i = 0; i < times; i++) {
+      if (isCancelled()) return;
+      this.turnOn(ledIndex, color);
+      await this.sleep(onMs);
+      if (isCancelled()) return;
+      this.turnOff(ledIndex);
+      await this.sleep(offMs);
+    }
+
+    if (isCancelled()) return;
+    this.turnOn(ledIndex, color);
+  }
+
+  getStatus(): LedHardwareStatus {
+    return {
+      simulationMode: this.driver.simulated,
+      ledCount: this.config.ledCount,
+      gpioPin: this.config.gpioPin,
+    };
+  }
+
+  /** Color efectivo de una señal: el indicado o el de respaldo. Lanza si es inválido. */
+  resolveColor(colorHex?: string): string {
+    if (colorHex === undefined) return this.config.fallbackColor;
+    if (!isHexColor(colorHex)) {
+      throw new LedRequestError(`Color inválido "${colorHex}": se espera #RRGGBB`);
+    }
+    return colorHex;
+  }
+
+  assertValidIndex(ledIndex: number): void {
+    if (!Number.isInteger(ledIndex) || ledIndex < 0 || ledIndex >= this.config.ledCount) {
+      throw new LedRequestError(
+        `ledIndex ${ledIndex} fuera de rango (0-${this.config.ledCount - 1})`,
+      );
+    }
+  }
+
+  /** Un fallo del hardware se registra; nunca tumba una petición ni el proceso. */
+  private safely(action: string, operation: () => void): void {
+    try {
+      operation();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error de hardware al ${action}: ${message}`);
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}
+
+================
+File: backend/.env.example
+================
+# ─── Base de Datos ──────────────────────────────────────────────────────────
+# Debe coincidir con los valores del docker-compose.yml en la raíz
+POSTGRES_USER=geartrace
+POSTGRES_PASSWORD=geartrace_secret
+POSTGRES_DB=geartrace_db
+POSTGRES_PORT=5432
+POSTGRES_HOST=localhost
+
+# URL de conexión para Prisma ORM
+DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?schema=public"
+
+# ─── Aplicación NestJS ──────────────────────────────────────────────────────
+PORT=3000
+NODE_ENV=production
+
+# ─── CORS Origins ────────────────────────────────────────────────────────────
+# Orígenes adicionales separados por coma (ej. https://tu-app.vercel.app)
+# Ya se permiten por defecto: localhost, la red privada (192.168.x.x, 10.x, 172.16-31.x)
+# y túneles ngrok por HTTPS (*.ngrok-free.app, *.ngrok-free.dev, *.ngrok.app, *.ngrok.io).
+# El dominio de Vercel debe ir aquí de forma explícita (sin "/" final).
+CORS_ORIGIN=https://geartrace.vercel.app
+# Previews de Vercel (*.vercel.app). Desactivado: cualquiera puede publicar en vercel.app.
+CORS_ALLOW_VERCEL_PREVIEWS=false
+
+# ─── JWT Auth ───────────────────────────────────────────────────────────────
+# Genera un valor aleatorio de al menos 32 caracteres. Nunca uses un valor de ejemplo.
+JWT_SECRET=REEMPLAZAR_CON_UN_SECRETO_ALEATORIO_LARGO
+JWT_EXPIRES_IN=8h
+
+# ─── Hardware IoT ───────────────────────────────────────────────────────────
+# Número total de LEDs en la tira WS2812B
+LED_COUNT=5
+# Pin GPIO en la Raspberry Pi (pin 18 = PWM0)
+LED_GPIO_PIN=18
+# Modo Simulación:
+# - CachyOS / PC Desarrollo: SIMULATE_HARDWARE=true (logs en consola, sin librerías nativas)
+# - Raspberry Pi (Hardware Real): SIMULATE_HARDWARE=false (controla pines GPIO reales vía rpi-ws281x-native)
+SIMULATE_HARDWARE=true
+
+# ─── Alexa Webhook ──────────────────────────────────────────────────────────
+# Application ID real de Alexa Developer Console (obligatorio en producción)
+ALEXA_SKILL_ID=amzn1.ask.skill.4e14d93d-0d45-48fe-a443-4fe2101e8f07
+
+================
+File: backend/clinerules.md
+================
+# Contexto Técnico: GearTrace Backend
+
+## Tecnologías
+ NestJS | Prisma ORM | PostgreSQL 15 | Socket.io | Class-Validator
+
+## Arquitectura y Módulos
+- Auth: JWT, Guards (`JwtAuthGuard`, `RolesGuard`), Roles (`GERENTE`, `MECANICO`, `CLIENTE`).
+- Inventory: Entidades `Box` y `Part`.
+- Alexa: Controller `/api/webhook/alexa` que maneja `BuscarPiezaIntent`.
+- LED & WebSockets: `LedControllerService` (fallback simulación/GPIO real) y `LedGateway`.
+
+## Reglas de Desarrollo Backend
+1. Todas las rutas deben llevar el prefijo global `/api`.
+2. Validar payloads siempre con DTOs de `class-validator`.
+3. Al modificar `prisma/schema.prisma`, recordar generar la migración.
+4. Refactorizar métodos por partes sin romper las firmas existentes.
+5. CRUD por dominio en `src/<dominio>/` (`users`, `vehicles`, `appointments`, `work-orders`, `suppliers`, `purchases`, `invoices`): Module + Controller + Service con `PrismaService` + DTOs (`Update*Dto` vía `PartialType` de `@nestjs/mapped-types` cuando aplique).
+6. Declarar parámetros numéricos como `:id(\\d+)` + `ParseIntPipe` para no colisionar con rutas literales del mismo prefijo.
+7. Mapear errores de Prisma con `isPrismaError` (`src/common/prisma-errors.ts`): P2002 → 409 (único), P2003 → 409 (registros asociados).
+8. Toda modificación de stock ocurre en una `prisma.$transaction` junto con el registro que la origina: consumir repuesto (`UsedPart`, RF-INV-13) descuenta al insertarse; recibir pedido incrementa. Nunca en un `PATCH` genérico ni en el cierre de la orden (evita doble descuento). Descontar con `updateMany` condicionado a `quantity >= cantidad`; stock insuficiente → `ConflictException`.
+9. Nombres Prisma estables: modelos en inglés `PascalCase` singular, tablas `@@map` en `snake_case` plural, campos `@map` en `snake_case`. Renombrar modelos, tablas, campos o valores de enum SOLO por un cambio fuerte (cambia el significado o lo exige el ERS), nunca por estética o sinónimos.
+10. Todo renombrado lleva migración manual que conserve datos (`RENAME` de tabla, secuencia, PK, FKs e índices; `CASE` para valores de enum). Rechazar el `DROP`/`CREATE` que propone Prisma. Verificar que `prisma migrate diff --from-schema-datasource ... --to-schema-datamodel ...` quede vacío.
+11. Flujo de `WorkOrderStatus`: `EN_DIAGNOSTICO` → `EN_PROCESO` ⇄ `ESPERA_REPUESTOS` → `CONCLUIDO`. `CONCLUIDO` solo vía `PATCH /api/service/work-orders/:id/close` (no toca stock); una orden concluida no admite repuestos.
+12. Códigos de documento (`OT-`, `OC-`, `FAC-` + `YYYY-NNN`) los genera solo `nextDocumentNumber` (`src/common/document-number.ts`) dentro de la transacción de creación; nunca aceptarlos del cliente. Toda lectura/mutación de órdenes filtra con `workOrderScope(user)` (MECANICO solo las asignadas; fuera de alcance → 404).
+13. Las rutas legadas `/api/service/*` no duplican lógica: delegan en `VehiclesService`/`WorkOrdersService`. Nunca usar `include: { owner: true }` ni devolver `User` completo (expone `password`); usar `select` con campos públicos.
+14. CORS: un solo lugar, `src/common/cors.ts`, para HTTP y Socket.io. El dominio de Vercel va explícito en `CORS_ORIGIN`; ngrok solo por sufijo HTTPS. Nunca `includes(...)` sobre el hostname ni `*.vercel.app` abierto por defecto. El gateway usa solo `websocket` y valida `Origin` en `allowRequest`.
+15. Todo controlador nuevo o existente expuesto por HTTP lleva `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...)`, salvo login/registro y el webhook de Alexa. Borrados de catálogo (piezas, cajas) solo `GERENTE`.
+16. Los precios que se facturan se congelan al consumir (`UsedPart.unitPrice`); no recalcular facturas con el precio actual de `Part`.
+
+================
+File: backend/package.json
+================
+{
+  "name": "geartrace-backend",
+  "version": "0.1.0",
+  "description": "GearTrace - Backend API para Sistema de Gestión Logística de Mecánica",
+  "author": "GearTrace Team",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "prebuild": "prisma generate",
+    "build": "nest build",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.3.0",
+    "@nestjs/config": "^3.1.0",
+    "@nestjs/core": "^10.3.0",
+    "@nestjs/jwt": "^10.2.0",
+    "@nestjs/mapped-types": "^2.0.4",
+    "@nestjs/passport": "^10.0.3",
+    "@nestjs/platform-express": "^10.3.0",
+    "@nestjs/platform-socket.io": "^10.3.0",
+    "@nestjs/serve-static": "^4.0.2",
+    "@nestjs/websockets": "^10.3.0",
+    "@prisma/client": "^5.9.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "multer": "^2.5.0",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "prisma": "^5.9.0",
+    "reflect-metadata": "^0.2.1",
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.7.4"
+  },
+  "optionalDependencies": {
+    "rpi-ws281x-native": "^1.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.3.0",
+    "@nestjs/schematics": "^10.1.0",
+    "@nestjs/testing": "^10.3.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^20.11.5",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/socket.io": "^3.0.2",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "bcryptjs": "^3.0.3",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "jest": "^29.7.0",
+    "prettier": "^3.2.4",
+    "source-map-support": "^0.5.21",
+    "ts-jest": "^29.1.2",
+    "ts-loader": "^9.5.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.3.3"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  }
+}
+
+================
+File: frontend/src/api/axios.ts
+================
+import axios, { AxiosError } from 'axios';
+
+// Obtener la URL base desde la variable de entorno o usar fallback por defecto
+const rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/+$/, '');
+
+// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
+const baseURL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl}/api`;
+
+// Instancia de axios preconfigurada.
+// `ngrok-skip-browser-warning` (cualquier valor) evita que ngrok responda su
+// página HTML de advertencia en lugar del JSON. Se fija en la instancia, no en
+// axios.defaults, para no afectar a otras peticiones fuera de la API.
+const api = axios.create({
+  baseURL,
+  headers: {
+    'ngrok-skip-browser-warning': 'true',
+  },
+});
+
+// Interceptor para inyectar el token JWT en cada request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('geartrace_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Interceptor de respuesta:
+//  - HTML con status 200 = el túnel (ngrok) respondió una página en vez de la API.
+//    Se convierte en error explícito para no romper vistas que esperan JSON.
+//  - 401 = sesión expirada: limpia la sesión y avisa a AuthContext.
+api.interceptors.response.use(
+  (response) => {
+    const contentType = String(response.headers['content-type'] ?? '');
+    if (contentType.includes('text/html')) {
+      const message =
+        'El servidor respondió HTML en lugar de JSON (posible página de advertencia de ngrok o túnel caído). Revisa VITE_API_URL.';
+      return Promise.reject(
+        new AxiosError(message, 'ERR_UNEXPECTED_HTML', response.config, response.request, {
+          ...response,
+          data: { message },
+        }),
+      );
+    }
+    return response;
+  },
+  (error) => {
+    if (error.response?.status === 401) {
+      // Si el token expira, limpiamos localstorage y forzamos login
+      localStorage.removeItem('geartrace_token');
+      localStorage.removeItem('geartrace_user');
+      window.dispatchEvent(new Event('auth:unauthorized'));
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+
+================
+File: frontend/clinerules.md
+================
+# Contexto Técnico: GearTrace Frontend
+
+## Tecnologías
+ React 18 | Vite | TailwindCSS | Lucide Icons | Axios | Socket.io-client
+
+## Estructura
+- `/src/api/axios.ts`: Instancia con interceptor para adjuntar token JWT automáticamente.
+- `/src/api/resources.ts`: Servicios por dominio (`usersApi`, `vehiclesApi`, ...) creados con `createCrudApi` (`/src/api/crud.ts`); tipos en `/src/api/types.ts`.
+- `/src/contexts/AuthContext.tsx`: Contexto de autenticación global.
+- `/src/components/Dashboard.tsx`: Orquestador por rol. Los sockets viven en `GerenteDashboard`/`MecanicoDashboard` (`hw:status`, `led:activated`, `led:off`).
+- `/src/api/socket.ts`: `createHardwareSocket()`, única forma de abrir Socket.io (solo `websocket`).
+
+## Reglas de Desarrollo Frontend
+1. Usar componentes funcionales en TypeScript con tipos explícitos.
+2. Estilo glassmorphism con la paleta slate + brand naranja: usar las clases de `src/index.css` (`glass`, `glass-strong`, `glass-inset`, `glass-hover`, `glass-input`, `glass-overlay`, `btn-primary`, `btn-secondary`, `icon-badge`). Bordes `border-white/10`, divisores `divide-white/5`. No volver a `bg-slate-800/xx` + `border-slate-700` ni poner fondos opacos en contenedores de página.
+3. No hacer peticiones `fetch` directas; usar siempre la instancia de `@/api/axios`.
+4. Consumir los módulos del backend mediante los servicios de `@/api/resources`; las actualizaciones son PATCH (el backend no expone PUT).
+5. Rutas de la app en español (`/usuarios`, `/vehiculos`, `/ordenes-trabajo`, `/citas`, `/proveedores`, `/compras`, `/facturacion`). Sus roles se declaran SOLO en `ROUTE_ROLES` (`/src/routes/routeRoles.ts`); `App.tsx` (protección) y `Sidebar.tsx` (enlaces) los leen de ahí.
+6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío. Alta/edición con `createForm`/`editForm` (modal `ResourceFormModal`, campos declarativos) y acciones de negocio con `rowActions`; nunca `console.log` como placeholder. Eliminar solo se ofrece al `GERENTE`.
+7. Modales y paneles: capa `glass-overlay`, contenedor `glass-strong`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500` (`btn-primary`).
+8. Tras una acción que responde con menos relaciones que el listado (p. ej. `/close`), recargar la entidad con su `get` antes de reemplazarla en el estado local.
+9. Socket.io siempre vía `createHardwareSocket()` (`transports: ['websocket']`, sin `extraHeaders`). Axios siempre vía la instancia `api` (header `ngrok-skip-browser-warning` incluido); no modificar `axios.defaults`.
+10. Validaciones de formulario lanzan `UserInputError` (helpers de `utils/formValues.ts`); no usar casts para tipar valores de select: validar con type guards o búsquedas en la lista de valores permitidos.
 
 ================
 File: CLAUDE.md
@@ -12827,478 +13840,6 @@ que se solicite expresamente.
 8. No documentar secretos ni copiar valores reales de `.env`.
 
 ================
-File: backend/src/inventory/inventory.controller.ts
-================
-import {
-  Controller,
-  Delete,
-  Get,
-  Patch,
-  Post,
-  Body,
-  Param,
-  ParseIntPipe,
-  HttpCode,
-  HttpStatus,
-  ParseFilePipe,
-  FileTypeValidator,
-  MaxFileSizeValidator,
-  UploadedFile,
-  UseGuards,
-  UseInterceptors,
-} from '@nestjs/common';
-import { Role } from '@prisma/client';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { randomUUID } from 'node:crypto';
-import { extname, join } from 'node:path';
-import { InventoryService } from './inventory.service';
-import { CreatePartDto } from './dto/create-part.dto';
-import { CreateBoxDto } from './dto/create-box.dto';
-import { UpdatePartDto } from './dto/update-part.dto';
-import { UpdateBoxDto } from './dto/update-box.dto';
-import { Roles } from '../auth/decorators/auth.decorators';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-
-/**
- * Inventario: solo personal del taller autenticado. Alexa no usa estas rutas
- * (consume InventoryService directamente desde /api/webhook/alexa).
- * Eliminar cajas o piezas queda reservado al GERENTE.
- */
-@Controller('inventory')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
-export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
-
-  // ── Boxes ─────────────────────────────────────────────────
-
-  /** GET /api/inventory/boxes → Lista todas las cajas con sus piezas */
-  @Get('boxes')
-  findAllBoxes() {
-    return this.inventoryService.findAllBoxes();
-  }
-
-  /** GET /api/inventory/boxes/:id → Detalle de una caja */
-  @Get('boxes/:id')
-  findOneBox(@Param('id', ParseIntPipe) id: number) {
-    return this.inventoryService.findOneBox(id);
-  }
-
-  /** POST /api/inventory/boxes → Crear nueva caja */
-  @Post('boxes')
-  @HttpCode(HttpStatus.CREATED)
-  createBox(@Body() dto: CreateBoxDto) {
-    return this.inventoryService.createBox(dto);
-  }
-
-  /** PATCH /api/inventory/boxes/:id → Actualizar una caja */
-  @Patch('boxes/:id')
-  updateBox(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateBoxDto,
-  ) {
-    return this.inventoryService.updateBox(id, dto);
-  }
-
-  /** DELETE /api/inventory/boxes/:id → Eliminar una caja vacía */
-  @Delete('boxes/:id')
-  @Roles(Role.GERENTE)
-  @HttpCode(HttpStatus.NO_CONTENT)
-  removeBox(@Param('id', ParseIntPipe) id: number) {
-    return this.inventoryService.removeBox(id);
-  }
-
-  // ── Parts ─────────────────────────────────────────────────
-
-  /** GET /api/inventory/parts → Lista todas las piezas */
-  @Get('parts')
-  findAllParts() {
-    return this.inventoryService.findAllParts();
-  }
-
-  /** GET /api/inventory/parts/low-stock → Piezas bajo stock mínimo */
-  @Get('parts/low-stock')
-  getLowStockParts() {
-    return this.inventoryService.getLowStockParts();
-  }
-
-  /** GET /api/inventory/parts/:id → Detalle de una pieza */
-  @Get('parts/:id')
-  findOnePart(@Param('id', ParseIntPipe) id: number) {
-    return this.inventoryService.findOnePart(id);
-  }
-
-  /** POST /api/inventory/parts → Crear nueva pieza */
-  @Post('parts')
-  @HttpCode(HttpStatus.CREATED)
-  createPart(@Body() dto: CreatePartDto) {
-    return this.inventoryService.createPart(dto);
-  }
-
-  /** POST /api/inventory/parts/:id/image → Subir imagen de una pieza */
-  @Post('parts/:id/image')
-  @UseInterceptors(
-    FileInterceptor('image', {
-      storage: diskStorage({
-        destination: join(process.cwd(), 'uploads'),
-        filename: (_request, file, callback) => {
-          callback(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`);
-        },
-      }),
-    }),
-  )
-  uploadPartImage(
-    @Param('id', ParseIntPipe) id: number,
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }),
-          new FileTypeValidator({
-            fileType: /^image\/(jpeg|png|gif|webp)$/,
-          }),
-        ],
-      }),
-    )
-    file: Express.Multer.File,
-  ) {
-    return this.inventoryService.updatePartPhoto(id, `/uploads/${file.filename}`);
-  }
-
-  /** PATCH /api/inventory/parts/:id → Actualizar una pieza */
-  @Patch('parts/:id')
-  updatePart(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdatePartDto,
-  ) {
-    return this.inventoryService.updatePart(id, dto);
-  }
-
-  /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
-  @Delete('parts/:id')
-  @Roles(Role.GERENTE)
-  @HttpCode(HttpStatus.NO_CONTENT)
-  removePart(@Param('id', ParseIntPipe) id: number) {
-    return this.inventoryService.removePart(id);
-  }
-
-  /** GET /api/inventory/search/:query → Búsqueda de piezas (usado internamente y por Alexa) */
-  @Get('search/:query')
-  searchPart(@Param('query') query: string) {
-    return this.inventoryService.searchPartByName(query);
-  }
-}
-
-================
-File: backend/src/app.module.ts
-================
-import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'node:path';
-import { PrismaModule } from './prisma/prisma.module';
-import { InventoryModule } from './inventory/inventory.module';
-import { AlexaModule } from './alexa/alexa.module';
-import { LedModule } from './led/led.module';
-import { AuthModule } from './auth/auth.module';
-import { SearchLogModule } from './logs/search-log.module';
-import { ClientModule } from './client/client.module';
-import { ServiceModule } from './service/service.module';
-import { SupplierModule } from './supplier/supplier.module';
-import { UsersModule } from './users/users.module';
-import { VehiclesModule } from './vehicles/vehicles.module';
-import { AppointmentsModule } from './appointments/appointments.module';
-import { WorkOrdersModule } from './work-orders/work-orders.module';
-import { SuppliersModule } from './suppliers/suppliers.module';
-import { PurchasesModule } from './purchases/purchases.module';
-import { InvoicesModule } from './invoices/invoices.module';
-
-@Module({
-  imports: [
-    // Carga variables de entorno desde .env de forma global
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
-      validate: (config: Record<string, unknown>) => {
-        const nodeEnv = String(config.NODE_ENV ?? 'development');
-        const jwtSecret = String(config.JWT_SECRET ?? '').trim();
-        const databaseUrl = String(config.DATABASE_URL ?? '').trim();
-        const corsOrigin = String(config.CORS_ORIGIN ?? '').trim();
-
-        if (!jwtSecret) {
-          throw new Error('JWT_SECRET es obligatorio');
-        }
-        if (!databaseUrl) {
-          throw new Error('DATABASE_URL es obligatorio');
-        }
-        if (nodeEnv === 'production') {
-          if (jwtSecret.length < 32) {
-            throw new Error('JWT_SECRET debe tener al menos 32 caracteres en producción');
-          }
-          if (!corsOrigin) {
-            throw new Error('CORS_ORIGIN es obligatorio en producción');
-          }
-          if (jwtSecret === 'geartrace-super-secret-key-change-in-production-2024') {
-            throw new Error('JWT_SECRET no puede usar el valor de ejemplo en producción');
-          }
-        }
-        return config;
-      },
-    }),
-    ServeStaticModule.forRoot({
-      rootPath: join(process.cwd(), 'uploads'),
-      serveRoot: '/uploads',
-    }),
-
-    // Módulos de la aplicación
-    PrismaModule,
-    AuthModule,
-    InventoryModule,
-    AlexaModule,
-    LedModule,
-    SearchLogModule,
-    ClientModule,
-    ServiceModule,
-    SupplierModule,
-
-    // CRUD REST por dominio (Administración, SER, ABA, FIN)
-    UsersModule,
-    VehiclesModule,
-    AppointmentsModule,
-    WorkOrdersModule,
-    SuppliersModule,
-    PurchasesModule,
-    InvoicesModule,
-  ],
-})
-export class AppModule {}
-
-================
-File: backend/clinerules.md
-================
-# Contexto Técnico: GearTrace Backend
-
-## Tecnologías
- NestJS | Prisma ORM | PostgreSQL 15 | Socket.io | Class-Validator
-
-## Arquitectura y Módulos
-- Auth: JWT, Guards (`JwtAuthGuard`, `RolesGuard`), Roles (`GERENTE`, `MECANICO`, `CLIENTE`).
-- Inventory: Entidades `Box` y `Part`.
-- Alexa: Controller `/api/webhook/alexa` que maneja `BuscarPiezaIntent`.
-- LED & WebSockets: `LedControllerService` (fallback simulación/GPIO real) y `LedGateway`.
-
-## Reglas de Desarrollo Backend
-1. Todas las rutas deben llevar el prefijo global `/api`.
-2. Validar payloads siempre con DTOs de `class-validator`.
-3. Al modificar `prisma/schema.prisma`, recordar generar la migración.
-4. Refactorizar métodos por partes sin romper las firmas existentes.
-5. CRUD por dominio en `src/<dominio>/` (`users`, `vehicles`, `appointments`, `work-orders`, `suppliers`, `purchases`, `invoices`): Module + Controller + Service con `PrismaService` + DTOs (`Update*Dto` vía `PartialType` de `@nestjs/mapped-types` cuando aplique).
-6. Declarar parámetros numéricos como `:id(\\d+)` + `ParseIntPipe` para no colisionar con rutas literales del mismo prefijo.
-7. Mapear errores de Prisma con `isPrismaError` (`src/common/prisma-errors.ts`): P2002 → 409 (único), P2003 → 409 (registros asociados).
-8. Toda modificación de stock ocurre en una `prisma.$transaction` junto con el registro que la origina: consumir repuesto (`UsedPart`, RF-INV-13) descuenta al insertarse; recibir pedido incrementa. Nunca en un `PATCH` genérico ni en el cierre de la orden (evita doble descuento). Descontar con `updateMany` condicionado a `quantity >= cantidad`; stock insuficiente → `ConflictException`.
-9. Nombres Prisma estables: modelos en inglés `PascalCase` singular, tablas `@@map` en `snake_case` plural, campos `@map` en `snake_case`. Renombrar modelos, tablas, campos o valores de enum SOLO por un cambio fuerte (cambia el significado o lo exige el ERS), nunca por estética o sinónimos.
-10. Todo renombrado lleva migración manual que conserve datos (`RENAME` de tabla, secuencia, PK, FKs e índices; `CASE` para valores de enum). Rechazar el `DROP`/`CREATE` que propone Prisma. Verificar que `prisma migrate diff --from-schema-datasource ... --to-schema-datamodel ...` quede vacío.
-11. Flujo de `WorkOrderStatus`: `EN_DIAGNOSTICO` → `EN_PROCESO` ⇄ `ESPERA_REPUESTOS` → `CONCLUIDO`. `CONCLUIDO` solo vía `PATCH /api/service/work-orders/:id/close` (no toca stock); una orden concluida no admite repuestos.
-12. Códigos de documento (`OT-`, `OC-`, `FAC-` + `YYYY-NNN`) los genera solo `nextDocumentNumber` (`src/common/document-number.ts`) dentro de la transacción de creación; nunca aceptarlos del cliente. Toda lectura/mutación de órdenes filtra con `workOrderScope(user)` (MECANICO solo las asignadas; fuera de alcance → 404).
-13. Las rutas legadas `/api/service/*` no duplican lógica: delegan en `VehiclesService`/`WorkOrdersService`. Nunca usar `include: { owner: true }` ni devolver `User` completo (expone `password`); usar `select` con campos públicos.
-14. CORS: un solo lugar, `src/common/cors.ts`, para HTTP y Socket.io. El dominio de Vercel va explícito en `CORS_ORIGIN`; ngrok solo por sufijo HTTPS. Nunca `includes(...)` sobre el hostname ni `*.vercel.app` abierto por defecto. El gateway usa solo `websocket` y valida `Origin` en `allowRequest`.
-15. Todo controlador nuevo o existente expuesto por HTTP lleva `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...)`, salvo login/registro y el webhook de Alexa. Borrados de catálogo (piezas, cajas) solo `GERENTE`.
-16. Los precios que se facturan se congelan al consumir (`UsedPart.unitPrice`); no recalcular facturas con el precio actual de `Part`.
-
-================
-File: backend/package.json
-================
-{
-  "name": "geartrace-backend",
-  "version": "0.1.0",
-  "description": "GearTrace - Backend API para Sistema de Gestión Logística de Mecánica",
-  "author": "GearTrace Team",
-  "private": true,
-  "license": "MIT",
-  "scripts": {
-    "prebuild": "prisma generate",
-    "build": "nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "nest start",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:studio": "prisma studio",
-    "prisma:seed": "ts-node prisma/seed.ts",
-    "db:reset": "prisma migrate reset --force"
-  },
-  "dependencies": {
-    "@nestjs/common": "^10.3.0",
-    "@nestjs/config": "^3.1.0",
-    "@nestjs/core": "^10.3.0",
-    "@nestjs/jwt": "^10.2.0",
-    "@nestjs/mapped-types": "^2.0.4",
-    "@nestjs/passport": "^10.0.3",
-    "@nestjs/platform-express": "^10.3.0",
-    "@nestjs/platform-socket.io": "^10.3.0",
-    "@nestjs/serve-static": "^4.0.2",
-    "@nestjs/websockets": "^10.3.0",
-    "@prisma/client": "^5.9.0",
-    "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.1",
-    "multer": "^2.5.0",
-    "passport": "^0.7.0",
-    "passport-jwt": "^4.0.1",
-    "prisma": "^5.9.0",
-    "reflect-metadata": "^0.2.1",
-    "rxjs": "^7.8.1",
-    "socket.io": "^4.7.4"
-  },
-  "optionalDependencies": {
-    "rpi-ws281x-native": "^1.0.0"
-  },
-  "devDependencies": {
-    "@nestjs/cli": "^10.3.0",
-    "@nestjs/schematics": "^10.1.0",
-    "@nestjs/testing": "^10.3.0",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/express": "^4.17.21",
-    "@types/jest": "^29.5.12",
-    "@types/multer": "^2.3.0",
-    "@types/node": "^20.11.5",
-    "@types/passport-jwt": "^4.0.1",
-    "@types/socket.io": "^3.0.2",
-    "@typescript-eslint/eslint-plugin": "^6.19.0",
-    "@typescript-eslint/parser": "^6.19.0",
-    "bcryptjs": "^3.0.3",
-    "eslint": "^8.56.0",
-    "eslint-config-prettier": "^9.1.0",
-    "eslint-plugin-prettier": "^5.1.3",
-    "jest": "^29.7.0",
-    "prettier": "^3.2.4",
-    "source-map-support": "^0.5.21",
-    "ts-jest": "^29.1.2",
-    "ts-loader": "^9.5.1",
-    "ts-node": "^10.9.2",
-    "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.3.3"
-  },
-  "jest": {
-    "moduleFileExtensions": [
-      "js",
-      "json",
-      "ts"
-    ],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
-    "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
-    },
-    "collectCoverageFrom": [
-      "**/*.(t|j)s"
-    ],
-    "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
-  },
-  "prisma": {
-    "schema": "prisma/schema.prisma"
-  }
-}
-
-================
-File: frontend/src/api/axios.ts
-================
-import axios, { AxiosError } from 'axios';
-
-// Obtener la URL base desde la variable de entorno o usar fallback por defecto
-const rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/+$/, '');
-
-// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
-const baseURL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl}/api`;
-
-// Instancia de axios preconfigurada.
-// `ngrok-skip-browser-warning` (cualquier valor) evita que ngrok responda su
-// página HTML de advertencia en lugar del JSON. Se fija en la instancia, no en
-// axios.defaults, para no afectar a otras peticiones fuera de la API.
-const api = axios.create({
-  baseURL,
-  headers: {
-    'ngrok-skip-browser-warning': 'true',
-  },
-});
-
-// Interceptor para inyectar el token JWT en cada request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('geartrace_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Interceptor de respuesta:
-//  - HTML con status 200 = el túnel (ngrok) respondió una página en vez de la API.
-//    Se convierte en error explícito para no romper vistas que esperan JSON.
-//  - 401 = sesión expirada: limpia la sesión y avisa a AuthContext.
-api.interceptors.response.use(
-  (response) => {
-    const contentType = String(response.headers['content-type'] ?? '');
-    if (contentType.includes('text/html')) {
-      const message =
-        'El servidor respondió HTML en lugar de JSON (posible página de advertencia de ngrok o túnel caído). Revisa VITE_API_URL.';
-      return Promise.reject(
-        new AxiosError(message, 'ERR_UNEXPECTED_HTML', response.config, response.request, {
-          ...response,
-          data: { message },
-        }),
-      );
-    }
-    return response;
-  },
-  (error) => {
-    if (error.response?.status === 401) {
-      // Si el token expira, limpiamos localstorage y forzamos login
-      localStorage.removeItem('geartrace_token');
-      localStorage.removeItem('geartrace_user');
-      window.dispatchEvent(new Event('auth:unauthorized'));
-    }
-    return Promise.reject(error);
-  }
-);
-
-export default api;
-
-================
-File: frontend/clinerules.md
-================
-# Contexto Técnico: GearTrace Frontend
-
-## Tecnologías
- React 18 | Vite | TailwindCSS | Lucide Icons | Axios | Socket.io-client
-
-## Estructura
-- `/src/api/axios.ts`: Instancia con interceptor para adjuntar token JWT automáticamente.
-- `/src/api/resources.ts`: Servicios por dominio (`usersApi`, `vehiclesApi`, ...) creados con `createCrudApi` (`/src/api/crud.ts`); tipos en `/src/api/types.ts`.
-- `/src/contexts/AuthContext.tsx`: Contexto de autenticación global.
-- `/src/components/Dashboard.tsx`: Orquestador por rol. Los sockets viven en `GerenteDashboard`/`MecanicoDashboard` (`hw:status`, `led:activated`, `led:off`).
-- `/src/api/socket.ts`: `createHardwareSocket()`, única forma de abrir Socket.io (solo `websocket`).
-
-## Reglas de Desarrollo Frontend
-1. Usar componentes funcionales en TypeScript con tipos explícitos.
-2. Estilo glassmorphism con la paleta slate + brand naranja: usar las clases de `src/index.css` (`glass`, `glass-strong`, `glass-inset`, `glass-hover`, `glass-input`, `glass-overlay`, `btn-primary`, `btn-secondary`, `icon-badge`). Bordes `border-white/10`, divisores `divide-white/5`. No volver a `bg-slate-800/xx` + `border-slate-700` ni poner fondos opacos en contenedores de página.
-3. No hacer peticiones `fetch` directas; usar siempre la instancia de `@/api/axios`.
-4. Consumir los módulos del backend mediante los servicios de `@/api/resources`; las actualizaciones son PATCH (el backend no expone PUT).
-5. Rutas de la app en español (`/usuarios`, `/vehiculos`, `/ordenes-trabajo`, `/citas`, `/proveedores`, `/compras`, `/facturacion`). Sus roles se declaran SOLO en `ROUTE_ROLES` (`/src/routes/routeRoles.ts`); `App.tsx` (protección) y `Sidebar.tsx` (enlaces) los leen de ahí.
-6. Páginas de módulo en `/src/pages/`. Los listados usan `ResourceListPage` + `DataTable` (`/src/components/ui/`) con carga, error y vacío. Alta/edición con `createForm`/`editForm` (modal `ResourceFormModal`, campos declarativos) y acciones de negocio con `rowActions`; nunca `console.log` como placeholder. Eliminar solo se ofrece al `GERENTE`.
-7. Modales y paneles: capa `glass-overlay`, contenedor `glass-strong`; `role="dialog"`, `aria-modal`, cierre con Escape y clic fuera. Acento principal `brand-500` (`btn-primary`).
-8. Tras una acción que responde con menos relaciones que el listado (p. ej. `/close`), recargar la entidad con su `get` antes de reemplazarla en el estado local.
-9. Socket.io siempre vía `createHardwareSocket()` (`transports: ['websocket']`, sin `extraHeaders`). Axios siempre vía la instancia `api` (header `ngrok-skip-browser-warning` incluido); no modificar `axios.defaults`.
-10. Validaciones de formulario lanzan `UserInputError` (helpers de `utils/formValues.ts`); no usar casts para tipar valores de select: validar con type guards o búsquedas en la lista de valores permitidos.
-
-================
 File: backend/prisma/schema.prisma
 ================
 // ============================================================
@@ -13326,7 +13867,10 @@ datasource db {
 enum Role {
   GERENTE
   MECANICO
+  BODEGUERO
+  CONTADOR
   CLIENTE
+  PROVEEDOR
 }
 
 // Flujo SER: EN_DIAGNOSTICO → EN_PROCESO ⇄ ESPERA_REPUESTOS → CONCLUIDO
@@ -13347,8 +13891,10 @@ enum AppointmentStatus {
 
 enum PurchaseOrderStatus {
   PENDIENTE
+  CONFIRMADA
   RECIBIDA
   CANCELADA
+  RECHAZADA
 }
 
 enum InvoiceStatus {
@@ -13378,6 +13924,8 @@ model User {
   vehicles   Vehicle[]
   workOrders WorkOrder[] @relation("AssignedMechanic")
   invoices   Invoice[]   @relation("InvoiceClient")
+  supplierId Int?        @unique @map("supplier_id")
+  supplier   Supplier?   @relation("SupplierUser", fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@map("users")
 }
@@ -13589,6 +14137,7 @@ model Supplier {
   phone          String?         @db.VarChar(50)
   address        String?         @db.VarChar(255)
   purchaseOrders PurchaseOrder[]
+  user           User?           @relation("SupplierUser")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -13602,6 +14151,7 @@ model PurchaseOrder {
   status     PurchaseOrderStatus @default(PENDIENTE)
   orderedAt  DateTime            @default(now()) @map("ordered_at")
   receivedAt DateTime?           @map("received_at")
+  expectedDeliveryAt DateTime?   @map("expected_delivery_at")
   supplierId Int                 @map("supplier_id")
   supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   items      PurchaseOrderItem[]
@@ -13655,6 +14205,169 @@ model Invoice {
   @@index([clientId])
   @@index([status])
   @@map("invoices")
+}
+
+================
+File: backend/src/app.module.ts
+================
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'node:path';
+import { PrismaModule } from './prisma/prisma.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { AlexaModule } from './alexa/alexa.module';
+import { LedModule } from './led/led.module';
+import { AuthModule } from './auth/auth.module';
+import { SearchLogModule } from './logs/search-log.module';
+import { ClientModule } from './client/client.module';
+import { ServiceModule } from './service/service.module';
+import { SupplierModule } from './supplier/supplier.module';
+import { UsersModule } from './users/users.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
+import { AppointmentsModule } from './appointments/appointments.module';
+import { WorkOrdersModule } from './work-orders/work-orders.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
+import { PurchasesModule } from './purchases/purchases.module';
+import { InvoicesModule } from './invoices/invoices.module';
+
+@Module({
+  imports: [
+    // Carga variables de entorno desde .env de forma global
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '.env',
+      validate: (config: Record<string, unknown>) => {
+        const nodeEnv = String(config.NODE_ENV ?? 'development');
+        const jwtSecret = String(config.JWT_SECRET ?? '').trim();
+        const databaseUrl = String(config.DATABASE_URL ?? '').trim();
+        const corsOrigin = String(config.CORS_ORIGIN ?? '').trim();
+
+        if (!jwtSecret) {
+          throw new Error('JWT_SECRET es obligatorio');
+        }
+        if (!databaseUrl) {
+          throw new Error('DATABASE_URL es obligatorio');
+        }
+        if (nodeEnv === 'production') {
+          if (jwtSecret.length < 32) {
+            throw new Error('JWT_SECRET debe tener al menos 32 caracteres en producción');
+          }
+          if (!corsOrigin) {
+            throw new Error('CORS_ORIGIN es obligatorio en producción');
+          }
+          if (jwtSecret === 'geartrace-super-secret-key-change-in-production-2024') {
+            throw new Error('JWT_SECRET no puede usar el valor de ejemplo en producción');
+          }
+        }
+        return config;
+      },
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
+
+    // Módulos de la aplicación
+    PrismaModule,
+    AuthModule,
+    InventoryModule,
+    AlexaModule,
+    LedModule,
+    SearchLogModule,
+    ClientModule,
+    ServiceModule,
+    SupplierModule,
+
+    // CRUD REST por dominio (Administración, SER, ABA, FIN)
+    UsersModule,
+    VehiclesModule,
+    AppointmentsModule,
+    WorkOrdersModule,
+    SuppliersModule,
+    PurchasesModule,
+    InvoicesModule,
+  ],
+})
+export class AppModule {}
+
+================
+File: backend/src/main.ts
+================
+import { NestFactory } from '@nestjs/core';
+import { ValidationPipe, Logger } from '@nestjs/common';
+import { AppModule } from './app.module';
+import { CORS_ALLOWED_HEADERS, isAllowedOrigin } from './common/cors';
+
+async function bootstrap() {
+  const logger = new Logger('GearTrace');
+  const app = await NestFactory.create(AppModule);
+
+  // Prefijo global de la API REST
+  app.setGlobalPrefix('api');
+
+  // Validación automática de DTOs con class-validator
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,       // Elimina campos no declarados en el DTO
+      forbidNonWhitelisted: true,
+      transform: true,       // Transforma payloads al tipo del DTO
+    }),
+  );
+
+  // CORS: origen exacto de Vercel (CORS_ORIGIN), túneles ngrok (*.ngrok-free.app…),
+  // localhost y red local. Política compartida con el gateway Socket.io.
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
+      // Sin Error: responde sin cabeceras CORS (el navegador bloquea) en vez de un 500.
+      return callback(null, false);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
+    credentials: true,
+    // Cachea el preflight 10 min: evita un OPTIONS extra por petición a través de ngrok.
+    maxAge: 600,
+  });
+
+  const port = process.env.PORT ?? 3000;
+  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
+  await app.listen(port, '0.0.0.0');
+
+  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
+  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
+  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
+}
+
+bootstrap();
+
+================
+File: frontend/src/components/Dashboard.tsx
+================
+import { useAuth } from '../contexts/AuthContext';
+import ClienteDashboard from './ClienteDashboard';
+import GerenteDashboard from './GerenteDashboard';
+import MecanicoDashboard from './MecanicoDashboard';
+
+export default function Dashboard() {
+  const { user } = useAuth();
+
+  switch (user?.role) {
+    case 'GERENTE':
+      return <GerenteDashboard />;
+    case 'MECANICO':
+      return <MecanicoDashboard />;
+    case 'BODEGUERO':
+      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+    case 'CONTADOR':
+    case 'PROVEEDOR':
+      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+    case 'CLIENTE':
+      return <ClienteDashboard />;
+    default:
+      return <p className="text-slate-400">No se pudo determinar el rol del usuario.</p>;
+  }
 }
 
 ================
@@ -14012,80 +14725,6 @@ export class LedGateway
 }
 
 ================
-File: backend/src/main.ts
-================
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
-import { AppModule } from './app.module';
-import { CORS_ALLOWED_HEADERS, isAllowedOrigin } from './common/cors';
-
-async function bootstrap() {
-  const logger = new Logger('GearTrace');
-  const app = await NestFactory.create(AppModule);
-
-  // Prefijo global de la API REST
-  app.setGlobalPrefix('api');
-
-  // Validación automática de DTOs con class-validator
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,       // Elimina campos no declarados en el DTO
-      forbidNonWhitelisted: true,
-      transform: true,       // Transforma payloads al tipo del DTO
-    }),
-  );
-
-  // CORS: origen exacto de Vercel (CORS_ORIGIN), túneles ngrok (*.ngrok-free.app…),
-  // localhost y red local. Política compartida con el gateway Socket.io.
-  app.enableCors({
-    origin: (origin, callback) => {
-      if (isAllowedOrigin(origin)) return callback(null, true);
-      logger.warn(`⚠️ Petición bloqueada por CORS desde origen no autorizado: ${origin}`);
-      // Sin Error: responde sin cabeceras CORS (el navegador bloquea) en vez de un 500.
-      return callback(null, false);
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: CORS_ALLOWED_HEADERS,
-    credentials: true,
-    // Cachea el preflight 10 min: evita un OPTIONS extra por petición a través de ngrok.
-    maxAge: 600,
-  });
-
-  const port = process.env.PORT ?? 3000;
-  // Escuchar en 0.0.0.0 para responder tanto a localhost como a la IP de red local / Ngrok
-  await app.listen(port, '0.0.0.0');
-
-  logger.log(`🚀 GearTrace Backend corriendo en: http://localhost:${port}/api`);
-  logger.log(`🔌 Socket.io Gateway activo en el mismo puerto`);
-  logger.log(`🌍 Entorno: ${process.env.NODE_ENV ?? 'development'}`);
-}
-
-bootstrap();
-
-================
-File: frontend/src/components/Dashboard.tsx
-================
-import { useAuth } from '../contexts/AuthContext';
-import ClienteDashboard from './ClienteDashboard';
-import GerenteDashboard from './GerenteDashboard';
-import MecanicoDashboard from './MecanicoDashboard';
-
-export default function Dashboard() {
-  const { user } = useAuth();
-
-  switch (user?.role) {
-    case 'GERENTE':
-      return <GerenteDashboard />;
-    case 'MECANICO':
-      return <MecanicoDashboard />;
-    case 'CLIENTE':
-      return <ClienteDashboard />;
-    default:
-      return <p className="text-slate-400">No se pudo determinar el rol del usuario.</p>;
-  }
-}
-
-================
 File: frontend/src/components/Layout.tsx
 ================
 import { useState } from 'react';
@@ -14169,6 +14808,7 @@ import CitasPage from './pages/CitasPage'
 import ProveedoresPage from './pages/ProveedoresPage'
 import ComprasPage from './pages/ComprasPage'
 import FacturacionPage from './pages/FacturacionPage'
+import ProveedorPortalPage from './pages/ProveedorPortalPage'
 import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
@@ -14186,6 +14826,7 @@ const protectedRoutes: Record<AppRoute, ReactNode> = {
   compras: <ComprasPage />,
   // Facturación (FIN)
   facturacion: <FacturacionPage />,
+  'portal-proveedor': <ProveedorPortalPage />,
 }
 
 /** Rutas anteriores en inglés: redirigen a la ruta canónica en español. */

@@ -13,7 +13,14 @@ interface ManagedUser {
   isActive: boolean;
 }
 
-const roles: Role[] = ['GERENTE', 'MECANICO', 'CLIENTE'];
+const roles: Role[] = [
+  'GERENTE',
+  'MECANICO',
+  'BODEGUERO',
+  'CONTADOR',
+  'CLIENTE',
+  'PROVEEDOR',
+];
 
 export default function UsersManagement() {
   const { user } = useAuth();

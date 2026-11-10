@@ -14,6 +14,7 @@ import CitasPage from './pages/CitasPage'
 import ProveedoresPage from './pages/ProveedoresPage'
 import ComprasPage from './pages/ComprasPage'
 import FacturacionPage from './pages/FacturacionPage'
+import ProveedorPortalPage from './pages/ProveedorPortalPage'
 import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
@@ -31,6 +32,7 @@ const protectedRoutes: Record<AppRoute, ReactNode> = {
   compras: <ComprasPage />,
   // Facturación (FIN)
   facturacion: <FacturacionPage />,
+  'portal-proveedor': <ProveedorPortalPage />,
 }
 
 /** Rutas anteriores en inglés: redirigen a la ruta canónica en español. */

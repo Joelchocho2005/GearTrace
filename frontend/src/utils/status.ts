@@ -15,7 +15,10 @@ interface StatusMeta {
 export const ROLE_META: Record<Role, StatusMeta> = {
   GERENTE: { label: 'Gerente', tone: 'brand' },
   MECANICO: { label: 'Mecánico', tone: 'info' },
+  BODEGUERO: { label: 'Bodeguero', tone: 'warning' },
+  CONTADOR: { label: 'Contador', tone: 'success' },
   CLIENTE: { label: 'Cliente', tone: 'neutral' },
+  PROVEEDOR: { label: 'Proveedor', tone: 'neutral' },
 };
 
 export const WORK_ORDER_STATUS: Record<WorkOrderStatus, StatusMeta> = {
@@ -34,8 +37,10 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, StatusMeta> = {
 
 export const PURCHASE_STATUS: Record<PurchaseOrderStatus, StatusMeta> = {
   PENDIENTE: { label: 'Pendiente', tone: 'warning' },
+  CONFIRMADA: { label: 'Confirmada', tone: 'info' },
   RECIBIDA: { label: 'Recibida', tone: 'success' },
   CANCELADA: { label: 'Cancelada', tone: 'danger' },
+  RECHAZADA: { label: 'Rechazada', tone: 'danger' },
 };
 
 export const INVOICE_STATUS: Record<InvoiceStatus, StatusMeta> = {

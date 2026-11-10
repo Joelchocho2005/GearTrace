@@ -1,0 +1,13 @@
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'BODEGUERO';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'CONTADOR';
+ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'PROVEEDOR';
+
+ALTER TABLE "users"
+ADD COLUMN "supplier_id" INTEGER;
+
+CREATE UNIQUE INDEX "users_supplier_id_key" ON "users"("supplier_id");
+
+ALTER TABLE "users"
+ADD CONSTRAINT "users_supplier_id_fkey"
+FOREIGN KEY ("supplier_id") REFERENCES "suppliers"("id")
+ON DELETE SET NULL ON UPDATE CASCADE;

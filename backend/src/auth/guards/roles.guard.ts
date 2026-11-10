@@ -18,10 +18,8 @@ import { AuthenticatedUser } from '../auth.types';
  * IMPORTANTE: Siempre debe usarse DESPUÉS de JwtAuthGuard:
  *   @UseGuards(JwtAuthGuard, RolesGuard)
  *
- * Jerarquía de permisos GearTrace:
- *   GERENTE  → puede todo
- *   MECANICO → puede operar inventario y LEDs
- *   CLIENTE  → solo puede consultar
+ * Cada endpoint declara explícitamente sus roles permitidos. El gerente se
+ * incluye en las rutas administrativas donde corresponde.
  */
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -44,11 +42,6 @@ export class RolesGuard implements CanActivate {
 
     if (!user) {
       throw new ForbiddenException('Usuario no autenticado');
-    }
-
-    // GERENTE siempre tiene acceso a todo
-    if (user.role === Role.GERENTE) {
-      return true;
     }
 
     // Verificar si el rol del usuario está en la lista de roles permitidos

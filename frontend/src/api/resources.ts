@@ -17,6 +17,7 @@ import type {
   CreateWorkOrderPayload,
   Invoice,
   PurchaseOrder,
+  SupplierPurchaseResponsePayload,
   Supplier,
   UpdateAppointmentPayload,
   UpdateInvoicePayload,
@@ -73,6 +74,12 @@ export const purchasesApi = createCrudApi<
   CreatePurchasePayload,
   UpdatePurchasePayload
 >('/purchases');
+
+export const supplierPortalApi = {
+  list: async () => (await api.get<PurchaseOrder[]>('/purchases/supplier-portal')).data,
+  respond: async (id: number, payload: SupplierPurchaseResponsePayload) =>
+    (await api.patch<PurchaseOrder>(`/purchases/supplier-portal/${id}`, payload)).data,
+};
 
 export const invoicesApi = createCrudApi<Invoice, CreateInvoicePayload, UpdateInvoicePayload>(
   '/invoices',

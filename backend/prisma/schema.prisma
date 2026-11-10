@@ -23,7 +23,10 @@ datasource db {
 enum Role {
   GERENTE
   MECANICO
+  BODEGUERO
+  CONTADOR
   CLIENTE
+  PROVEEDOR
 }
 
 // Flujo SER: EN_DIAGNOSTICO → EN_PROCESO ⇄ ESPERA_REPUESTOS → CONCLUIDO
@@ -44,8 +47,10 @@ enum AppointmentStatus {
 
 enum PurchaseOrderStatus {
   PENDIENTE
+  CONFIRMADA
   RECIBIDA
   CANCELADA
+  RECHAZADA
 }
 
 enum InvoiceStatus {
@@ -75,6 +80,8 @@ model User {
   vehicles   Vehicle[]
   workOrders WorkOrder[] @relation("AssignedMechanic")
   invoices   Invoice[]   @relation("InvoiceClient")
+  supplierId Int?        @unique @map("supplier_id")
+  supplier   Supplier?   @relation("SupplierUser", fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@map("users")
 }
@@ -286,6 +293,7 @@ model Supplier {
   phone          String?         @db.VarChar(50)
   address        String?         @db.VarChar(255)
   purchaseOrders PurchaseOrder[]
+  user           User?           @relation("SupplierUser")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -299,6 +307,7 @@ model PurchaseOrder {
   status     PurchaseOrderStatus @default(PENDIENTE)
   orderedAt  DateTime            @default(now()) @map("ordered_at")
   receivedAt DateTime?           @map("received_at")
+  expectedDeliveryAt DateTime?   @map("expected_delivery_at")
   supplierId Int                 @map("supplier_id")
   supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   items      PurchaseOrderItem[]

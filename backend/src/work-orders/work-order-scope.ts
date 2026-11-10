@@ -1,4 +1,5 @@
 import { Prisma, Role } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
 
 /**
@@ -16,5 +17,7 @@ export function workOrderScope(user: AuthenticatedUser): Prisma.WorkOrderWhereIn
       return { mechanicId: user.id };
     case Role.CLIENTE:
       return { vehicle: { ownerId: user.id } };
+    default:
+      throw new ForbiddenException('Este rol no puede acceder a órdenes de trabajo');
   }
 }

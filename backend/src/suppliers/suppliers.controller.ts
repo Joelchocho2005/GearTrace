@@ -25,7 +25,7 @@ import { SuppliersService } from './suppliers.service';
  */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.GERENTE, Role.MECANICO)
+@Roles(Role.GERENTE, Role.BODEGUERO)
 export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}
 
@@ -51,7 +51,7 @@ export class SuppliersController {
   }
 
   @Delete(':id(\\d+)')
-  @Roles(Role.GERENTE)
+  @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.suppliersService.remove(id);
