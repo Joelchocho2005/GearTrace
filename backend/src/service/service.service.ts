@@ -7,6 +7,7 @@ import {
 import { WorkOrderStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { startedAtOnTransition, USE_CLOSE_ENDPOINT } from '../work-orders/work-order-rules';
 import { workOrderScope } from '../work-orders/work-order-scope';
 
 const WORK_ORDER_INCLUDE = { vehicle: true, parts: { include: { part: true } } } as const;
@@ -27,17 +28,13 @@ export class ServiceService {
       throw new ConflictException('Una orden concluida no puede cambiar de estado');
     }
     if (status === WorkOrderStatus.CONCLUIDO) {
-      throw new BadRequestException(
-        'Para concluir la orden usa PATCH /api/service/work-orders/:id/close',
-      );
+      throw new BadRequestException(USE_CLOSE_ENDPOINT);
     }
     return this.prisma.workOrder.update({
       where: { id },
       data: {
         status,
-        // Solo la primera vez: reanudar desde ESPERA_REPUESTOS no reinicia la fecha.
-        startedAt:
-          status === WorkOrderStatus.EN_PROCESO && !order.startedAt ? new Date() : undefined,
+        startedAt: startedAtOnTransition(status, order.startedAt),
       },
       include: WORK_ORDER_INCLUDE,
     });

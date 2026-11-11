@@ -1,6 +1,38 @@
 import { io, Socket } from 'socket.io-client';
+import { SOCKET_URL } from './config';
 
-const SOCKET_URL = (import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000').replace(/\/+$/, '');
+/** Eventos del gateway de LEDs (espejo de SOCKET_EVENTS en backend/src/led/led.types.ts). */
+export const HW_EVENTS = {
+  status: 'hw:status',
+  ledActivated: 'led:activated',
+  ledOff: 'led:off',
+  turnOff: 'led:turnOff',
+  test: 'led:test',
+} as const;
+
+/** Payload de `hw:status`. */
+export interface HardwareStatus {
+  simulationMode: boolean;
+  ledCount: number;
+  gpioPin: number;
+}
+
+/** Payload de `led:activated`. */
+export interface LedActivatedEvent {
+  ledIndex: number;
+  partName: string;
+  colorHex?: string;
+}
+
+/** Payload de `led:off` (`manual` = apagado por un usuario). */
+export interface LedOffEvent {
+  ledIndex: number;
+  manual?: boolean;
+}
+
+/** Color con el que se pinta un LED encendido sin `colorHex` y el de `led:test`. */
+export const LED_DEFAULT_COLOR = '#F97316';
+export const LED_TEST_COLOR = '#38BDF8';
 
 /**
  * Conexión Socket.io al gateway de hardware (LEDs), apta para ngrok.

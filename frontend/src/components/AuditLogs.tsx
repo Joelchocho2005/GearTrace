@@ -1,25 +1,18 @@
 import { useEffect, useState } from 'react';
 import { ClipboardList, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../api/axios';
-
-interface AuditLog {
-  id: number;
-  query: string;
-  found: boolean;
-  alexaResponse: string | null;
-  createdAt: string;
-}
+import { logsApi } from '../api/resources';
+import type { SearchLog } from '../api/types';
+import { formatDateTime } from '../utils/format';
 
 export default function AuditLogs() {
-  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [logs, setLogs] = useState<SearchLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const loadLogs = async () => {
       try {
-        const response = await api.get<AuditLog[]>('/logs');
-        setLogs(response.data);
+        setLogs(await logsApi.list());
       } catch (error) {
         console.error('Error al cargar los logs de auditoría', error);
         toast.error('No se pudieron cargar los registros de auditoría.');
@@ -73,7 +66,7 @@ export default function AuditLogs() {
                 {logs.map((log) => (
                   <tr key={log.id} className="transition-colors hover:bg-white/5">
                     <td className="whitespace-nowrap px-6 py-4 text-slate-400">
-                      {new Date(log.createdAt).toLocaleString('es-ES')}
+                      {formatDateTime(log.createdAt)}
                     </td>
                     <td className="px-6 py-4 font-medium text-white">{log.query}</td>
                     <td className="px-6 py-4">

@@ -87,6 +87,9 @@ const createForm: CreateFormConfig = {
 };
 
 const isPending = (order: PurchaseOrder) => order.status === 'PENDIENTE';
+/** Pendiente o confirmado por el proveedor: aún se puede recibir o cancelar. */
+const RECEIVABLE_STATUSES: PurchaseOrder['status'][] = ['PENDIENTE', 'CONFIRMADA'];
+const isReceivable = (order: PurchaseOrder) => RECEIVABLE_STATUSES.includes(order.status);
 
 const editForm: EditFormConfig<PurchaseOrder> = {
   title: (order) => `Editar ${order.number}`,
@@ -100,7 +103,7 @@ const editForm: EditFormConfig<PurchaseOrder> = {
 };
 
 function rowActions(order: PurchaseOrder): ResourceRowAction[] {
-  if (!isPending(order)) return [];
+  if (!isReceivable(order)) return [];
   return [
     {
       key: 'receive',
@@ -129,7 +132,7 @@ function rowActions(order: PurchaseOrder): ResourceRowAction[] {
   ];
 }
 
-/** /compras — solo GERENTE. Recibir un pedido es la única vía que suma stock. */
+/** /compras — GERENTE y BODEGUERO. Recibir un pedido es la única vía que suma stock. */
 export default function ComprasPage() {
   return (
     <ResourceListPage

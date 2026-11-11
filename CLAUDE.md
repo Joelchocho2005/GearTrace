@@ -9,7 +9,8 @@ automotriz. Incluye:
   WS2812B en Raspberry Pi.
 - Frontend React 18 + Vite + TypeScript + TailwindCSS.
 - Integración de búsqueda de repuestos mediante Alexa.
-- Roles de aplicación: `GERENTE`, `MECANICO` y `CLIENTE`.
+- Roles de aplicación: `GERENTE`, `MECANICO`, `BODEGUERO`, `CONTADOR`, `CLIENTE`
+  y `PROVEEDOR`.
 
 El backend se ejecuta localmente o en una Raspberry Pi y puede exponerse con
 Ngrok. El frontend puede ejecutarse localmente o desplegarse en Vercel.
@@ -101,7 +102,11 @@ Fuente: `backend/clinerules.md`.
 - `auth`: login, registro público de clientes, administración de usuarios y
   roles.
 - `inventory`: cajas (`Box`), piezas (`Part`, con `unitPrice`), stock, imágenes
-  y búsqueda. Protegido con JWT: `GERENTE`/`MECANICO`; borrar solo `GERENTE`.
+  y búsqueda. Protegido con JWT: `GERENTE`/`BODEGUERO` (también para borrar).
+  `GET /api/inventory/search/:query` y `POST /api/inventory/parts/:id/locate`
+  (enciende el LED de la caja, igual que Alexa; responde `202` sin esperar la
+  secuencia) también admiten `MECANICO`. Borrar una pieza usada en órdenes o
+  pedidos → 409.
   Alexa no usa estas rutas (llama a `InventoryService` directamente).
 - `client`: vehículos, citas y órdenes visibles para el cliente autenticado.
 - `service`: CRUD de vehículos y gestión de órdenes de trabajo.
@@ -110,7 +115,14 @@ Fuente: `backend/clinerules.md`.
 - `users`, `vehicles`, `appointments`, `work-orders`, `suppliers`,
   `purchases`, `invoices`: CRUD REST por dominio (`GET`, `GET :id`, `POST`,
   `PATCH :id`, `DELETE :id`). Ver "CRUD por dominio".
-- `common/prisma-errors.ts`: helper `isPrismaError(error, 'P2002' | 'P2003')`.
+- `common/prisma-errors.ts`: `isPrismaError(error, 'P2002' | 'P2003')` y
+  `rethrowAsConflict(error, { P2002?: msg, P2003?: msg })` (409 o relanza).
+- `common/selects.ts` (`USER_SUMMARY`, `WORK_ORDER_SUMMARY`), `common/password.ts`
+  (bcrypt: `hashPassword`, `hashOptionalPassword`, `verifyPassword`),
+  `common/dates.ts` (`toFutureDate`), `common/validation-messages.ts`
+  (`ROLE_VALIDATION_MESSAGE`). Usarlos en vez de repetir la lógica.
+- `users/supplier-link.ts`: `assertSupplierLink(prisma, role, supplierId)`,
+  regla única del vínculo usuario `PROVEEDOR` ↔ proveedor (users y auth).
 - `alexa`: webhook `/api/webhook/alexa` para búsqueda de piezas. Las
   respuestas a consultas usan `buildAnswer` (agrega la frase `FOLLOW_UP` y
   deja la sesión abierta); toda respuesta con sesión abierta lleva
@@ -121,8 +133,14 @@ Fuente: `backend/clinerules.md`.
 ### Backend: autorización
 
 - `GERENTE`: acceso administrativo y operativo completo.
-- `MECANICO`: inventario, proveedores, hardware y **solo las órdenes de
-  trabajo asignadas a él** (lectura y operación; ver `workOrderScope`).
+- `MECANICO`: vehículos, citas, historial de búsquedas, búsqueda de repuestos
+  (web y Alexa; no el CRUD de inventario), hardware y **solo las
+  órdenes de trabajo asignadas a él** (lectura y operación; ver
+  `workOrderScope`).
+- `BODEGUERO`: inventario, proveedores, reposición y compras.
+- `CONTADOR`: facturación.
+- `PROVEEDOR`: solo los pedidos de su proveedor (`/api/purchases/supplier-portal`);
+  debe estar vinculado (`supplierId`).
 - `CLIENTE`: únicamente sus vehículos, sus citas y sus órdenes.
 - El registro público fuerza el rol `CLIENTE`.
 - La ruta administrativa para crear usuarios es:
@@ -140,8 +158,8 @@ Fuente: `backend/clinerules.md`.
 - `GET /api/auth/users` (`GERENTE`)
 - `POST /api/auth/admin/create` (`GERENTE`)
 - `PATCH /api/auth/users/:id` (`GERENTE`)
-- `PATCH /api/auth/users/:id/role` (`GERENTE`)
-- `PATCH /api/auth/users/:id/toggle` (`GERENTE`)
+- `PATCH /api/auth/users/:id/role` (`GERENTE`, body `ChangeRoleDto { role }`)
+- `PATCH /api/auth/users/:id/toggle` (`GERENTE`, body `ToggleActiveDto { isActive }`)
 - `GET /api/users/lookup?role=CLIENTE|MECANICO|GERENTE` (`GERENTE`, `MECANICO`):
   usuarios activos de un rol (id, nombre, correo) para selectores.
 
@@ -150,9 +168,14 @@ Fuente: `backend/clinerules.md`.
 - `GET /api/client/vehicles`
 - `GET /api/client/appointments`
 - `POST /api/client/appointments`
+- `PATCH /api/client/appointments/:id` (reprogramar: `scheduledAt` futura,
+  `reason` opcional; la cita vuelve a `AGENDADA`)
+- `PATCH /api/client/appointments/:id/cancel`
 - `GET /api/client/work-orders`
 
 `GET /api/client/appointments` incluye la OT generada (`workOrder`).
+Reprogramar o cancelar solo aplica a citas propias (ajena → 404) en
+`AGENDADA`/`CONFIRMADA` (si no → 409).
 
 #### Servicio
 
@@ -204,7 +227,10 @@ transacción. Solo citas `AGENDADA`/`CONFIRMADA` y sin OT previa (409).
 - `POST /api/suppliers/purchase-orders/:id/receive`
 
 La creación de pedidos valida que las piezas estén bajo `minStock`. La
-recepción incrementa el stock dentro de una transacción.
+recepción incrementa el stock dentro de una transacción y acepta pedidos
+`PENDIENTE` o `CONFIRMADA` (confirmado por el proveedor en su portal;
+`RECEIVABLE_PURCHASE_STATUSES`). Un pedido `CONFIRMADA` solo admite
+`PATCH /api/purchases/:id` con `{ status: 'CANCELADA' }`.
 
 #### CRUD por dominio
 
@@ -218,12 +244,13 @@ comparten prefijo (p. ej. `/api/suppliers/low-stock`).
 | `/api/vehicles` | `GERENTE`, `MECANICO` | `GERENTE` | RF-SER-01: placa normalizada (trim + mayúsculas) y única sin distinguir mayúsculas; dueño debe ser `CLIENTE` activo; 409 si tiene órdenes o citas. |
 | `/api/appointments` (+ `POST /:id/work-order`) | `GERENTE`, `MECANICO` | `GERENTE` | Fecha futura al crear o reprogramar; citas `COMPLETADA`/`CANCELADA` no se editan. Incluye `workOrder` (OT generada). |
 | `/api/work-orders` (+ `POST /:id/parts`) | `GERENTE`, `MECANICO` | `GERENTE` | RF-INV-13: `POST /:id/parts` descuenta stock (ver arriba). RF-SER-05: `number` lo genera el servidor (`OT-YYYY-NNN`, no se acepta en el body). MECANICO solo ve/opera sus órdenes (ajenas → 404), se autoasigna al crear y no puede asignar a otro (403). Acepta `mileage`. `PATCH` no acepta `CONCLUIDO` (usar `/api/service/work-orders/:id/close`); órdenes concluidas no se editan ni borran. |
-| `/api/suppliers` | `GERENTE`, `MECANICO` | `GERENTE` | `GET` conserva `_count.purchaseOrders`; 409 si tiene pedidos. |
-| `/api/purchases` | `GERENTE`, `MECANICO` | `GERENTE` | `number` lo genera el servidor (`OC-YYYY-NNN`, no se acepta en el body). `POST` delega en `SupplierService.createPurchaseOrder` (piezas en o bajo `minStock`, sin repetir); solo pedidos `PENDIENTE` se editan; `RECIBIDA` solo vía `/receive`; recibidos no se borran. |
-| `/api/invoices` | `GERENTE` | `GERENTE` | `number` lo genera el servidor (`FAC-YYYY-NNN`). Solo órdenes `CONCLUIDO`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost ??` suma de repuestos (`UsedPart.unitPrice × cantidad`), `total = subtotal + tax`; pagadas no se editan ni borran. |
+| `/api/suppliers` | `GERENTE`, `BODEGUERO` | `GERENTE`, `BODEGUERO` | `GET` conserva `_count.purchaseOrders`; 409 si tiene pedidos. |
+| `/api/purchases` | `GERENTE`, `BODEGUERO` | `GERENTE`, `BODEGUERO` | `number` lo genera el servidor (`OC-YYYY-NNN`, no se acepta en el body). `POST` delega en `SupplierService.createPurchaseOrder` (piezas en o bajo `minStock`, sin repetir); solo pedidos `PENDIENTE` se editan (un `CONFIRMADA` solo se cancela); `RECIBIDA` solo vía `/receive`; recibidos no se borran. |
+| `/api/invoices` (+ `GET /billable-orders`) | `GERENTE`, `CONTADOR` | `GERENTE`, `CONTADOR` | `GET /billable-orders`: órdenes `CONCLUIDO` sin factura (el CONTADOR no accede a `/api/work-orders`). `number` lo genera el servidor (`FAC-YYYY-NNN`). Solo órdenes `CONCLUIDO`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost ??` suma de repuestos (`UsedPart.unitPrice × cantidad`), `total = subtotal + tax`; pagadas no se editan ni borran. |
 
 Las rutas legadas `/api/service/vehicles*` y `/api/service/work-orders*`
-siguen activas porque las usa el frontend, pero **delegan** en
+siguen activas por compatibilidad (el frontend solo usa
+`PATCH /api/service/work-orders/:id/close`; el resto va por los CRUD), pero **delegan** en
 `VehiclesService` y `WorkOrdersService` (misma validación de placa, mismo
 generador de código y mismo alcance por mecánico). `ServiceService` solo
 conserva las transiciones estado/diagnóstico/cierre, también con
@@ -237,6 +264,8 @@ conserva las transiciones estado/diagnóstico/cierre, también con
   crea el registro. `OT` → órdenes de trabajo (`nextWorkOrderNumber` es su
   envoltorio), `OC` → órdenes de compra, `FAC` → facturas. El cliente nunca
   envía `number` (la validación lo rechaza).
+- `src/work-orders/work-order-rules.ts`: `startedAtOnTransition` y
+  `USE_CLOSE_ENDPOINT`, compartidos por `WorkOrdersService` y `ServiceService`.
 - `src/work-orders/work-order-scope.ts`: `workOrderScope(user)` → GERENTE
   `{}`, MECANICO `{ mechanicId }`, CLIENTE `{ vehicle.ownerId }`. Toda
   consulta o mutación de órdenes por id usa `findFirst({ id, ...scope })`.
@@ -336,8 +365,11 @@ Fuente: `frontend/clinerules.md`.
   combinaciones manuales de `bg-slate-800/xx` + `border-slate-700`.
 - No usar `fetch`; todas las peticiones HTTP deben usar la instancia `api` de
   `frontend/src/api/axios.ts`.
-- Axios agrega automáticamente el JWT desde `localStorage` usando la clave
-  `geartrace_token`.
+- Axios agrega automáticamente el JWT desde `localStorage`; las claves solo
+  las conoce `src/api/session.ts` (`getToken`, `saveToken`, `clearSession`,
+  `AUTH_UNAUTHORIZED_EVENT`). Las URLs del backend salen de
+  `src/api/config.ts` (`API_BASE_URL`, `SOCKET_URL`, `BACKEND_ORIGIN` y
+  `backendAssetUrl(path)` para fotos en `/uploads/...`).
 - La instancia `api` envía `ngrok-skip-browser-warning: true` (en la
   instancia, no en `axios.defaults`). Si una respuesta llega como
   `text/html` (advertencia de ngrok o túnel caído) se rechaza como error
@@ -353,12 +385,23 @@ Fuente: `frontend/clinerules.md`.
   `remove`.
 - `src/api/resources.ts`: `usersApi`, `vehiclesApi`, `appointmentsApi`,
   `workOrdersApi`, `suppliersApi`, `purchasesApi`, `invoicesApi`, más
-  `clientApi` (endpoints `/client/*`), `inventoryApi.searchParts`
-  (`/inventory/search/:query`, máx. 5), `workOrderActionsApi` (`addUsedPart`
+  `authApi` (`login`, `register`, `me`, `listUsers`, `adminCreate`,
+  `changeRole`, `setActive`), `logsApi`, `clientApi` (endpoints `/client/*`,
+  incluye `rescheduleAppointment` y `cancelAppointment`),
+  `invoicesApi.billableOrders`,
+  `inventoryApi` (`listBoxes`, `createBox`, `updateBox`, `removeBox`,
+  `listParts`, `createPart`, `updatePart` con PATCH, `removePart`,
+  `uploadPartImage` (multipart `image`), `locatePart`, `searchParts` →
+  `/inventory/search/:query` máx. 5, `lowStockParts` →
+  `/suppliers/low-stock`, que devuelve piezas completas con `minStock` y
+  `code`), `workOrderActionsApi` (`addUsedPart`
   → `POST /work-orders/:id/parts`; `conclude` → `/service/.../close`) e
   `inventoryFlowsApi` (recibir pedido).
-- Las vistas nuevas deben consumir estos servicios en lugar de llamar
-  `api.get(...)` con rutas sueltas.
+- Las vistas deben consumir estos servicios en lugar de llamar
+  `api.get(...)` con rutas sueltas; ningún componente importa `api/axios`.
+- Errores: `getApiErrorMessage(error, fallback)` (`api/errors.ts`), sin
+  `catch (error: any)`.
+- Roles: lista única `ROLES` y tipo `Role` en `contexts/AuthContext.tsx`.
 
 ### Frontend: autenticación y rutas
 
@@ -373,6 +416,10 @@ Fuente: `frontend/clinerules.md`.
 `RoleProtectedRoute.tsx` redirige a `/dashboard` cuando el usuario no tiene un
 rol permitido.
 
+Rutas públicas: `/login` y `/registro` (`Register.tsx`, alta de clientes con
+`authApi.register`; el backend fuerza `CLIENTE` y la sesión inicia al
+registrarse).
+
 `src/routes/routeRoles.ts` (`ROUTE_ROLES`) es la fuente única de roles por
 ruta: `App.tsx` la usa para envolver cada página con `RoleProtectedRoute` y
 `Sidebar.tsx` para mostrar u ocultar enlaces. Nunca declarar roles de una ruta
@@ -382,14 +429,15 @@ en otro lugar.
 | --- | --- | --- |
 | `/dashboard` | autenticados | `Dashboard` |
 | `/logs` | `GERENTE`, `MECANICO` | `AuditLogs` |
-| `/inventory` | `GERENTE`, `MECANICO` | `InventoryList` |
+| `/inventory` | `GERENTE`, `BODEGUERO` | `InventarioPage` (pestañas Piezas = `InventoryList` con Ubicar / foto / editar / eliminar, y Cajas = CRUD de `Box`) |
 | `/usuarios` | `GERENTE` | `UsuariosPage` (pestañas Listado / Gestión de accesos = `UsersList`) |
 | `/vehiculos` | `GERENTE`, `MECANICO` | `VehiculosPage` |
 | `/ordenes-trabajo` | `GERENTE`, `MECANICO` | `OrdenesTrabajoPage` (pestañas Tablero = `WorkOrdersList` por defecto / Listado) |
-| `/citas` | `GERENTE`, `MECANICO`, `CLIENTE` | `CitasPage` (el CLIENTE usa `/api/client/appointments`) |
-| `/proveedores` | `GERENTE` | `ProveedoresPage` (pestañas Listado / Reposición = `SuppliersList`) |
-| `/compras` | `GERENTE` | `ComprasPage` |
-| `/facturacion` | `GERENTE` | `FacturacionPage` |
+| `/citas` | `GERENTE`, `MECANICO`, `CLIENTE` | `CitasPage` (el CLIENTE usa `/api/client/appointments`: solicita, reprograma y cancela) |
+| `/proveedores` | `GERENTE`, `BODEGUERO` | `ProveedoresPage` (pestañas Listado / Reposición = `SuppliersList`) |
+| `/compras` | `GERENTE`, `BODEGUERO` | `ComprasPage` |
+| `/facturacion` | `GERENTE`, `CONTADOR` | `FacturacionPage` |
+| `/portal-proveedor` | `PROVEEDOR` | `ProveedorPortalPage` |
 
 Las rutas antiguas `/users`, `/work-orders`, `/suppliers` y `/billing`
 redirigen a su equivalente en español (`legacyRedirects`).
@@ -413,8 +461,9 @@ redirigen a su equivalente en español (`legacyRedirects`).
 - `rowActions` (`ResourceRowAction`, con `label` como tooltip y `shortLabel`
   visible): acciones de negocio por fila con
   confirmación opcional; `run()` devuelve el mensaje de éxito y el listado se
-  recarga. Usadas para: confirmar cita y generar OT (Citas), recibir y
-  cancelar pedido (Compras), marcar factura pagada (Facturación).
+  recarga. Usadas para: confirmar cita y generar OT (Citas), cancelar cita
+  propia (Citas, CLIENTE), recibir y cancelar pedido `PENDIENTE`/`CONFIRMADA`
+  (Compras), marcar factura pagada (Facturación).
 - Tras crear, editar o ejecutar una acción, el listado se recarga (las
   respuestas pueden traer menos relaciones que el `list`).
 - `utils/formValues.ts`: `text`, `optionalText`, `optionalNumber`,
@@ -478,7 +527,15 @@ Editar y Eliminar quedan como íconos.
 
 - `GERENTE` → `GerenteDashboard.tsx`
 - `MECANICO` → `MecanicoDashboard.tsx`
+- `BODEGUERO` → `BodegueroDashboard.tsx` (cajas, piezas, stock bajo, pedidos
+  por recibir)
+- `CONTADOR` → `ContadorDashboard.tsx` (órdenes por facturar, por cobrar,
+  cobrado)
+- `PROVEEDOR` → `ProveedorDashboard.tsx` (pedidos por responder; responde en
+  `/portal-proveedor`)
 - `CLIENTE` → `ClienteDashboard.tsx`
+
+Las métricas usan `components/ui/StatCard.tsx` (`StatCard`, `StatGrid`).
 
 #### Gerente
 
@@ -494,7 +551,8 @@ general del hardware y órdenes activas. Mantiene una conexión Socket.io
 - Ejecutar `Test`.
 - Apagar LEDs.
 - Ver sus órdenes asignadas.
-- Buscar repuestos por nombre o código.
+- Buscar repuestos por nombre o código y "Ubicar" (enciende el LED de su caja
+  vía `inventoryApi.locatePart`).
 
 La conexión se crea siempre con `createHardwareSocket()` de
 `src/api/socket.ts`:
@@ -510,14 +568,16 @@ io(VITE_SOCKET_URL, {
 ```
 
 No usar `extraHeaders`: el navegador no envía headers propios en el
-handshake WebSocket.
+handshake WebSocket. Los nombres de eventos se usan vía `HW_EVENTS` (espejo
+de `SOCKET_EVENTS` en `backend/src/led/led.types.ts`).
 
 #### Cliente
 
 `ClienteDashboard.tsx` no abre WebSockets y no muestra hardware, LEDs ni
 inventario global. Solo permite:
 
-- Consultar sus vehículos.
+- Consultar sus vehículos (sección `#vehicles`, enlace "Mis vehículos" del
+  menú; el componente hace scroll al ancla).
 - Ver el historial y progreso de sus órdenes.
 - Consultar el diagnóstico.
 - Solicitar una cita.
@@ -560,10 +620,15 @@ Raspberry Pi. No hardcodear una URL temporal de Ngrok en componentes.
 cd backend
 npm install
 npm run start:dev
-npm run build
+npm run build        # usa tsconfig.build.json: solo src/ → dist/main.js
+npm run start:prod   # node dist/main
 npm test
 npm run format
 ```
+
+`tsconfig.json` incluye `prisma/` (para el editor y `ts-node prisma/seed.ts`);
+el build usa `tsconfig.build.json`, que compila solo `src/` para que la
+entrada quede en `dist/main.js` (la usan `start:prod` y el README de la Pi).
 
 También se puede levantar PostgreSQL con:
 

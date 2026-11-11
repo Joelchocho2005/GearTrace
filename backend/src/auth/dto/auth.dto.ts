@@ -1,5 +1,6 @@
-import { IsEmail, IsInt, IsString, MinLength, MaxLength, IsEnum, IsOptional, Min } from 'class-validator';
+import { IsBoolean, IsEmail, IsInt, IsString, MinLength, MaxLength, IsEnum, IsOptional, Min } from 'class-validator';
 import { Role } from '@prisma/client';
+import { ROLE_VALIDATION_MESSAGE } from '../../common/validation-messages';
 
 export class LoginDto {
   @IsEmail({}, { message: 'El correo electrónico no es válido' })
@@ -24,11 +25,23 @@ export class RegisterDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role?: Role;
 
   @IsOptional()
   @IsInt()
   @Min(1)
   supplierId?: number;
+}
+
+/** PATCH /api/auth/users/:id/role */
+export class ChangeRoleDto {
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
+  role: Role;
+}
+
+/** PATCH /api/auth/users/:id/toggle */
+export class ToggleActiveDto {
+  @IsBoolean({ message: 'isActive debe ser verdadero o falso' })
+  isActive: boolean;
 }

@@ -1,50 +1,53 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, PackageCheck, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
+import { getApiErrorMessage } from '../../api/errors';
+import { inventoryApi, purchasesApi, suppliersApi } from '../../api/resources';
+import type { InventoryPart, Supplier } from '../../api/types';
 
-interface Supplier { id: number; name: string; email?: string; phone?: string }
-interface LowStockPart { id: number; name: string; code: string; quantity: number; minStock: number }
+/** Cantidad sugerida: reponer hasta el doble del mínimo (al menos 1 unidad). */
+const suggestedRestockQuantity = (part: InventoryPart): number =>
+  Math.max(part.minStock * 2 - part.quantity, 1);
 
 export default function SuppliersList() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [lowStock, setLowStock] = useState<LowStockPart[]>([]);
+  const [lowStock, setLowStock] = useState<InventoryPart[]>([]);
   const [supplierId, setSupplierId] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
-      const [supplierResponse, stockResponse] = await Promise.all([
-        api.get<Supplier[]>('/suppliers'),
-        api.get<LowStockPart[]>('/suppliers/low-stock'),
+      const [supplierList, lowStockParts] = await Promise.all([
+        suppliersApi.list(),
+        inventoryApi.lowStockParts(),
       ]);
-      setSuppliers(supplierResponse.data);
-      setLowStock(stockResponse.data);
-      if (!supplierId && supplierResponse.data[0]) setSupplierId(String(supplierResponse.data[0].id));
+      setSuppliers(supplierList);
+      setLowStock(lowStockParts);
+      setSupplierId((current) => current || (supplierList[0] ? String(supplierList[0].id) : ''));
     } catch (error) {
-      console.error('Error al cargar abastecimiento', error);
-      toast.error('No se pudo cargar la información de proveedores.');
+      toast.error(getApiErrorMessage(error, 'No se pudo cargar la información de proveedores.'));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
-  const requestRestock = async (part: LowStockPart) => {
+  const requestRestock = async (part: InventoryPart) => {
     if (!supplierId) {
       toast.error('Selecciona un proveedor.');
       return;
     }
     try {
-      await api.post('/suppliers/purchase-orders', {
+      // POST /purchases aplica las mismas reglas que /suppliers/purchase-orders (SupplierService).
+      await purchasesApi.create({
         supplierId: Number(supplierId),
-        items: [{ partId: part.id, quantity: Math.max(part.minStock * 2 - part.quantity, 1) }],
+        items: [{ partId: part.id, quantity: suggestedRestockQuantity(part) }],
       });
       toast.success(`Reposición solicitada para ${part.name}.`);
       setLowStock((current) => current.filter((item) => item.id !== part.id));
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'No se pudo registrar la reposición.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo registrar la reposición.'));
     }
   };
 

@@ -1,11 +1,9 @@
-import {
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { isPrismaError } from '../common/prisma-errors';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSupplierDto, UpdateSupplierDto } from './dto/supplier.dto';
+
+const DUPLICATE_TAX_ID = 'El identificador fiscal ya está registrado';
 
 @Injectable()
 export class SuppliersService {
@@ -32,8 +30,7 @@ export class SuppliersService {
     try {
       return await this.prisma.supplier.create({ data: dto });
     } catch (error) {
-      this.throwDuplicateTaxId(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_TAX_ID });
     }
   }
 
@@ -42,8 +39,7 @@ export class SuppliersService {
     try {
       return await this.prisma.supplier.update({ where: { id }, data: dto });
     } catch (error) {
-      this.throwDuplicateTaxId(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_TAX_ID });
     }
   }
 
@@ -52,23 +48,14 @@ export class SuppliersService {
     try {
       await this.prisma.supplier.delete({ where: { id } });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException(
-          'No se puede eliminar un proveedor con pedidos de compra registrados',
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, {
+        P2003: 'No se puede eliminar un proveedor con pedidos de compra registrados',
+      });
     }
   }
 
   private async ensureExists(id: number) {
     const count = await this.prisma.supplier.count({ where: { id } });
     if (count === 0) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
-  }
-
-  private throwDuplicateTaxId(error: unknown) {
-    if (isPrismaError(error, 'P2002')) {
-      throw new ConflictException('El identificador fiscal ya está registrado');
-    }
   }
 }

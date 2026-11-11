@@ -1,8 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
+import { authApi } from '../api/resources';
+import { AUTH_UNAUTHORIZED_EVENT, clearSession, getToken, saveToken } from '../api/session';
 
-export type Role = 'GERENTE' | 'MECANICO' | 'BODEGUERO' | 'CONTADOR' | 'CLIENTE' | 'PROVEEDOR';
+/** Roles del backend (enum Role de Prisma), en el orden en que se muestran. */
+export const ROLES = ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'CLIENTE', 'PROVEEDOR'] as const;
+export type Role = (typeof ROLES)[number];
 
 export interface User {
   id: number;
@@ -29,40 +32,38 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     // Restaurar sesión desde localStorage
     const initAuth = async () => {
-      const token = localStorage.getItem('geartrace_token');
-      if (token) {
+      if (getToken()) {
         try {
           // Validar el token contra el backend
-          const response = await api.get('/auth/me');
-          setUser(response.data.user);
+          setUser(await authApi.me());
         } catch (error) {
-          console.error("Token inválido o expirado");
-          localStorage.removeItem('geartrace_token');
+          console.error('Token inválido o expirado', error);
+          clearSession();
         }
       }
       setIsLoading(false);
     };
 
-    initAuth();
+    void initAuth();
 
     // Escuchar evento de interceptor de axios
     const handleUnauthorized = () => {
       setUser(null);
       navigate('/login');
     };
-    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
 
-    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
   }, [navigate]);
 
   const login = (token: string, userData: User) => {
-    localStorage.setItem('geartrace_token', token);
+    saveToken(token);
     setUser(userData);
     navigate('/dashboard');
   };
 
   const logout = () => {
-    localStorage.removeItem('geartrace_token');
+    clearSession();
     setUser(null);
     navigate('/login');
   };

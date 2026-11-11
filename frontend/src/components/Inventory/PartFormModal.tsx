@@ -1,12 +1,16 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
+import { getApiErrorMessage } from '../../api/errors';
+import { inventoryApi } from '../../api/resources';
+import type { InventoryBox, PartPayload } from '../../api/types';
 
-interface InventoryBox {
-  id: number;
-  name: string;
-}
+/** "aceite, filtro ,  motor" → ['aceite', 'filtro', 'motor'] */
+const parseKeywords = (value: string): string[] =>
+  value
+    .split(',')
+    .map((keyword) => keyword.trim())
+    .filter(Boolean);
 
 export interface PartFormValues {
   id?: number;
@@ -60,8 +64,7 @@ export default function PartFormModal({
     const loadBoxes = async () => {
       setIsLoadingBoxes(true);
       try {
-        const response = await api.get<InventoryBox[]>('/inventory/boxes');
-        setBoxes(response.data);
+        setBoxes(await inventoryApi.listBoxes());
       } catch (error) {
         console.error('Error al cargar las cajas', error);
         toast.error('No se pudieron cargar las cajas disponibles.');
@@ -88,33 +91,29 @@ export default function PartFormModal({
     event.preventDefault();
     setIsSubmitting(true);
 
-    const payload = {
+    const payload: PartPayload = {
       name: form.name.trim(),
       code: form.code.trim(),
       quantity: form.quantity,
       boxId: form.boxId,
       minStock: form.minStock,
       unitPrice: form.unitPrice.trim() === '' ? undefined : Number(form.unitPrice),
-      keywords: keywordsText
-        .split(',')
-        .map((keyword) => keyword.trim())
-        .filter(Boolean),
+      keywords: parseKeywords(keywordsText),
     };
 
     try {
       if (part?.id) {
-        await api.put(`/inventory/parts/${part.id}`, payload);
+        await inventoryApi.updatePart(part.id, payload);
         toast.success('Pieza actualizada correctamente.');
       } else {
-        await api.post('/inventory/parts', payload);
+        await inventoryApi.createPart(payload);
         toast.success('Pieza creada correctamente.');
       }
 
       onSaved();
       onClose();
     } catch (error) {
-      console.error('Error al guardar la pieza', error);
-      toast.error('No se pudo guardar la pieza.');
+      toast.error(getApiErrorMessage(error, 'No se pudo guardar la pieza.'));
     } finally {
       setIsSubmitting(false);
     }

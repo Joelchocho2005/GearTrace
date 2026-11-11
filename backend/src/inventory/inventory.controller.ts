@@ -135,6 +135,17 @@ export class InventoryController {
     return this.inventoryService.updatePartPhoto(id, `/uploads/${file.filename}`);
   }
 
+  /**
+   * POST /api/inventory/parts/:id/locate → Enciende el LED de su caja.
+   * También MECANICO (desde la búsqueda de su panel), igual que con Alexa.
+   */
+  @Post('parts/:id/locate')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
+  @HttpCode(HttpStatus.ACCEPTED)
+  locatePart(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.locatePart(id);
+  }
+
   /** PATCH /api/inventory/parts/:id → Actualizar una pieza */
   @Patch('parts/:id')
   updatePart(
@@ -152,8 +163,13 @@ export class InventoryController {
     return this.inventoryService.removePart(id);
   }
 
-  /** GET /api/inventory/search/:query → Búsqueda de piezas (usado internamente y por Alexa) */
+  /**
+   * GET /api/inventory/search/:query → Búsqueda de piezas (máx. 5).
+   * También MECANICO: busca repuestos en su panel y al registrarlos en una OT.
+   * Alexa no pasa por aquí (usa InventoryService directamente).
+   */
   @Get('search/:query')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
   searchPart(@Param('query') query: string) {
     return this.inventoryService.searchPartByName(query);
   }

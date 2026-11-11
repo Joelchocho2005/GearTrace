@@ -31,6 +31,7 @@ export interface UserSummary {
 export interface AppUser extends UserSummary {
   role: Role;
   isActive: boolean;
+  supplierId: number | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
@@ -41,6 +42,8 @@ export interface CreateUserPayload {
   password: string;
   role?: Role;
   isActive?: boolean;
+  /** Obligatorio solo para el rol PROVEEDOR. */
+  supplierId?: number;
 }
 export type UpdateUserPayload = Partial<CreateUserPayload>;
 
@@ -97,20 +100,68 @@ export interface CreateAppointmentPayload {
   reason?: string;
   vehicleId: number;
 }
+/** PATCH /client/appointments/:id — la cita vuelve a AGENDADA. */
+export interface RescheduleAppointmentPayload {
+  scheduledAt: ISODateString;
+  reason?: string;
+}
+
 export interface UpdateAppointmentPayload extends Partial<CreateAppointmentPayload> {
   status?: AppointmentStatus;
 }
 
 // ── Inventario ──────────────────────────────────────────────
-/** Pieza devuelta por /inventory/search/:query (máx. 5 coincidencias). */
+/** Pieza (`/inventory/parts`, `/inventory/search/:query`, `/suppliers/low-stock`). */
 export interface InventoryPart {
   id: number;
   name: string;
   code: string;
   quantity: number;
   minStock: number;
+  /** Se congela en cada OT al consumir la pieza. */
+  unitPrice: DecimalString | null;
+  keywords: string[];
   photoUrl: string | null;
   box?: { id: number; name: string; ledIndex: number; location?: string | null };
+}
+
+/** Caja física con su LED (GET /inventory/boxes incluye sus piezas). */
+export interface InventoryBox {
+  id: number;
+  name: string;
+  description: string | null;
+  ledIndex: number;
+  location: string | null;
+  colorHex: string;
+  parts?: Pick<InventoryPart, 'id' | 'name' | 'code' | 'quantity' | 'minStock'>[];
+}
+
+/** POST /inventory/boxes (`ledIndex` único: un LED por caja). */
+export interface BoxPayload {
+  name: string;
+  description?: string;
+  ledIndex: number;
+  location?: string;
+  colorHex?: string;
+}
+
+/** Respuesta de POST /inventory/parts/:id/locate (el LED se enciende en paralelo). */
+export interface LocatePartResponse {
+  partId: number;
+  partName: string;
+  boxName: string;
+  ledIndex: number;
+}
+
+/** POST /inventory/parts y PATCH /inventory/parts/:id. */
+export interface PartPayload {
+  name: string;
+  code: string;
+  quantity: number;
+  boxId: number;
+  minStock: number;
+  unitPrice?: number;
+  keywords: string[];
 }
 
 export interface AddUsedPartPayload {
@@ -233,6 +284,42 @@ export interface UpdatePurchasePayload {
 export interface SupplierPurchaseResponsePayload {
   status: 'CONFIRMADA' | 'RECHAZADA';
   expectedDeliveryAt?: ISODateString;
+}
+
+// ── Autenticación ───────────────────────────────────────────
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+/** Registro público: el backend fuerza el rol CLIENTE. */
+export interface RegisterPayload {
+  name: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  message: string;
+  accessToken: string;
+  user: UserSummary & { role: Role };
+}
+
+/** Fila de GET /auth/users (gestión de accesos). */
+export interface ManagedUser extends UserSummary {
+  role: Role;
+  isActive: boolean;
+  createdAt: ISODateString;
+}
+
+// ── Auditoría ───────────────────────────────────────────────
+/** Búsqueda registrada por Alexa (GET /logs). */
+export interface SearchLog {
+  id: number;
+  query: string;
+  found: boolean;
+  alexaResponse: string | null;
+  createdAt: ISODateString;
 }
 
 // ── Facturas ────────────────────────────────────────────────

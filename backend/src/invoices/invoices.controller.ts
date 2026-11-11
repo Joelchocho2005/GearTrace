@@ -18,7 +18,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
 import { InvoicesService } from './invoices.service';
 
-/** /api/invoices — Facturación (solo GERENTE). */
+/** /api/invoices — Facturación (GERENTE, CONTADOR). */
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.GERENTE, Role.CONTADOR)
@@ -28,6 +28,15 @@ export class InvoicesController {
   @Get()
   findAll() {
     return this.invoicesService.findAll();
+  }
+
+  /**
+   * GET /api/invoices/billable-orders → órdenes concluidas sin factura.
+   * El CONTADOR no tiene acceso a /api/work-orders, por eso existe esta ruta.
+   */
+  @Get('billable-orders')
+  findBillableOrders() {
+    return this.invoicesService.findBillableOrders();
   }
 
   @Get(':id(\\d+)')

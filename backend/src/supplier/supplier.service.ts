@@ -4,10 +4,25 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, PurchaseOrderStatus } from '@prisma/client';
+import { PurchaseOrderStatus } from '@prisma/client';
 import { nextDocumentNumber } from '../common/document-number';
+import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
+
+/**
+ * Un pedido se recibe estando pendiente o confirmado por el proveedor
+ * (portal de proveedor). RECHAZADA, CANCELADA y RECIBIDA no admiten recepción.
+ */
+export const RECEIVABLE_PURCHASE_STATUSES: readonly PurchaseOrderStatus[] = [
+  PurchaseOrderStatus.PENDIENTE,
+  PurchaseOrderStatus.CONFIRMADA,
+];
+
+const PURCHASE_ORDER_INCLUDE = {
+  supplier: true,
+  items: { include: { part: true } },
+} as const;
 
 @Injectable()
 export class SupplierService {
@@ -28,7 +43,7 @@ export class SupplierService {
 
   findPurchaseOrders() {
     return this.prisma.purchaseOrder.findMany({
-      include: { supplier: true, items: { include: { part: true } } },
+      include: PURCHASE_ORDER_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -72,14 +87,13 @@ export class SupplierService {
               })),
             },
           },
-          include: { supplier: true, items: { include: { part: true } } },
+          include: PURCHASE_ORDER_INCLUDE,
         }),
       );
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('No se pudo generar un código de pedido único; intenta de nuevo');
-      }
-      throw error;
+      rethrowAsConflict(error, {
+        P2002: 'No se pudo generar un código de pedido único; intenta de nuevo',
+      });
     }
   }
 
@@ -90,8 +104,8 @@ export class SupplierService {
         include: { items: true },
       });
       if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
-      if (order.status !== PurchaseOrderStatus.PENDIENTE) {
-        throw new ConflictException('Solo se pueden recibir pedidos pendientes');
+      if (!RECEIVABLE_PURCHASE_STATUSES.includes(order.status)) {
+        throw new ConflictException('Solo se pueden recibir pedidos pendientes o confirmados');
       }
 
       for (const item of order.items) {
@@ -104,13 +118,13 @@ export class SupplierService {
       return transaction.purchaseOrder.update({
         where: { id },
         data: { status: PurchaseOrderStatus.RECIBIDA, receivedAt: new Date() },
-        include: { supplier: true, items: { include: { part: true } } },
+        include: PURCHASE_ORDER_INCLUDE,
       });
     });
   }
 
   private async ensureSupplier(id: number) {
-    const supplier = await this.prisma.supplier.findUnique({ where: { id } });
-    if (!supplier) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
+    const count = await this.prisma.supplier.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
   }
 }

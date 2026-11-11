@@ -11,6 +11,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { ROLE_VALIDATION_MESSAGE } from '../../common/validation-messages';
 
 export class CreateUserDto {
   @IsString()
@@ -27,7 +28,7 @@ export class CreateUserDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role?: Role;
 
   @IsOptional()
@@ -44,6 +45,6 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {}
 
 /** GET /api/users/lookup?role=CLIENTE → selectores de formularios. */
 export class UserLookupQueryDto {
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role: Role;
 }

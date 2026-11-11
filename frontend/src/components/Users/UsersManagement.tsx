@@ -2,25 +2,11 @@ import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { ShieldCheck, Users, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
-import { Role, useAuth } from '../../contexts/AuthContext';
-
-interface ManagedUser {
-  id: number;
-  name: string;
-  email: string;
-  role: Role;
-  isActive: boolean;
-}
-
-const roles: Role[] = [
-  'GERENTE',
-  'MECANICO',
-  'BODEGUERO',
-  'CONTADOR',
-  'CLIENTE',
-  'PROVEEDOR',
-];
+import { getApiErrorMessage } from '../../api/errors';
+import { authApi } from '../../api/resources';
+import type { ManagedUser } from '../../api/types';
+import { Role, ROLES, useAuth } from '../../contexts/AuthContext';
+import { ROLE_META } from '../../utils/status';
 
 export default function UsersManagement() {
   const { user } = useAuth();
@@ -35,11 +21,9 @@ export default function UsersManagement() {
 
     const loadUsers = async () => {
       try {
-        const response = await api.get<ManagedUser[]>('/auth/users');
-        setUsers(response.data);
+        setUsers(await authApi.listUsers());
       } catch (error) {
-        console.error('Error al cargar los usuarios', error);
-        toast.error('No se pudieron cargar los usuarios.');
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar los usuarios.'));
       } finally {
         setIsLoading(false);
       }
@@ -66,16 +50,15 @@ export default function UsersManagement() {
     );
 
     try {
-      await api.patch(`/auth/users/${id}/role`, { role });
+      await authApi.changeRole(id, role);
       toast.success('Rol actualizado correctamente.');
     } catch (error) {
-      console.error('Error al actualizar el rol', error);
       setUsers((currentUsers) =>
         currentUsers.map((managedUser) =>
           managedUser.id === id ? previousUser : managedUser,
         ),
       );
-      toast.error('No se pudo actualizar el rol.');
+      toast.error(getApiErrorMessage(error, 'No se pudo actualizar el rol.'));
     } finally {
       setUpdatingUserId(null);
     }
@@ -92,22 +75,19 @@ export default function UsersManagement() {
     );
 
     try {
-      await api.patch(`/auth/users/${managedUser.id}/toggle`, {
-        isActive: !managedUser.isActive,
-      });
+      await authApi.setActive(managedUser.id, !managedUser.isActive);
       toast.success(
         managedUser.isActive
           ? 'Usuario desactivado correctamente.'
           : 'Usuario activado correctamente.',
       );
     } catch (error) {
-      console.error('Error al actualizar el estado del usuario', error);
       setUsers((currentUsers) =>
         currentUsers.map((currentUser) =>
           currentUser.id === managedUser.id ? managedUser : currentUser,
         ),
       );
-      toast.error('No se pudo actualizar el estado del usuario.');
+      toast.error(getApiErrorMessage(error, 'No se pudo actualizar el estado del usuario.'));
     } finally {
       setUpdatingUserId(null);
     }
@@ -175,9 +155,9 @@ export default function UsersManagement() {
                           }
                           className="rounded-lg px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50 glass-input"
                         >
-                          {roles.map((role) => (
+                          {ROLES.map((role) => (
                             <option key={role} value={role}>
-                              {role}
+                              {ROLE_META[role].label}
                             </option>
                           ))}
                         </select>

@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarDays, ClipboardPlus } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarX, ClipboardPlus } from 'lucide-react';
 import { appointmentActionsApi, appointmentsApi, clientApi, vehiclesApi } from '../api/resources';
 import type { Appointment, AppointmentStatus, Vehicle } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
@@ -143,6 +143,43 @@ const staffEditForm: EditFormConfig<Appointment> = {
   isEditable: isOpen,
 };
 
+/** El cliente reprograma su cita abierta; vuelve a AGENDADA hasta que el taller confirme. */
+const clientEditForm: EditFormConfig<Appointment> = {
+  title: (appointment) => `Reprogramar cita del ${formatDateTime(appointment.scheduledAt)}`,
+  fields: () => [
+    { name: 'scheduledAt', label: 'Nueva fecha y hora', type: 'datetime', required: true, help: 'Debe ser una fecha futura. El taller volverá a confirmarla.' },
+    { name: 'reason', label: 'Motivo', type: 'textarea', maxLength: 255 },
+  ],
+  initialValues: (appointment) => ({
+    scheduledAt: toDateTimeLocal(appointment.scheduledAt),
+    reason: appointment.reason ?? '',
+  }),
+  submit: (appointment, values) =>
+    clientApi.rescheduleAppointment(appointment.id, {
+      scheduledAt: fromDateTimeLocal(text(values, 'scheduledAt')),
+      reason: optionalText(values, 'reason'),
+    }),
+  isEditable: isOpen,
+};
+
+function clientRowActions(appointment: Appointment): ResourceRowAction[] {
+  if (!isOpen(appointment)) return [];
+  return [
+    {
+      key: 'cancel',
+      label: 'Cancelar cita',
+      shortLabel: 'Cancelar',
+      icon: CalendarX,
+      tone: 'danger',
+      confirm: `¿Cancelar tu cita del ${formatDateTime(appointment.scheduledAt)}?`,
+      run: async () => {
+        await clientApi.cancelAppointment(appointment.id);
+        return 'Cita cancelada.';
+      },
+    },
+  ];
+}
+
 function staffRowActions(appointment: Appointment): ResourceRowAction[] {
   if (!isOpen(appointment) || appointment.workOrder) return [];
   const actions: ResourceRowAction[] = [
@@ -176,8 +213,8 @@ function staffRowActions(appointment: Appointment): ResourceRowAction[] {
 
 /**
  * /citas — GERENTE y MECANICO gestionan la agenda (/api/appointments) y
- * generan la OT desde la cita; el CLIENTE ve y solicita sus citas
- * (/api/client/appointments).
+ * generan la OT desde la cita; el CLIENTE ve, solicita, reprograma y cancela
+ * sus citas (/api/client/appointments).
  */
 export default function CitasPage() {
   const { user } = useAuth();
@@ -194,8 +231,8 @@ export default function CitasPage() {
       emptyMessage={isClient ? 'Aún no has solicitado citas.' : 'No hay citas programadas.'}
       getRowLabel={(appointment) => formatDateTime(appointment.scheduledAt)}
       createForm={isClient ? clientCreateForm : staffCreateForm}
-      editForm={isClient ? undefined : staffEditForm}
-      rowActions={isClient ? undefined : staffRowActions}
+      editForm={isClient ? clientEditForm : staffEditForm}
+      rowActions={isClient ? clientRowActions : staffRowActions}
       onDelete={user?.role === 'GERENTE' ? appointmentsApi.remove : undefined}
     />
   );

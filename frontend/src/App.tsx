@@ -2,9 +2,10 @@ import { ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './contexts/AuthContext'
 import Login from './components/Login'
+import Register from './components/Register'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
-import InventoryList from './components/Inventory/InventoryList'
+import InventarioPage from './pages/InventarioPage'
 import AuditLogs from './components/AuditLogs'
 import RoleProtectedRoute from './components/RoleProtectedRoute'
 import UsuariosPage from './pages/UsuariosPage'
@@ -19,7 +20,7 @@ import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
 const protectedRoutes: Record<AppRoute, ReactNode> = {
-  inventory: <InventoryList />,
+  inventory: <InventarioPage />,
   logs: <AuditLogs />,
   // Administración
   usuarios: <UsuariosPage />,
@@ -59,6 +60,11 @@ function App() {
       <Route
         path="/login"
         element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />}
+      />
+
+      <Route
+        path="/registro"
+        element={!isAuthenticated ? <Register /> : <Navigate to="/dashboard" />}
       />
 
       <Route

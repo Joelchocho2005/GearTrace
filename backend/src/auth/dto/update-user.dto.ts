@@ -1,5 +1,6 @@
 import { IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { Role } from '@prisma/client';
+import { ROLE_VALIDATION_MESSAGE } from '../../common/validation-messages';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -18,7 +19,7 @@ export class UpdateUserDto {
   password?: string;
 
   @IsOptional()
-  @IsEnum(Role)
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role?: Role;
 
   @IsOptional()

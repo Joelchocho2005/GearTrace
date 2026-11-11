@@ -10,7 +10,8 @@ import { CreatePurchaseOrderDto } from '../../supplier/dto/purchase-order.dto';
 export class CreatePurchaseDto extends CreatePurchaseOrderDto {}
 
 /**
- * Solo pedidos PENDIENTES pueden editarse. Estado admitido: CANCELADA.
+ * Solo pedidos PENDIENTES pueden editarse; uno CONFIRMADO solo admite
+ * `{ status: CANCELADA }`.
  * La recepción (RECIBIDA) incrementa stock y se hace en
  * POST /api/suppliers/purchase-orders/:id/receive.
  */

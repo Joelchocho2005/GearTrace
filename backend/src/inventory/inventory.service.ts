@@ -1,18 +1,33 @@
 import {
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { LOCATION_INDICATOR, LocationIndicator } from '../led/led.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePartDto } from './dto/create-part.dto';
 import { CreateBoxDto } from './dto/create-box.dto';
 import { UpdatePartDto } from './dto/update-part.dto';
 import { UpdateBoxDto } from './dto/update-box.dto';
-import { Prisma } from '@prisma/client';
+import { rethrowAsConflict } from '../common/prisma-errors';
+
+/** Máximo de coincidencias de la búsqueda por voz/autocompletar. */
+export const PART_SEARCH_LIMIT = 5;
+
+const duplicateLedIndex = (ledIndex?: number) =>
+  `Ya existe una caja con ledIndex ${ledIndex}. Cada LED solo puede asignarse a una caja.`;
+const duplicatePartCode = (code?: string) => `Ya existe una pieza con el código "${code}"`;
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(InventoryService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(LOCATION_INDICATOR) private readonly indicator: LocationIndicator,
+  ) {}
 
   // ──────────────────────────────────────────────────────────
   // BOXES
@@ -50,15 +65,7 @@ export class InventoryService {
     try {
       return await this.prisma.box.create({ data: dto });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicateLedIndex(dto.ledIndex) });
     }
   }
 
@@ -71,15 +78,7 @@ export class InventoryService {
         data: dto,
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicateLedIndex(dto.ledIndex) });
     }
   }
 
@@ -124,15 +123,7 @@ export class InventoryService {
         include: { box: true },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una pieza con el código "${dto.code}"`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicatePartCode(dto.code) });
     }
   }
 
@@ -159,21 +150,19 @@ export class InventoryService {
         include: { box: true },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una pieza con el código "${dto.code}"`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicatePartCode(dto.code) });
     }
   }
 
   async removePart(id: number) {
     await this.findOnePart(id);
-    await this.prisma.part.delete({ where: { id } });
+    try {
+      await this.prisma.part.delete({ where: { id } });
+    } catch (error) {
+      rethrowAsConflict(error, {
+        P2003: 'La pieza está registrada en órdenes de trabajo o pedidos de compra; no se puede eliminar',
+      });
+    }
   }
 
   /**
@@ -210,10 +199,27 @@ export class InventoryService {
           },
         },
       },
-      take: 5, // Retornar máximo 5 coincidencias
+      take: PART_SEARCH_LIMIT,
     });
 
     return parts;
+  }
+
+  /**
+   * Enciende el LED de la caja de la pieza (mismo efecto que la búsqueda por
+   * Alexa). No espera la secuencia del LED: responde enseguida y un fallo del
+   * hardware solo se registra en el log.
+   */
+  async locatePart(id: number) {
+    const part = await this.findOnePart(id);
+    const { box } = part;
+    this.indicator
+      .locate({ ledIndex: box.ledIndex, label: part.name, colorHex: box.colorHex })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`No se pudo señalizar "${part.name}": ${message}`);
+      });
+    return { partId: part.id, partName: part.name, boxName: box.name, ledIndex: box.ledIndex };
   }
 
   async updatePartQuantity(id: number, delta: number) {

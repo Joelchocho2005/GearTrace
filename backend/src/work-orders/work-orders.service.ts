@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { AppointmentStatus, Prisma, Role, WorkOrderStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
-import { isPrismaError } from '../common/prisma-errors';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AddUsedPartDto,
@@ -17,9 +18,8 @@ import {
   WorkOrderPartDto,
 } from './dto/work-order.dto';
 import { nextWorkOrderNumber } from './work-order-number';
+import { startedAtOnTransition, USE_CLOSE_ENDPOINT } from './work-order-rules';
 import { workOrderScope } from './work-order-scope';
-
-const USER_SUMMARY = { select: { id: true, name: true, email: true } } as const;
 
 const WORK_ORDER_INCLUDE = {
   vehicle: { include: { owner: USER_SUMMARY } },
@@ -98,14 +98,12 @@ export class WorkOrdersService {
         });
       });
     } catch (error) {
-      if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException(
+      rethrowAsConflict(error, {
+        P2002:
           appointmentId !== undefined
             ? 'La cita ya generó una orden de trabajo'
             : 'No se pudo generar un código de orden único; intenta de nuevo',
-        );
-      }
-      throw error;
+      });
     }
   }
 
@@ -152,20 +150,16 @@ export class WorkOrdersService {
       throw new ConflictException('Una orden concluida no puede modificarse');
     }
     if (dto.status === WorkOrderStatus.CONCLUIDO) {
-      throw new BadRequestException(
-        'Para concluir la orden usa PATCH /api/service/work-orders/:id/close',
-      );
+      throw new BadRequestException(USE_CLOSE_ENDPOINT);
     }
     if (dto.mechanicId !== undefined) {
       this.resolveMechanicId(dto.mechanicId, user);
       await this.ensureMechanic(dto.mechanicId);
     }
 
-    const startsNow = dto.status === WorkOrderStatus.EN_PROCESO && !order.startedAt;
-
     return this.prisma.workOrder.update({
       where: { id },
-      data: { ...dto, startedAt: startsNow ? new Date() : undefined },
+      data: { ...dto, startedAt: startedAtOnTransition(dto.status, order.startedAt) },
       include: WORK_ORDER_INCLUDE,
     });
   }
@@ -179,16 +173,7 @@ export class WorkOrdersService {
     await this.findOne(id, user); // alcance del usuario: orden ajena → 404
 
     return this.prisma.$transaction(async (tx) => {
-      // Bloquea la orden para que no se concluya mientras se agrega el repuesto.
-      await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
-      const order = await tx.workOrder.findUniqueOrThrow({
-        where: { id },
-        select: { status: true },
-      });
-      if (order.status === WorkOrderStatus.CONCLUIDO) {
-        throw new ConflictException('No se pueden agregar repuestos a una orden concluida');
-      }
-
+      await this.lockOpenOrder(tx, id, 'No se pueden agregar repuestos a una orden concluida');
       await this.consumePart(tx, id, dto.partId, dto.quantity);
 
       return tx.workOrder.findUniqueOrThrow({ where: { id }, include: WORK_ORDER_INCLUDE });
@@ -203,14 +188,7 @@ export class WorkOrdersService {
     await this.findOne(id, user); // alcance del usuario: orden ajena → 404
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
-      const order = await tx.workOrder.findUniqueOrThrow({
-        where: { id },
-        select: { status: true },
-      });
-      if (order.status === WorkOrderStatus.CONCLUIDO) {
-        throw new ConflictException('No se pueden quitar repuestos de una orden concluida');
-      }
+      await this.lockOpenOrder(tx, id, 'No se pueden quitar repuestos de una orden concluida');
       const usedPart = await tx.usedPart.findUnique({
         where: { workOrderId_partId: { workOrderId: id, partId } },
       });
@@ -246,10 +224,7 @@ export class WorkOrdersService {
         await tx.workOrder.delete({ where: { id } });
       });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException('La orden tiene una factura asociada');
-      }
-      throw error;
+      rethrowAsConflict(error, { P2003: 'La orden tiene una factura asociada' });
     }
   }
 
@@ -264,6 +239,21 @@ export class WorkOrdersService {
       throw new ForbiddenException('Un mecánico solo puede asignarse órdenes a sí mismo');
     }
     return user.id;
+  }
+
+  /**
+   * Bloquea la orden (`FOR UPDATE`) hasta el fin de la transacción para que no
+   * se concluya mientras se modifican sus repuestos. Rechaza órdenes concluidas.
+   */
+  private async lockOpenOrder(tx: Prisma.TransactionClient, id: number, concludedMessage: string) {
+    await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
+    const order = await tx.workOrder.findUniqueOrThrow({
+      where: { id },
+      select: { status: true },
+    });
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException(concludedMessage);
+    }
   }
 
   /**

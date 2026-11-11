@@ -1,5 +1,5 @@
 import { BadgeCheck, Receipt } from 'lucide-react';
-import { invoicesApi, workOrdersApi } from '../api/resources';
+import { invoicesApi } from '../api/resources';
 import type { Invoice } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage, {
@@ -41,10 +41,10 @@ const columns: Column<Invoice>[] = [
   { key: 'issuedAt', header: 'Emitida', hideOnMobile: true, render: (invoice) => formatDate(invoice.issuedAt) },
 ];
 
-/** Solo órdenes concluidas y aún sin factura pueden facturarse. */
+/** Solo órdenes concluidas y aún sin factura pueden facturarse (filtrado en el backend). */
 const loadBillableOrders = async () =>
   toOptions(
-    (await workOrdersApi.list()).filter((order) => order.status === 'CONCLUIDO' && !order.invoice),
+    await invoicesApi.billableOrders(),
     (order) => order.id,
     (order) =>
       `${order.number} · ${order.vehicle?.plate ?? ''} — ${order.vehicle?.owner?.name ?? 'sin cliente'} (${formatCurrency(order.finalCost ?? order.estimatedCost)})`,
@@ -118,7 +118,7 @@ function rowActions(invoice: Invoice): ResourceRowAction[] {
   ];
 }
 
-/** /facturacion — solo GERENTE. */
+/** /facturacion — GERENTE y CONTADOR. */
 export default function FacturacionPage() {
   return (
     <ResourceListPage

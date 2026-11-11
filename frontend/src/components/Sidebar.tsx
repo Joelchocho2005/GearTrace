@@ -15,7 +15,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { Role, useAuth } from '../contexts/AuthContext';
+import { Role, ROLES, useAuth } from '../contexts/AuthContext';
 import { ROUTE_ROLES } from '../routes/routeRoles';
 import { ROLE_META } from '../utils/status';
 
@@ -31,10 +31,13 @@ type NavigationSection = 'General' | 'Servicio técnico' | 'Abastecimiento' | 'A
 
 const SECTIONS: NavigationSection[] = ['General', 'Servicio técnico', 'Abastecimiento', 'Administración'];
 
+/** El CLIENTE tiene su propio acceso al dashboard ("Mi vehículo"). */
+const STAFF_ROLES = ROLES.filter((role) => role !== 'CLIENTE');
+
 /** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
 export const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'PROVEEDOR'], section: 'General' },
-  { label: 'Mi vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'], section: 'General' },
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: STAFF_ROLES, section: 'General' },
+  { label: 'Mis vehículos', path: '/dashboard#vehicles', icon: Car, roles: ['CLIENTE'], section: 'General' },
   { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'], section: 'Servicio técnico' },
   { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos, section: 'Servicio técnico' },
   { label: 'Citas', path: '/citas', icon: CalendarDays, roles: ROUTE_ROLES.citas, section: 'Servicio técnico' },

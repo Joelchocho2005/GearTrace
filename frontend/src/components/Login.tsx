@@ -1,25 +1,30 @@
-import { useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import api from '../api/axios';
+import { FormEvent, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../api/errors';
+import { authApi } from '../api/resources';
+import { useAuth } from '../contexts/AuthContext';
+
+/** Las cuentas de demostración (prisma/seed.ts) solo se anuncian en desarrollo. */
+const SHOW_DEMO_HINT = import.meta.env.DEV;
 
 export default function Login() {
-  const [email, setEmail] = useState('gerente@geartrace.com');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
     setLoading(true);
-    
+
     try {
-      const response = await api.post('/auth/login', { email, password });
-      toast.success(`Bienvenido, ${response.data.user.name}`);
-      login(response.data.accessToken, response.data.user);
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Error al iniciar sesión');
+      const { accessToken, user } = await authApi.login({ email: email.trim(), password });
+      toast.success(`Bienvenido, ${user.name}`);
+      login(accessToken, user);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'Error al iniciar sesión'));
     } finally {
       setLoading(false);
     }
@@ -87,10 +92,16 @@ export default function Login() {
             </button>
           </div>
           
-          <div className="text-center text-xs text-slate-500 mt-4 space-y-1">
-            <p>Demo accounts (pass: password123):</p>
-            <p>gerente@geartrace.com | mecanico@... | cliente@...</p>
-          </div>
+          <p className="text-center text-sm text-slate-400">
+            ¿Eres cliente y no tienes cuenta?{' '}
+            <Link to="/registro" className="font-medium text-brand-400 hover:text-brand-300">Regístrate</Link>
+          </p>
+
+          {SHOW_DEMO_HINT && (
+            <p className="text-center text-xs text-slate-500 mt-4">
+              Desarrollo: usa las cuentas de demostración creadas por <code>npm run prisma:seed</code>.
+            </p>
+          )}
         </form>
       </div>
     </div>

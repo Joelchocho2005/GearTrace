@@ -1,8 +1,12 @@
 import { useAuth } from '../contexts/AuthContext';
+import BodegueroDashboard from './BodegueroDashboard';
 import ClienteDashboard from './ClienteDashboard';
+import ContadorDashboard from './ContadorDashboard';
 import GerenteDashboard from './GerenteDashboard';
 import MecanicoDashboard from './MecanicoDashboard';
+import ProveedorDashboard from './ProveedorDashboard';
 
+/** Orquestador: cada rol tiene su panel. */
 export default function Dashboard() {
   const { user } = useAuth();
 
@@ -12,10 +16,11 @@ export default function Dashboard() {
     case 'MECANICO':
       return <MecanicoDashboard />;
     case 'BODEGUERO':
-      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+      return <BodegueroDashboard />;
     case 'CONTADOR':
+      return <ContadorDashboard />;
     case 'PROVEEDOR':
-      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+      return <ProveedorDashboard />;
     case 'CLIENTE':
       return <ClienteDashboard />;
     default:

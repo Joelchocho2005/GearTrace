@@ -1,25 +1,21 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Plus, ShieldCheck, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
-import { Role, useAuth } from '../../contexts/AuthContext';
+import { getApiErrorMessage } from '../../api/errors';
+import { authApi } from '../../api/resources';
+import type { ManagedUser } from '../../api/types';
+import { Role, ROLES, useAuth } from '../../contexts/AuthContext';
+import { ROLE_META } from '../../utils/status';
 
-interface ManagedUser {
-  id: number;
+interface NewUserForm {
   name: string;
   email: string;
+  password: string;
   role: Role;
-  isActive: boolean;
+  supplierId: string;
 }
 
-const roles: Role[] = [
-  'GERENTE',
-  'MECANICO',
-  'BODEGUERO',
-  'CONTADOR',
-  'CLIENTE',
-  'PROVEEDOR',
-];
+const EMPTY_FORM: NewUserForm = { name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' };
 
 export default function UsersList() {
   const { user } = useAuth();
@@ -27,21 +23,13 @@ export default function UsersList() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    email: '',
-    password: '',
-    role: 'CLIENTE' as Role,
-    supplierId: '',
-  });
+  const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
 
   const loadUsers = async () => {
     try {
-      const response = await api.get<ManagedUser[]>('/auth/users');
-      setUsers(response.data);
+      setUsers(await authApi.listUsers());
     } catch (error) {
-      console.error('Error al cargar usuarios', error);
-      toast.error('No se pudieron cargar los usuarios.');
+      toast.error(getApiErrorMessage(error, 'No se pudieron cargar los usuarios.'));
     } finally {
       setIsLoading(false);
     }
@@ -59,16 +47,19 @@ export default function UsersList() {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post('/auth/admin/create', {
-        ...form,
+      await authApi.adminCreate({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        role: form.role,
         supplierId: form.role === 'PROVEEDOR' ? Number(form.supplierId) : undefined,
       });
       toast.success('Usuario creado correctamente.');
-      setForm({ name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' });
+      setForm(EMPTY_FORM);
       setIsModalOpen(false);
       await loadUsers();
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'No se pudo crear el usuario.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo crear el usuario.'));
     } finally {
       setSaving(false);
     }
@@ -76,14 +67,13 @@ export default function UsersList() {
 
   const toggleActive = async (managedUser: ManagedUser) => {
     try {
-      await api.patch(`/auth/users/${managedUser.id}/toggle`, { isActive: !managedUser.isActive });
+      await authApi.setActive(managedUser.id, !managedUser.isActive);
       setUsers((current) =>
         current.map((item) => item.id === managedUser.id ? { ...item, isActive: !item.isActive } : item),
       );
       toast.success(managedUser.isActive ? 'Acceso desactivado.' : 'Acceso activado.');
     } catch (error) {
-      console.error('Error al cambiar acceso', error);
-      toast.error('No se pudo cambiar el acceso.');
+      toast.error(getApiErrorMessage(error, 'No se pudo cambiar el acceso.'));
     }
   };
 
@@ -111,7 +101,7 @@ export default function UsersList() {
                 {users.map((managedUser) => (
                   <tr key={managedUser.id} className="hover:bg-white/5">
                     <td className="px-6 py-4"><div className="font-medium text-white">{managedUser.name}</div><div className="text-sm text-slate-400">{managedUser.email}</div></td>
-                    <td className="px-6 py-4 text-slate-300">{managedUser.role}</td>
+                    <td className="px-6 py-4 text-slate-300">{ROLE_META[managedUser.role].label}</td>
                     <td className={`px-6 py-4 ${managedUser.isActive ? 'text-emerald-400' : 'text-slate-500'}`}><span className="inline-flex items-center gap-2"><ShieldCheck size={16} />{managedUser.isActive ? 'Activo' : 'Inactivo'}</span></td>
                     <td className="px-6 py-4"><button type="button" onClick={() => void toggleActive(managedUser)} className="text-sm font-medium text-brand-400 hover:text-brand-300">{managedUser.isActive ? 'Desactivar' : 'Activar'}</button></td>
                   </tr>
@@ -130,7 +120,7 @@ export default function UsersList() {
               <input key={field} required value={form[field]} type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'} placeholder={field === 'name' ? 'Nombre completo' : field === 'email' ? 'Correo electrónico' : 'Contraseña'} onChange={(event) => setForm({ ...form, [field]: event.target.value })} className="w-full rounded-xl px-4 py-3 text-white glass-input" />
             ))}
             <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl px-4 py-3 text-white glass-input">
-              {roles.map((role) => <option key={role} value={role}>{role}</option>)}
+              {ROLES.map((role) => <option key={role} value={role}>{ROLE_META[role].label}</option>)}
             </select>
             {form.role === 'PROVEEDOR' && (
               <input

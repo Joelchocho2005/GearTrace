@@ -1,20 +1,43 @@
 import {
-  Injectable,
-  UnauthorizedException,
   ConflictException,
-  NotFoundException,
+  Injectable,
   Logger,
+  NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
-import * as bcrypt from 'bcryptjs';
+import { Prisma, Role, User } from '@prisma/client';
+import { hashOptionalPassword, hashPassword, verifyPassword } from '../common/password';
+import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { assertSupplierLink } from '../users/supplier-link';
 import { JwtPayload } from './auth.types';
-import { Prisma, Role } from '@prisma/client';
+import { LoginDto, RegisterDto } from './dto/auth.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-const BCRYPT_ROUNDS = 10;
+/** Mensaje genérico: no revela si el correo existe. */
+const INVALID_CREDENTIALS = 'Correo o contraseña incorrectos';
+const USER_NOT_FOUND = 'Usuario no encontrado';
+
+/** Campos públicos por respuesta (nunca `password`). */
+const REGISTERED_USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  createdAt: true,
+} satisfies Prisma.UserSelect;
+
+const MANAGED_USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  isActive: true,
+  createdAt: true,
+} satisfies Prisma.UserSelect;
+
+type TokenSubject = Pick<User, 'id' | 'email' | 'role' | 'name'>;
 
 @Injectable()
 export class AuthService {
@@ -23,52 +46,31 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
-    private readonly config: ConfigService,
   ) {}
 
-  // ──────────────────────────────────────────────────────────
-  // REGISTER
-  // ──────────────────────────────────────────────────────────
+  // ── Registro y login ───────────────────────────────────────
 
   async register(dto: RegisterDto) {
-    // Verificar que el correo no esté en uso
-    const exists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-    if (exists) {
-      throw new ConflictException(
-        `El correo "${dto.email}" ya está registrado`,
-      );
+    const exists = await this.prisma.user.count({ where: { email: dto.email } });
+    if (exists > 0) {
+      throw new ConflictException(`El correo "${dto.email}" ya está registrado`);
     }
 
-    if (dto.role === Role.PROVEEDOR && !dto.supplierId) {
-      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
-    }
-    if (dto.role !== Role.PROVEEDOR && dto.supplierId) {
-      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
-    }
-    if (dto.supplierId) {
-      const supplier = await this.prisma.supplier.findUnique({
-        where: { id: dto.supplierId },
-      });
-      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
-    }
-
-    // Hashear la contraseña con bcrypt
-    const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+    const role = dto.role ?? Role.CLIENTE;
+    await assertSupplierLink(this.prisma, role, dto.supplierId);
 
     const user = await this.prisma.user.create({
       data: {
         name: dto.name,
         email: dto.email,
-        password: hashedPassword,
-        role: dto.role ?? Role.CLIENTE,
+        password: await hashPassword(dto.password),
+        role,
         supplierId: dto.supplierId,
       },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      select: REGISTERED_USER_SELECT,
     });
 
-    this.logger.log(`✅ Usuario registrado: ${user.email} (${user.role})`);
+    this.logger.log(`Usuario registrado: ${user.email} (${user.role})`);
 
     return {
       message: 'Usuario registrado exitosamente',
@@ -77,61 +79,37 @@ export class AuthService {
     };
   }
 
-  // ──────────────────────────────────────────────────────────
-  // LOGIN
-  // ──────────────────────────────────────────────────────────
-
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-    // Mensaje genérico para no revelar si el email existe
-    const invalidMsg = 'Correo o contraseña incorrectos';
-
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (!user || !user.isActive) {
-      throw new UnauthorizedException(invalidMsg);
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    const passwordMatch = await bcrypt.compare(dto.password, user.password);
-    if (!passwordMatch) {
+    if (!(await verifyPassword(dto.password, user.password))) {
       this.logger.warn(`Login fallido para: ${dto.email}`);
-      throw new UnauthorizedException(invalidMsg);
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    this.logger.log(`🔑 Login exitoso: ${user.email} (${user.role})`);
+    this.logger.log(`Login exitoso: ${user.email} (${user.role})`);
 
     return {
       message: 'Login exitoso',
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
       ...this.generateTokens(user),
     };
   }
 
-  // ──────────────────────────────────────────────────────────
-  // GESTIÓN DE USUARIOS (solo GERENTE)
-  // ──────────────────────────────────────────────────────────
+  // ── Gestión de usuarios (solo GERENTE) ─────────────────────
 
-  async findAllUsers() {
+  findAllUsers() {
     return this.prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
-        createdAt: true,
-      },
+      select: MANAGED_USER_SELECT,
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async toggleUserActive(userId: number, isActive: boolean) {
+    await this.ensureUserExists(userId);
     return this.prisma.user.update({
       where: { id: userId },
       data: { isActive },
@@ -139,12 +117,13 @@ export class AuthService {
     });
   }
 
+  /** Cambiar solo el rol no permite crear/romper el vínculo con un proveedor. */
   async changeUserRole(userId: number, role: Role) {
     const current = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { supplierId: true },
     });
-    if (!current) throw new NotFoundException('Usuario no encontrado');
+    if (!current) throw new NotFoundException(USER_NOT_FOUND);
     if (role === Role.PROVEEDOR && !current.supplierId) {
       throw new ConflictException('Asocia un proveedor antes de asignar el rol PROVEEDOR');
     }
@@ -159,36 +138,21 @@ export class AuthService {
   }
 
   async updateUser(userId: number, dto: UpdateUserDto) {
-    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!existing) {
-      throw new NotFoundException('Usuario no encontrado');
-    }
-    const targetRole = dto.role ?? existing.role;
-    const targetSupplierId = dto.supplierId ?? existing.supplierId ?? undefined;
-    if (targetRole === Role.PROVEEDOR && !targetSupplierId) {
-      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
-    }
-    if (targetRole !== Role.PROVEEDOR && targetSupplierId) {
-      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
-    }
-    if (dto.supplierId) {
-      const supplier = await this.prisma.supplier.findUnique({
-        where: { id: dto.supplierId },
-      });
-      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
-    }
-
-    const data = {
-      ...dto,
-      password: dto.password
-        ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
-        : undefined,
-    };
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, supplierId: true },
+    });
+    if (!existing) throw new NotFoundException(USER_NOT_FOUND);
+    await assertSupplierLink(
+      this.prisma,
+      dto.role ?? existing.role,
+      dto.supplierId ?? existing.supplierId,
+    );
 
     try {
       return await this.prisma.user.update({
         where: { id: userId },
-        data,
+        data: { ...dto, password: await hashOptionalPassword(dto.password) },
         select: {
           id: true,
           name: true,
@@ -199,35 +163,24 @@ export class AuthService {
         },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('El correo electrónico ya está registrado');
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: 'El correo electrónico ya está registrado' });
     }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // JWT helpers
-  // ──────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────
 
-  private generateTokens(user: {
-    id: number;
-    email: string;
-    role: Role;
-    name: string;
-  }) {
+  private async ensureUserExists(id: number) {
+    const count = await this.prisma.user.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(USER_NOT_FOUND);
+  }
+
+  private generateTokens(user: TokenSubject) {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
     };
-
-    const accessToken = this.jwt.sign(payload);
-
-    return { accessToken };
+    return { accessToken: this.jwt.sign(payload) };
   }
 }

@@ -6,12 +6,13 @@ import {
 } from '@nestjs/common';
 import { InvoiceStatus, Prisma, WorkOrderStatus } from '@prisma/client';
 import { nextDocumentNumber } from '../common/document-number';
-import { isPrismaError } from '../common/prisma-errors';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
 
 const INVOICE_INCLUDE = {
-  client: { select: { id: true, name: true, email: true } },
+  client: USER_SUMMARY,
   workOrder: { include: { vehicle: true } },
 } as const;
 
@@ -23,6 +24,15 @@ export class InvoicesService {
     return this.prisma.invoice.findMany({
       include: INVOICE_INCLUDE,
       orderBy: { issuedAt: 'desc' },
+    });
+  }
+
+  /** Órdenes CONCLUIDO sin factura (selector "Nueva factura" y panel del CONTADOR). */
+  findBillableOrders() {
+    return this.prisma.workOrder.findMany({
+      where: { status: WorkOrderStatus.CONCLUIDO, invoice: null },
+      include: { vehicle: { include: { owner: USER_SUMMARY } } },
+      orderBy: { completedAt: 'desc' },
     });
   }
 
@@ -89,10 +99,7 @@ export class InvoicesService {
         }),
       );
     } catch (error) {
-      if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException('La orden de trabajo ya tiene una factura');
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: 'La orden de trabajo ya tiene una factura' });
     }
   }
 

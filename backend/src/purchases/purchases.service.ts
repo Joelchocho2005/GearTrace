@@ -1,11 +1,11 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PurchaseOrderStatus, Role } from '@prisma/client';
-import { ForbiddenException } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupplierService } from '../supplier/supplier.service';
@@ -50,8 +50,15 @@ export class PurchasesService {
 
   async update(id: number, dto: UpdatePurchaseDto) {
     const order = await this.findOne(id);
-    if (order.status !== PurchaseOrderStatus.PENDIENTE) {
-      throw new ConflictException('Solo se pueden modificar pedidos pendientes');
+    // Un pedido confirmado por el proveedor solo admite cancelarse.
+    const cancelsConfirmed =
+      order.status === PurchaseOrderStatus.CONFIRMADA &&
+      dto.status === PurchaseOrderStatus.CANCELADA &&
+      dto.supplierId === undefined;
+    if (order.status !== PurchaseOrderStatus.PENDIENTE && !cancelsConfirmed) {
+      throw new ConflictException(
+        'Solo se pueden modificar pedidos pendientes; uno confirmado solo puede cancelarse',
+      );
     }
     if (dto.status === PurchaseOrderStatus.RECIBIDA) {
       throw new BadRequestException(
@@ -80,11 +87,8 @@ export class PurchasesService {
   }
 
   findSupplierOrders(user: AuthenticatedUser) {
-    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
-      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
-    }
     return this.prisma.purchaseOrder.findMany({
-      where: { supplierId: user.supplierId },
+      where: { supplierId: this.linkedSupplierId(user) },
       include: PURCHASE_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
@@ -95,11 +99,8 @@ export class PurchasesService {
     dto: SupplierPurchaseResponseDto,
     user: AuthenticatedUser,
   ) {
-    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
-      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
-    }
     const order = await this.prisma.purchaseOrder.findFirst({
-      where: { id, supplierId: user.supplierId },
+      where: { id, supplierId: this.linkedSupplierId(user) },
     });
     if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
     if (order.status !== PurchaseOrderStatus.PENDIENTE) {
@@ -115,6 +116,14 @@ export class PurchasesService {
       },
       include: PURCHASE_INCLUDE,
     });
+  }
+
+  /** Proveedor del usuario PROVEEDOR autenticado; solo ve sus propios pedidos. */
+  private linkedSupplierId(user: AuthenticatedUser): number {
+    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
+      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
+    }
+    return user.supplierId;
   }
 
   private async ensureSupplier(id: number) {

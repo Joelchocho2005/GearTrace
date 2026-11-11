@@ -50,9 +50,11 @@ Directory Structure
 src/
   api/
     axios.ts
+    config.ts
     crud.ts
     errors.ts
     resources.ts
+    session.ts
     socket.ts
     types.ts
   components/
@@ -65,6 +67,7 @@ src/
       DataTable.tsx
       ResourceFormModal.tsx
       ResourceListPage.tsx
+      StatCard.tsx
       StatusBadge.tsx
       ViewTabs.tsx
     Users/
@@ -77,12 +80,16 @@ src/
       workOrderFlow.ts
       WorkOrdersList.tsx
     AuditLogs.tsx
+    BodegueroDashboard.tsx
     ClienteDashboard.tsx
+    ContadorDashboard.tsx
     Dashboard.tsx
     GerenteDashboard.tsx
     Layout.tsx
     Login.tsx
     MecanicoDashboard.tsx
+    ProveedorDashboard.tsx
+    Register.tsx
     RoleProtectedRoute.tsx
     Sidebar.tsx
   contexts/
@@ -91,6 +98,7 @@ src/
     CitasPage.tsx
     ComprasPage.tsx
     FacturacionPage.tsx
+    InventarioPage.tsx
     OrdenesTrabajoPage.tsx
     ProveedoresPage.tsx
     ProveedorPortalPage.tsx
@@ -126,27 +134,26 @@ Files
 File: src/api/axios.ts
 ================
 import axios, { AxiosError } from 'axios';
+import { API_BASE_URL } from './config';
+import { AUTH_UNAUTHORIZED_EVENT, clearSession, getToken } from './session';
 
-// Obtener la URL base desde la variable de entorno o usar fallback por defecto
-const rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/+$/, '');
-
-// Asegurar que la URL base incluya el prefijo /api requerido por el backend NestJS
-const baseURL = rawApiUrl.endsWith('/api') ? rawApiUrl : `${rawApiUrl}/api`;
+const UNEXPECTED_HTML_MESSAGE =
+  'El servidor respondió HTML en lugar de JSON (posible página de advertencia de ngrok o túnel caído). Revisa VITE_API_URL.';
 
 // Instancia de axios preconfigurada.
 // `ngrok-skip-browser-warning` (cualquier valor) evita que ngrok responda su
 // página HTML de advertencia en lugar del JSON. Se fija en la instancia, no en
 // axios.defaults, para no afectar a otras peticiones fuera de la API.
 const api = axios.create({
-  baseURL,
+  baseURL: API_BASE_URL,
   headers: {
     'ngrok-skip-browser-warning': 'true',
   },
 });
 
-// Interceptor para inyectar el token JWT en cada request
+// Inyecta el token JWT en cada request.
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('geartrace_token');
+  const token = getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -161,29 +168,52 @@ api.interceptors.response.use(
   (response) => {
     const contentType = String(response.headers['content-type'] ?? '');
     if (contentType.includes('text/html')) {
-      const message =
-        'El servidor respondió HTML en lugar de JSON (posible página de advertencia de ngrok o túnel caído). Revisa VITE_API_URL.';
       return Promise.reject(
-        new AxiosError(message, 'ERR_UNEXPECTED_HTML', response.config, response.request, {
+        new AxiosError(UNEXPECTED_HTML_MESSAGE, 'ERR_UNEXPECTED_HTML', response.config, response.request, {
           ...response,
-          data: { message },
+          data: { message: UNEXPECTED_HTML_MESSAGE },
         }),
       );
     }
     return response;
   },
-  (error) => {
+  (error: AxiosError) => {
     if (error.response?.status === 401) {
-      // Si el token expira, limpiamos localstorage y forzamos login
-      localStorage.removeItem('geartrace_token');
-      localStorage.removeItem('geartrace_user');
-      window.dispatchEvent(new Event('auth:unauthorized'));
+      clearSession();
+      window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 export default api;
+
+================
+File: src/api/config.ts
+================
+/**
+ * URLs del backend leídas una sola vez desde las variables de entorno de Vite.
+ * El fallback solo aplica a desarrollo local; en Vercel deben definirse
+ * VITE_API_URL y VITE_SOCKET_URL (dominio ngrok vigente de la Raspberry Pi).
+ */
+const DEFAULT_BACKEND_URL = 'http://localhost:3000';
+const API_PREFIX = '/api';
+
+const withoutTrailingSlash = (url: string) => url.replace(/\/+$/, '');
+
+const rawApiUrl = withoutTrailingSlash(import.meta.env.VITE_API_URL || DEFAULT_BACKEND_URL);
+
+/** Base de Axios; agrega `/api` si la variable no lo incluye. */
+export const API_BASE_URL = rawApiUrl.endsWith(API_PREFIX) ? rawApiUrl : `${rawApiUrl}${API_PREFIX}`;
+
+/** Archivos públicos del backend (fotos de piezas en `/uploads/...`), servidos fuera de `/api`. */
+export const BACKEND_ORIGIN = API_BASE_URL.slice(0, -API_PREFIX.length);
+
+/** URL absoluta de un recurso que el backend devuelve como ruta (`/uploads/x.jpg`). */
+export const backendAssetUrl = (path: string): string => `${BACKEND_ORIGIN}${path}`;
+
+/** Servidor Socket.io del gateway de hardware. */
+export const SOCKET_URL = withoutTrailingSlash(import.meta.env.VITE_SOCKET_URL || DEFAULT_BACKEND_URL);
 
 ================
 File: src/api/crud.ts
@@ -242,13 +272,23 @@ File: src/api/resources.ts
 ================
 import api from './axios';
 import { createCrudApi } from './crud';
-import type { Role } from '../contexts/AuthContext';
+import type { Role, User } from '../contexts/AuthContext';
 import type {
   AddUsedPartPayload,
   CreateWorkOrderFromAppointmentPayload,
   UserLookup,
   AppUser,
+  BoxPayload,
+  InventoryBox,
   InventoryPart,
+  LocatePartResponse,
+  LoginPayload,
+  LoginResponse,
+  ManagedUser,
+  PartPayload,
+  RegisterPayload,
+  RescheduleAppointmentPayload,
+  SearchLog,
   Appointment,
   CreateAppointmentPayload,
   CreateInvoicePayload,
@@ -278,6 +318,24 @@ import type {
  *  - vehicles, appointments, work-orders, suppliers, purchases: GERENTE, MECANICO
  *  - DELETE en todos: GERENTE
  */
+
+/** Sesión y gestión de accesos (`/auth/*`). Las rutas de usuarios son solo GERENTE. */
+export const authApi = {
+  login: async (payload: LoginPayload) => (await api.post<LoginResponse>('/auth/login', payload)).data,
+  /** Registro público (rol CLIENTE). Responde igual que el login. */
+  register: async (payload: RegisterPayload) =>
+    (await api.post<LoginResponse>('/auth/register', payload)).data,
+  me: async () => (await api.get<{ user: User }>('/auth/me')).data.user,
+  listUsers: async () => (await api.get<ManagedUser[]>('/auth/users')).data,
+  /** Crea un usuario con cualquier rol (el registro público fuerza CLIENTE). */
+  adminCreate: async (payload: CreateUserPayload) => {
+    await api.post('/auth/admin/create', payload);
+  },
+  changeRole: async (id: number, role: Role) =>
+    (await api.patch<ManagedUser>(`/auth/users/${id}/role`, { role })).data,
+  setActive: async (id: number, isActive: boolean) =>
+    (await api.patch<ManagedUser>(`/auth/users/${id}/toggle`, { isActive })).data,
+};
 
 export const usersApi = {
   ...createCrudApi<AppUser, CreateUserPayload, UpdateUserPayload>('/users'),
@@ -323,9 +381,11 @@ export const supplierPortalApi = {
     (await api.patch<PurchaseOrder>(`/purchases/supplier-portal/${id}`, payload)).data,
 };
 
-export const invoicesApi = createCrudApi<Invoice, CreateInvoicePayload, UpdateInvoicePayload>(
-  '/invoices',
-);
+export const invoicesApi = {
+  ...createCrudApi<Invoice, CreateInvoicePayload, UpdateInvoicePayload>('/invoices'),
+  /** Órdenes concluidas sin factura (GERENTE, CONTADOR; el CONTADOR no accede a /work-orders). */
+  billableOrders: async () => (await api.get<WorkOrder[]>('/invoices/billable-orders')).data,
+};
 
 /** Endpoints del CLIENTE autenticado (solo sus propios datos). */
 export const clientApi = {
@@ -334,14 +394,56 @@ export const clientApi = {
   myAppointments: async () => (await api.get<Appointment[]>('/client/appointments')).data,
   createAppointment: async (payload: CreateAppointmentPayload) =>
     (await api.post<Appointment>('/client/appointments', payload)).data,
+  /** Reprograma una cita propia abierta; vuelve a AGENDADA. */
+  rescheduleAppointment: async (id: number, payload: RescheduleAppointmentPayload) =>
+    (await api.patch<Appointment>(`/client/appointments/${id}`, payload)).data,
+  cancelAppointment: async (id: number) =>
+    (await api.patch<Appointment>(`/client/appointments/${id}/cancel`)).data,
 };
 
-/** Búsqueda de piezas para autocompletar (nombre, código o palabra clave). */
+/** Inventario: cajas y piezas (GERENTE, BODEGUERO); `searchParts` también MECANICO. */
 export const inventoryApi = {
+  listBoxes: async () => (await api.get<InventoryBox[]>('/inventory/boxes')).data,
+  createBox: async (payload: BoxPayload) =>
+    (await api.post<InventoryBox>('/inventory/boxes', payload)).data,
+  updateBox: async (id: number, payload: Partial<BoxPayload>) =>
+    (await api.patch<InventoryBox>(`/inventory/boxes/${id}`, payload)).data,
+  /** 409 si la caja contiene piezas. */
+  removeBox: async (id: number) => {
+    await api.delete(`/inventory/boxes/${id}`);
+  },
+  listParts: async () => (await api.get<InventoryPart[]>('/inventory/parts')).data,
+  createPart: async (payload: PartPayload) =>
+    (await api.post<InventoryPart>('/inventory/parts', payload)).data,
+  /** PATCH: el backend no expone PUT. */
+  updatePart: async (id: number, payload: Partial<PartPayload>) =>
+    (await api.patch<InventoryPart>(`/inventory/parts/${id}`, payload)).data,
+  removePart: async (id: number) => {
+    await api.delete(`/inventory/parts/${id}`);
+  },
+  /** Imagen jpeg/png/gif/webp de hasta 5 MB (campo multipart `image`). */
+  uploadPartImage: async (id: number, file: File) => {
+    const body = new FormData();
+    body.append('image', file);
+    return (await api.post<InventoryPart>(`/inventory/parts/${id}/image`, body)).data;
+  },
+  /** Enciende el LED de la caja de la pieza (también MECANICO). */
+  locatePart: async (id: number) =>
+    (await api.post<LocatePartResponse>(`/inventory/parts/${id}/locate`)).data,
+  /** Búsqueda para autocompletar (nombre, código o palabra clave; máx. 5). */
   searchParts: async (query: string) =>
     (await api.get<InventoryPart[]>(`/inventory/search/${encodeURIComponent(query)}`)).data,
-  /** Piezas en o bajo su stock mínimo (candidatas a orden de compra). */
-  lowStockParts: async () => (await api.get<InventoryPart[]>('/inventory/parts/low-stock')).data,
+  /**
+   * Piezas en o bajo su stock mínimo (candidatas a orden de compra), con caja.
+   * Usa /suppliers/low-stock: /inventory/parts/low-stock devuelve filas SQL
+   * crudas (`min_stock`, `box_name`) sin `code` ni `minStock`.
+   */
+  lowStockParts: async () => (await api.get<InventoryPart[]>('/suppliers/low-stock')).data,
+};
+
+/** Historial de búsquedas por voz (GERENTE, MECANICO). */
+export const logsApi = {
+  list: async () => (await api.get<SearchLog[]>('/logs')).data,
 };
 
 /** Acciones operativas de una orden que no son CRUD. */
@@ -364,11 +466,70 @@ export const inventoryFlowsApi = {
 };
 
 ================
+File: src/api/session.ts
+================
+/**
+ * Persistencia de la sesión en localStorage. Único lugar que conoce las claves:
+ * axios.ts (token en cada petición, limpieza en 401) y AuthContext.tsx.
+ */
+const TOKEN_KEY = 'geartrace_token';
+/** Clave heredada: versiones anteriores guardaban el usuario; se limpia al cerrar sesión. */
+const LEGACY_USER_KEY = 'geartrace_user';
+
+/** Evento que emite axios.ts ante un 401 para que AuthContext cierre la sesión. */
+export const AUTH_UNAUTHORIZED_EVENT = 'auth:unauthorized';
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function saveToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearSession(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(LEGACY_USER_KEY);
+}
+
+================
 File: src/api/socket.ts
 ================
 import { io, Socket } from 'socket.io-client';
+import { SOCKET_URL } from './config';
 
-const SOCKET_URL = (import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000').replace(/\/+$/, '');
+/** Eventos del gateway de LEDs (espejo de SOCKET_EVENTS en backend/src/led/led.types.ts). */
+export const HW_EVENTS = {
+  status: 'hw:status',
+  ledActivated: 'led:activated',
+  ledOff: 'led:off',
+  turnOff: 'led:turnOff',
+  test: 'led:test',
+} as const;
+
+/** Payload de `hw:status`. */
+export interface HardwareStatus {
+  simulationMode: boolean;
+  ledCount: number;
+  gpioPin: number;
+}
+
+/** Payload de `led:activated`. */
+export interface LedActivatedEvent {
+  ledIndex: number;
+  partName: string;
+  colorHex?: string;
+}
+
+/** Payload de `led:off` (`manual` = apagado por un usuario). */
+export interface LedOffEvent {
+  ledIndex: number;
+  manual?: boolean;
+}
+
+/** Color con el que se pinta un LED encendido sin `colorHex` y el de `led:test`. */
+export const LED_DEFAULT_COLOR = '#F97316';
+export const LED_TEST_COLOR = '#38BDF8';
 
 /**
  * Conexión Socket.io al gateway de hardware (LEDs), apta para ngrok.
@@ -427,6 +588,7 @@ export interface UserSummary {
 export interface AppUser extends UserSummary {
   role: Role;
   isActive: boolean;
+  supplierId: number | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
@@ -437,6 +599,8 @@ export interface CreateUserPayload {
   password: string;
   role?: Role;
   isActive?: boolean;
+  /** Obligatorio solo para el rol PROVEEDOR. */
+  supplierId?: number;
 }
 export type UpdateUserPayload = Partial<CreateUserPayload>;
 
@@ -493,20 +657,68 @@ export interface CreateAppointmentPayload {
   reason?: string;
   vehicleId: number;
 }
+/** PATCH /client/appointments/:id — la cita vuelve a AGENDADA. */
+export interface RescheduleAppointmentPayload {
+  scheduledAt: ISODateString;
+  reason?: string;
+}
+
 export interface UpdateAppointmentPayload extends Partial<CreateAppointmentPayload> {
   status?: AppointmentStatus;
 }
 
 // ── Inventario ──────────────────────────────────────────────
-/** Pieza devuelta por /inventory/search/:query (máx. 5 coincidencias). */
+/** Pieza (`/inventory/parts`, `/inventory/search/:query`, `/suppliers/low-stock`). */
 export interface InventoryPart {
   id: number;
   name: string;
   code: string;
   quantity: number;
   minStock: number;
+  /** Se congela en cada OT al consumir la pieza. */
+  unitPrice: DecimalString | null;
+  keywords: string[];
   photoUrl: string | null;
   box?: { id: number; name: string; ledIndex: number; location?: string | null };
+}
+
+/** Caja física con su LED (GET /inventory/boxes incluye sus piezas). */
+export interface InventoryBox {
+  id: number;
+  name: string;
+  description: string | null;
+  ledIndex: number;
+  location: string | null;
+  colorHex: string;
+  parts?: Pick<InventoryPart, 'id' | 'name' | 'code' | 'quantity' | 'minStock'>[];
+}
+
+/** POST /inventory/boxes (`ledIndex` único: un LED por caja). */
+export interface BoxPayload {
+  name: string;
+  description?: string;
+  ledIndex: number;
+  location?: string;
+  colorHex?: string;
+}
+
+/** Respuesta de POST /inventory/parts/:id/locate (el LED se enciende en paralelo). */
+export interface LocatePartResponse {
+  partId: number;
+  partName: string;
+  boxName: string;
+  ledIndex: number;
+}
+
+/** POST /inventory/parts y PATCH /inventory/parts/:id. */
+export interface PartPayload {
+  name: string;
+  code: string;
+  quantity: number;
+  boxId: number;
+  minStock: number;
+  unitPrice?: number;
+  keywords: string[];
 }
 
 export interface AddUsedPartPayload {
@@ -631,6 +843,42 @@ export interface SupplierPurchaseResponsePayload {
   expectedDeliveryAt?: ISODateString;
 }
 
+// ── Autenticación ───────────────────────────────────────────
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+/** Registro público: el backend fuerza el rol CLIENTE. */
+export interface RegisterPayload {
+  name: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  message: string;
+  accessToken: string;
+  user: UserSummary & { role: Role };
+}
+
+/** Fila de GET /auth/users (gestión de accesos). */
+export interface ManagedUser extends UserSummary {
+  role: Role;
+  isActive: boolean;
+  createdAt: ISODateString;
+}
+
+// ── Auditoría ───────────────────────────────────────────────
+/** Búsqueda registrada por Alexa (GET /logs). */
+export interface SearchLog {
+  id: number;
+  query: string;
+  found: boolean;
+  alexaResponse: string | null;
+  createdAt: ISODateString;
+}
+
 // ── Facturas ────────────────────────────────────────────────
 export interface Invoice {
   id: number;
@@ -666,24 +914,21 @@ export interface UpdateInvoicePayload {
 ================
 File: src/components/Inventory/InventoryList.tsx
 ================
-import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, Package } from 'lucide-react';
-import api from '../../api/axios';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ImagePlus, Lightbulb, Package, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { backendAssetUrl } from '../../api/config';
+import { getApiErrorMessage } from '../../api/errors';
+import { inventoryApi } from '../../api/resources';
+import type { InventoryPart } from '../../api/types';
 import PartFormModal, { PartFormValues } from './PartFormModal';
 
-interface InventoryPart {
-  id: number;
-  name: string;
-  code: string;
-  quantity: number;
-  minStock: number;
-  unitPrice: string | null;
-  keywords: string[];
-  box?: {
-    id: number;
-    name: string;
-  };
-}
+/** Formatos y tamaño que acepta POST /inventory/parts/:id/image. */
+const IMAGE_ACCEPT = 'image/jpeg,image/png,image/gif,image/webp';
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+const iconButtonClass =
+  'rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-40';
 
 const toFormValues = (part: InventoryPart): PartFormValues => ({
   id: part.id,
@@ -703,12 +948,14 @@ export default function InventoryList() {
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedPart, setSelectedPart] = useState<PartFormValues | null>(null);
+  const [busyPartId, setBusyPartId] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoTargetRef = useRef<InventoryPart | null>(null);
 
   const loadParts = async () => {
     setIsLoading(true);
     try {
-      const response = await api.get<InventoryPart[]>('/inventory/parts');
-      setParts(response.data);
+      setParts(await inventoryApi.listParts());
       setError(null);
     } catch (requestError) {
       console.error('Error al cargar las piezas', requestError);
@@ -721,6 +968,66 @@ export default function InventoryList() {
   useEffect(() => {
     void loadParts();
   }, []);
+
+  /** Ejecuta una acción sobre una pieza bloqueando sus botones mientras dura. */
+  const runPartAction = async (part: InventoryPart, action: () => Promise<string>, fallback: string) => {
+    setBusyPartId(part.id);
+    try {
+      toast.success(await action());
+    } catch (actionError) {
+      toast.error(getApiErrorMessage(actionError, fallback));
+    } finally {
+      setBusyPartId(null);
+    }
+  };
+
+  const locatePart = (part: InventoryPart) =>
+    runPartAction(
+      part,
+      async () => {
+        const result = await inventoryApi.locatePart(part.id);
+        return `LED ${result.ledIndex} encendido en ${result.boxName}.`;
+      },
+      'No se pudo encender el LED.',
+    );
+
+  const removePart = (part: InventoryPart) => {
+    if (!window.confirm(`¿Eliminar la pieza "${part.name}"? Esta acción no se puede deshacer.`)) return;
+    void runPartAction(
+      part,
+      async () => {
+        await inventoryApi.removePart(part.id);
+        setParts((current) => current.filter((item) => item.id !== part.id));
+        return 'Pieza eliminada.';
+      },
+      'No se pudo eliminar la pieza (puede estar usada en órdenes o pedidos).',
+    );
+  };
+
+  const choosePhoto = (part: InventoryPart) => {
+    photoTargetRef.current = part;
+    fileInputRef.current?.click();
+  };
+
+  const uploadPhoto = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const part = photoTargetRef.current;
+    event.target.value = '';
+    if (!file || !part) return;
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast.error('La imagen supera los 5 MB.');
+      return;
+    }
+    void runPartAction(
+      part,
+      async () => {
+        const updated = await inventoryApi.uploadPartImage(part.id, file);
+        setParts((current) => current.map((item) => (item.id === part.id ? { ...item, photoUrl: updated.photoUrl } : item)));
+        return 'Foto actualizada.';
+      },
+      'No se pudo subir la foto.',
+    );
+  };
 
   const filteredParts = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -810,7 +1117,22 @@ export default function InventoryList() {
               <tbody className="divide-y divide-white/5">
                 {filteredParts.map((part) => (
                   <tr key={part.id} className="transition-colors hover:bg-white/5">
-                    <td className="px-6 py-4 font-medium text-white">{part.name}</td>
+                    <td className="px-6 py-4 font-medium text-white">
+                      <div className="flex items-center gap-3">
+                        {part.photoUrl ? (
+                          <img
+                            src={backendAssetUrl(part.photoUrl)}
+                            alt=""
+                            className="h-10 w-10 rounded-lg border border-white/10 object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-10 w-10 items-center justify-center rounded-lg glass-inset text-slate-500">
+                            <Package size={16} />
+                          </div>
+                        )}
+                        {part.name}
+                      </div>
+                    </td>
                     <td className="px-6 py-4 text-slate-400">{part.code}</td>
                     <td className="px-6 py-4 text-slate-400">
                       {part.box?.name ?? 'Sin caja'}
@@ -824,17 +1146,31 @@ export default function InventoryList() {
                     >
                       {part.quantity}
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedPart(toFormValues(part));
-                          setIsModalOpen(true);
-                        }}
-                        className="font-medium text-brand-400 transition-colors hover:text-brand-300"
-                      >
-                        Editar
-                      </button>
+                    <td className="px-6 py-4">
+                      <div className="flex justify-end gap-1">
+                        <button type="button" title="Ubicar (encender LED)" aria-label={`Ubicar ${part.name}`} disabled={busyPartId === part.id} onClick={() => void locatePart(part)} className={iconButtonClass}>
+                          <Lightbulb size={16} />
+                        </button>
+                        <button type="button" title="Subir foto" aria-label={`Subir foto de ${part.name}`} disabled={busyPartId === part.id} onClick={() => choosePhoto(part)} className={iconButtonClass}>
+                          <ImagePlus size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Editar"
+                          aria-label={`Editar ${part.name}`}
+                          disabled={busyPartId === part.id}
+                          onClick={() => {
+                            setSelectedPart(toFormValues(part));
+                            setIsModalOpen(true);
+                          }}
+                          className={iconButtonClass}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button type="button" title="Eliminar" aria-label={`Eliminar ${part.name}`} disabled={busyPartId === part.id} onClick={() => removePart(part)} className={`${iconButtonClass} hover:text-red-400`}>
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -843,6 +1179,8 @@ export default function InventoryList() {
           </div>
         )}
       </div>
+
+      <input ref={fileInputRef} type="file" accept={IMAGE_ACCEPT} className="hidden" onChange={uploadPhoto} />
 
       <PartFormModal
         isOpen={isModalOpen}
@@ -862,12 +1200,16 @@ File: src/components/Inventory/PartFormModal.tsx
 import { FormEvent, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
+import { getApiErrorMessage } from '../../api/errors';
+import { inventoryApi } from '../../api/resources';
+import type { InventoryBox, PartPayload } from '../../api/types';
 
-interface InventoryBox {
-  id: number;
-  name: string;
-}
+/** "aceite, filtro ,  motor" → ['aceite', 'filtro', 'motor'] */
+const parseKeywords = (value: string): string[] =>
+  value
+    .split(',')
+    .map((keyword) => keyword.trim())
+    .filter(Boolean);
 
 export interface PartFormValues {
   id?: number;
@@ -921,8 +1263,7 @@ export default function PartFormModal({
     const loadBoxes = async () => {
       setIsLoadingBoxes(true);
       try {
-        const response = await api.get<InventoryBox[]>('/inventory/boxes');
-        setBoxes(response.data);
+        setBoxes(await inventoryApi.listBoxes());
       } catch (error) {
         console.error('Error al cargar las cajas', error);
         toast.error('No se pudieron cargar las cajas disponibles.');
@@ -949,33 +1290,29 @@ export default function PartFormModal({
     event.preventDefault();
     setIsSubmitting(true);
 
-    const payload = {
+    const payload: PartPayload = {
       name: form.name.trim(),
       code: form.code.trim(),
       quantity: form.quantity,
       boxId: form.boxId,
       minStock: form.minStock,
       unitPrice: form.unitPrice.trim() === '' ? undefined : Number(form.unitPrice),
-      keywords: keywordsText
-        .split(',')
-        .map((keyword) => keyword.trim())
-        .filter(Boolean),
+      keywords: parseKeywords(keywordsText),
     };
 
     try {
       if (part?.id) {
-        await api.put(`/inventory/parts/${part.id}`, payload);
+        await inventoryApi.updatePart(part.id, payload);
         toast.success('Pieza actualizada correctamente.');
       } else {
-        await api.post('/inventory/parts', payload);
+        await inventoryApi.createPart(payload);
         toast.success('Pieza creada correctamente.');
       }
 
       onSaved();
       onClose();
     } catch (error) {
-      console.error('Error al guardar la pieza', error);
-      toast.error('No se pudo guardar la pieza.');
+      toast.error(getApiErrorMessage(error, 'No se pudo guardar la pieza.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -1124,53 +1461,56 @@ export default function PartFormModal({
 ================
 File: src/components/Suppliers/SuppliersList.tsx
 ================
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, PackageCheck, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
+import { getApiErrorMessage } from '../../api/errors';
+import { inventoryApi, purchasesApi, suppliersApi } from '../../api/resources';
+import type { InventoryPart, Supplier } from '../../api/types';
 
-interface Supplier { id: number; name: string; email?: string; phone?: string }
-interface LowStockPart { id: number; name: string; code: string; quantity: number; minStock: number }
+/** Cantidad sugerida: reponer hasta el doble del mínimo (al menos 1 unidad). */
+const suggestedRestockQuantity = (part: InventoryPart): number =>
+  Math.max(part.minStock * 2 - part.quantity, 1);
 
 export default function SuppliersList() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [lowStock, setLowStock] = useState<LowStockPart[]>([]);
+  const [lowStock, setLowStock] = useState<InventoryPart[]>([]);
   const [supplierId, setSupplierId] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
-      const [supplierResponse, stockResponse] = await Promise.all([
-        api.get<Supplier[]>('/suppliers'),
-        api.get<LowStockPart[]>('/suppliers/low-stock'),
+      const [supplierList, lowStockParts] = await Promise.all([
+        suppliersApi.list(),
+        inventoryApi.lowStockParts(),
       ]);
-      setSuppliers(supplierResponse.data);
-      setLowStock(stockResponse.data);
-      if (!supplierId && supplierResponse.data[0]) setSupplierId(String(supplierResponse.data[0].id));
+      setSuppliers(supplierList);
+      setLowStock(lowStockParts);
+      setSupplierId((current) => current || (supplierList[0] ? String(supplierList[0].id) : ''));
     } catch (error) {
-      console.error('Error al cargar abastecimiento', error);
-      toast.error('No se pudo cargar la información de proveedores.');
+      toast.error(getApiErrorMessage(error, 'No se pudo cargar la información de proveedores.'));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
-  const requestRestock = async (part: LowStockPart) => {
+  const requestRestock = async (part: InventoryPart) => {
     if (!supplierId) {
       toast.error('Selecciona un proveedor.');
       return;
     }
     try {
-      await api.post('/suppliers/purchase-orders', {
+      // POST /purchases aplica las mismas reglas que /suppliers/purchase-orders (SupplierService).
+      await purchasesApi.create({
         supplierId: Number(supplierId),
-        items: [{ partId: part.id, quantity: Math.max(part.minStock * 2 - part.quantity, 1) }],
+        items: [{ partId: part.id, quantity: suggestedRestockQuantity(part) }],
       });
       toast.success(`Reposición solicitada para ${part.name}.`);
       setLowStock((current) => current.filter((item) => item.id !== part.id));
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'No se pudo registrar la reposición.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo registrar la reposición.'));
     }
   };
 
@@ -1909,6 +2249,38 @@ export default function ResourceListPage<T extends { id: number }>({
 }
 
 ================
+File: src/components/ui/StatCard.tsx
+================
+import type { LucideIcon } from 'lucide-react';
+
+export interface StatCardProps {
+  label: string;
+  value: string | number;
+  icon: LucideIcon;
+  /** Clase de color del ícono, p. ej. `text-emerald-400`. */
+  color: string;
+}
+
+/** Métrica de los dashboards por rol (ícono + etiqueta + valor). */
+export default function StatCard({ label, value, icon: Icon, color }: StatCardProps) {
+  return (
+    <div className="glass flex items-center gap-4 rounded-2xl p-6">
+      <div className={`glass-inset rounded-xl p-4 ${color}`}><Icon size={28} /></div>
+      <div><p className="text-sm text-slate-400">{label}</p><p className="text-3xl font-bold text-white">{value}</p></div>
+    </div>
+  );
+}
+
+/** Rejilla responsive para un grupo de StatCard. */
+export function StatGrid({ cards }: { cards: StatCardProps[] }) {
+  return (
+    <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
+      {cards.map((card) => <StatCard key={card.label} {...card} />)}
+    </div>
+  );
+}
+
+================
 File: src/components/ui/StatusBadge.tsx
 ================
 export type BadgeTone = 'neutral' | 'info' | 'warning' | 'success' | 'danger' | 'brand';
@@ -1984,25 +2356,21 @@ File: src/components/Users/UsersList.tsx
 import { FormEvent, useEffect, useState } from 'react';
 import { Plus, ShieldCheck, Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
-import { Role, useAuth } from '../../contexts/AuthContext';
+import { getApiErrorMessage } from '../../api/errors';
+import { authApi } from '../../api/resources';
+import type { ManagedUser } from '../../api/types';
+import { Role, ROLES, useAuth } from '../../contexts/AuthContext';
+import { ROLE_META } from '../../utils/status';
 
-interface ManagedUser {
-  id: number;
+interface NewUserForm {
   name: string;
   email: string;
+  password: string;
   role: Role;
-  isActive: boolean;
+  supplierId: string;
 }
 
-const roles: Role[] = [
-  'GERENTE',
-  'MECANICO',
-  'BODEGUERO',
-  'CONTADOR',
-  'CLIENTE',
-  'PROVEEDOR',
-];
+const EMPTY_FORM: NewUserForm = { name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' };
 
 export default function UsersList() {
   const { user } = useAuth();
@@ -2010,21 +2378,13 @@ export default function UsersList() {
   const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    name: '',
-    email: '',
-    password: '',
-    role: 'CLIENTE' as Role,
-    supplierId: '',
-  });
+  const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
 
   const loadUsers = async () => {
     try {
-      const response = await api.get<ManagedUser[]>('/auth/users');
-      setUsers(response.data);
+      setUsers(await authApi.listUsers());
     } catch (error) {
-      console.error('Error al cargar usuarios', error);
-      toast.error('No se pudieron cargar los usuarios.');
+      toast.error(getApiErrorMessage(error, 'No se pudieron cargar los usuarios.'));
     } finally {
       setIsLoading(false);
     }
@@ -2042,16 +2402,19 @@ export default function UsersList() {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.post('/auth/admin/create', {
-        ...form,
+      await authApi.adminCreate({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        password: form.password,
+        role: form.role,
         supplierId: form.role === 'PROVEEDOR' ? Number(form.supplierId) : undefined,
       });
       toast.success('Usuario creado correctamente.');
-      setForm({ name: '', email: '', password: '', role: 'CLIENTE', supplierId: '' });
+      setForm(EMPTY_FORM);
       setIsModalOpen(false);
       await loadUsers();
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'No se pudo crear el usuario.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo crear el usuario.'));
     } finally {
       setSaving(false);
     }
@@ -2059,14 +2422,13 @@ export default function UsersList() {
 
   const toggleActive = async (managedUser: ManagedUser) => {
     try {
-      await api.patch(`/auth/users/${managedUser.id}/toggle`, { isActive: !managedUser.isActive });
+      await authApi.setActive(managedUser.id, !managedUser.isActive);
       setUsers((current) =>
         current.map((item) => item.id === managedUser.id ? { ...item, isActive: !item.isActive } : item),
       );
       toast.success(managedUser.isActive ? 'Acceso desactivado.' : 'Acceso activado.');
     } catch (error) {
-      console.error('Error al cambiar acceso', error);
-      toast.error('No se pudo cambiar el acceso.');
+      toast.error(getApiErrorMessage(error, 'No se pudo cambiar el acceso.'));
     }
   };
 
@@ -2094,7 +2456,7 @@ export default function UsersList() {
                 {users.map((managedUser) => (
                   <tr key={managedUser.id} className="hover:bg-white/5">
                     <td className="px-6 py-4"><div className="font-medium text-white">{managedUser.name}</div><div className="text-sm text-slate-400">{managedUser.email}</div></td>
-                    <td className="px-6 py-4 text-slate-300">{managedUser.role}</td>
+                    <td className="px-6 py-4 text-slate-300">{ROLE_META[managedUser.role].label}</td>
                     <td className={`px-6 py-4 ${managedUser.isActive ? 'text-emerald-400' : 'text-slate-500'}`}><span className="inline-flex items-center gap-2"><ShieldCheck size={16} />{managedUser.isActive ? 'Activo' : 'Inactivo'}</span></td>
                     <td className="px-6 py-4"><button type="button" onClick={() => void toggleActive(managedUser)} className="text-sm font-medium text-brand-400 hover:text-brand-300">{managedUser.isActive ? 'Desactivar' : 'Activar'}</button></td>
                   </tr>
@@ -2113,7 +2475,7 @@ export default function UsersList() {
               <input key={field} required value={form[field]} type={field === 'password' ? 'password' : field === 'email' ? 'email' : 'text'} placeholder={field === 'name' ? 'Nombre completo' : field === 'email' ? 'Correo electrónico' : 'Contraseña'} onChange={(event) => setForm({ ...form, [field]: event.target.value })} className="w-full rounded-xl px-4 py-3 text-white glass-input" />
             ))}
             <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className="w-full rounded-xl px-4 py-3 text-white glass-input">
-              {roles.map((role) => <option key={role} value={role}>{role}</option>)}
+              {ROLES.map((role) => <option key={role} value={role}>{ROLE_META[role].label}</option>)}
             </select>
             {form.role === 'PROVEEDOR' && (
               <input
@@ -2141,25 +2503,11 @@ import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { ShieldCheck, Users, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../../api/axios';
-import { Role, useAuth } from '../../contexts/AuthContext';
-
-interface ManagedUser {
-  id: number;
-  name: string;
-  email: string;
-  role: Role;
-  isActive: boolean;
-}
-
-const roles: Role[] = [
-  'GERENTE',
-  'MECANICO',
-  'BODEGUERO',
-  'CONTADOR',
-  'CLIENTE',
-  'PROVEEDOR',
-];
+import { getApiErrorMessage } from '../../api/errors';
+import { authApi } from '../../api/resources';
+import type { ManagedUser } from '../../api/types';
+import { Role, ROLES, useAuth } from '../../contexts/AuthContext';
+import { ROLE_META } from '../../utils/status';
 
 export default function UsersManagement() {
   const { user } = useAuth();
@@ -2174,11 +2522,9 @@ export default function UsersManagement() {
 
     const loadUsers = async () => {
       try {
-        const response = await api.get<ManagedUser[]>('/auth/users');
-        setUsers(response.data);
+        setUsers(await authApi.listUsers());
       } catch (error) {
-        console.error('Error al cargar los usuarios', error);
-        toast.error('No se pudieron cargar los usuarios.');
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar los usuarios.'));
       } finally {
         setIsLoading(false);
       }
@@ -2205,16 +2551,15 @@ export default function UsersManagement() {
     );
 
     try {
-      await api.patch(`/auth/users/${id}/role`, { role });
+      await authApi.changeRole(id, role);
       toast.success('Rol actualizado correctamente.');
     } catch (error) {
-      console.error('Error al actualizar el rol', error);
       setUsers((currentUsers) =>
         currentUsers.map((managedUser) =>
           managedUser.id === id ? previousUser : managedUser,
         ),
       );
-      toast.error('No se pudo actualizar el rol.');
+      toast.error(getApiErrorMessage(error, 'No se pudo actualizar el rol.'));
     } finally {
       setUpdatingUserId(null);
     }
@@ -2231,22 +2576,19 @@ export default function UsersManagement() {
     );
 
     try {
-      await api.patch(`/auth/users/${managedUser.id}/toggle`, {
-        isActive: !managedUser.isActive,
-      });
+      await authApi.setActive(managedUser.id, !managedUser.isActive);
       toast.success(
         managedUser.isActive
           ? 'Usuario desactivado correctamente.'
           : 'Usuario activado correctamente.',
       );
     } catch (error) {
-      console.error('Error al actualizar el estado del usuario', error);
       setUsers((currentUsers) =>
         currentUsers.map((currentUser) =>
           currentUser.id === managedUser.id ? managedUser : currentUser,
         ),
       );
-      toast.error('No se pudo actualizar el estado del usuario.');
+      toast.error(getApiErrorMessage(error, 'No se pudo actualizar el estado del usuario.'));
     } finally {
       setUpdatingUserId(null);
     }
@@ -2314,9 +2656,9 @@ export default function UsersManagement() {
                           }
                           className="rounded-lg px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50 glass-input"
                         >
-                          {roles.map((role) => (
+                          {ROLES.map((role) => (
                             <option key={role} value={role}>
-                              {role}
+                              {ROLE_META[role].label}
                             </option>
                           ))}
                         </select>
@@ -3494,25 +3836,18 @@ File: src/components/AuditLogs.tsx
 import { useEffect, useState } from 'react';
 import { ClipboardList, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../api/axios';
-
-interface AuditLog {
-  id: number;
-  query: string;
-  found: boolean;
-  alexaResponse: string | null;
-  createdAt: string;
-}
+import { logsApi } from '../api/resources';
+import type { SearchLog } from '../api/types';
+import { formatDateTime } from '../utils/format';
 
 export default function AuditLogs() {
-  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [logs, setLogs] = useState<SearchLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const loadLogs = async () => {
       try {
-        const response = await api.get<AuditLog[]>('/logs');
-        setLogs(response.data);
+        setLogs(await logsApi.list());
       } catch (error) {
         console.error('Error al cargar los logs de auditoría', error);
         toast.error('No se pudieron cargar los registros de auditoría.');
@@ -3566,7 +3901,7 @@ export default function AuditLogs() {
                 {logs.map((log) => (
                   <tr key={log.id} className="transition-colors hover:bg-white/5">
                     <td className="whitespace-nowrap px-6 py-4 text-slate-400">
-                      {new Date(log.createdAt).toLocaleString('es-ES')}
+                      {formatDateTime(log.createdAt)}
                     </td>
                     <td className="px-6 py-4 font-medium text-white">{log.query}</td>
                     <td className="px-6 py-4">
@@ -3595,18 +3930,127 @@ export default function AuditLogs() {
 }
 
 ================
+File: src/components/BodegueroDashboard.tsx
+================
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertCircle, Boxes, Package, Truck } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../api/errors';
+import { inventoryApi, purchasesApi } from '../api/resources';
+import type { InventoryPart, PurchaseOrder } from '../api/types';
+import { formatDate } from '../utils/format';
+import { PURCHASE_STATUS } from '../utils/status';
+import StatusBadge from './ui/StatusBadge';
+import { StatGrid } from './ui/StatCard';
+
+/** Pedidos que aún pueden recibirse (pendientes o confirmados por el proveedor). */
+const isIncoming = (order: PurchaseOrder) => order.status === 'PENDIENTE' || order.status === 'CONFIRMADA';
+const PREVIEW_LIMIT = 5;
+
+/** Panel del BODEGUERO: inventario, alertas de stock y pedidos por recibir. */
+export default function BodegueroDashboard() {
+  const [boxCount, setBoxCount] = useState(0);
+  const [partCount, setPartCount] = useState(0);
+  const [lowStock, setLowStock] = useState<InventoryPart[]>([]);
+  const [incoming, setIncoming] = useState<PurchaseOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [boxes, parts, lowStockParts, purchases] = await Promise.all([
+          inventoryApi.listBoxes(),
+          inventoryApi.listParts(),
+          inventoryApi.lowStockParts(),
+          purchasesApi.list(),
+        ]);
+        setBoxCount(boxes.length);
+        setPartCount(parts.length);
+        setLowStock(lowStockParts);
+        setIncoming(purchases.filter(isIncoming));
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar las métricas del almacén.'));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, []);
+
+  return (
+    <section className="space-y-6">
+      <header>
+        <h2 className="text-2xl font-bold text-white">Panel de bodega</h2>
+        <p className="text-sm text-slate-400">Inventario, alertas de stock y reposición.</p>
+      </header>
+      <StatGrid
+        cards={[
+          { label: 'Cajas', value: boxCount, icon: Boxes, color: 'text-blue-400' },
+          { label: 'Tipos de piezas', value: partCount, icon: Package, color: 'text-emerald-400' },
+          { label: 'Stock bajo', value: lowStock.length, icon: AlertCircle, color: 'text-rose-400' },
+          { label: 'Pedidos por recibir', value: incoming.length, icon: Truck, color: 'text-amber-400' },
+        ]}
+      />
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="glass rounded-2xl p-6">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-white"><AlertCircle className="text-rose-400" /> Stock bajo</h3>
+            <Link to="/proveedores" className="text-sm font-medium text-brand-400 hover:text-brand-300">Reponer</Link>
+          </div>
+          {loading ? <p className="text-slate-400">Cargando...</p> : lowStock.length === 0 ? <p className="text-emerald-400">Todas las piezas están sobre su mínimo.</p> : (
+            <div className="space-y-3">
+              {lowStock.slice(0, PREVIEW_LIMIT).map((part) => (
+                <div key={part.id} className="flex justify-between gap-3 rounded-xl p-4 glass-inset">
+                  <div><p className="font-medium text-white">{part.name}</p><p className="text-xs text-slate-500">{part.code} · {part.box?.name ?? 'Sin caja'}</p></div>
+                  <p className="text-sm text-amber-400">{part.quantity} / mín. {part.minStock}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="glass rounded-2xl p-6">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-white"><Truck className="text-brand-400" /> Pedidos por recibir</h3>
+            <Link to="/compras" className="text-sm font-medium text-brand-400 hover:text-brand-300">Ver compras</Link>
+          </div>
+          {loading ? <p className="text-slate-400">Cargando...</p> : incoming.length === 0 ? <p className="text-slate-400">No hay pedidos en curso.</p> : (
+            <div className="space-y-3">
+              {incoming.slice(0, PREVIEW_LIMIT).map((order) => (
+                <div key={order.id} className="flex items-center justify-between gap-3 rounded-xl p-4 glass-inset">
+                  <div>
+                    <p className="font-semibold text-white">{order.number}</p>
+                    <p className="text-xs text-slate-500">
+                      {order.supplier?.name ?? 'Proveedor'} · {order.expectedDeliveryAt ? `entrega ${formatDate(order.expectedDeliveryAt)}` : `pedido ${formatDate(order.orderedAt)}`}
+                    </p>
+                  </div>
+                  <StatusBadge {...PURCHASE_STATUS[order.status]} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+================
 File: src/components/ClienteDashboard.tsx
 ================
 import { FormEvent, useEffect, useState } from 'react';
-import { CalendarDays, CheckCircle2 } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { CalendarDays, Car, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../api/axios';
+import { getApiErrorMessage } from '../api/errors';
+import { clientApi } from '../api/resources';
+import type { Vehicle, WorkOrder } from '../api/types';
+import { formatDate } from '../utils/format';
+import { fromDateTimeLocal } from '../utils/formValues';
+import { WORK_ORDER_STATUS } from '../utils/status';
+import { WORK_ORDER_COLUMNS } from './WorkOrders/workOrderFlow';
 
-interface Vehicle { id: number; plate: string; make: string; model: string }
-type Status = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
-interface WorkOrder { id: number; number: string; description: string; diagnosis?: string; status: Status; vehicle: Vehicle; createdAt: string }
-const statuses: Status[] = ['EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS', 'CONCLUIDO'];
-const labels: Record<Status, string> = { EN_DIAGNOSTICO: 'En diagnóstico', EN_PROCESO: 'En proceso', ESPERA_REPUESTOS: 'Espera de repuestos', CONCLUIDO: 'Concluido' };
+const PROGRESS_LEGEND = WORK_ORDER_COLUMNS.map((status) => WORK_ORDER_STATUS[status].label).join(' · ');
 
 export default function ClienteDashboard() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -3615,46 +4059,153 @@ export default function ClienteDashboard() {
   const [scheduledAt, setScheduledAt] = useState('');
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(true);
+  const { hash } = useLocation();
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [vehicleResponse, orderResponse] = await Promise.all([api.get<Vehicle[]>('/client/vehicles'), api.get<WorkOrder[]>('/client/work-orders')]);
-        setVehicles(vehicleResponse.data);
-        setOrders(orderResponse.data);
-        if (vehicleResponse.data[0]) setVehicleId(String(vehicleResponse.data[0].id));
+        const [myVehicles, myOrders] = await Promise.all([clientApi.myVehicles(), clientApi.myWorkOrders()]);
+        setVehicles(myVehicles);
+        setOrders(myOrders);
+        if (myVehicles[0]) setVehicleId(String(myVehicles[0].id));
       } catch (error) {
-        console.error('Error al cargar el portal del cliente', error);
-        toast.error('No se pudo cargar tu información.');
+        toast.error(getApiErrorMessage(error, 'No se pudo cargar tu información.'));
       } finally { setLoading(false); }
     };
     void load();
   }, []);
 
+  // Enlace del menú "Mis vehículos" (/dashboard#vehicles): el router no hace scroll al ancla.
+  useEffect(() => {
+    if (!loading && hash) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth' });
+  }, [hash, loading]);
+
   const requestAppointment = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await api.post('/client/appointments', { vehicleId: Number(vehicleId), scheduledAt: new Date(scheduledAt).toISOString(), reason });
+      await clientApi.createAppointment({
+        vehicleId: Number(vehicleId),
+        scheduledAt: fromDateTimeLocal(scheduledAt),
+        reason: reason.trim() || undefined,
+      });
       setScheduledAt('');
       setReason('');
       toast.success('Cita solicitada correctamente.');
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'No se pudo solicitar la cita.');
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo solicitar la cita.'));
     }
   };
 
   if (loading) return <p className="text-slate-400">Cargando tu portal...</p>;
-  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl p-3 icon-badge"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="glass rounded-2xl p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = statuses.indexOf(order.status); return <article key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p></div><span className="text-xs text-brand-400">{labels[order.status]}</span></div><div className="mt-5 flex gap-2">{statuses.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < 3 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">Diagnóstico · En proceso · Repuestos · Concluido</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {new Date(order.createdAt).toLocaleDateString()}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="glass h-fit space-y-4 rounded-2xl p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl px-4 py-3 text-white glass-input"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl px-4 py-3 text-white glass-input" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl px-4 py-3 text-white placeholder:text-slate-500 glass-input" /><button type="submit" className="w-full rounded-xl px-4 py-3 font-semibold text-white btn-primary">Solicitar cita</button></form></div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
+  return <section className="space-y-6"><header className="flex items-center gap-3"><div className="rounded-xl p-3 icon-badge"><CalendarDays size={24} /></div><div><h2 className="text-2xl font-bold text-white">Mi portal</h2><p className="text-sm text-slate-400">Seguimiento transparente de tus reparaciones.</p></div></header><div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]"><div className="glass rounded-2xl p-6"><h3 className="mb-5 text-lg font-semibold text-white">Historial y avance</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes registradas.</p> : <div className="space-y-5">{orders.map((order) => { const current = WORK_ORDER_COLUMNS.indexOf(order.status); return <article key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><div><p className="font-semibold text-white">{order.number} · {order.vehicle?.plate}</p><p className="text-sm text-slate-400">{order.vehicle?.make} {order.vehicle?.model}</p></div><span className="text-xs text-brand-400">{WORK_ORDER_STATUS[order.status].label}</span></div><div className="mt-5 flex gap-2">{WORK_ORDER_COLUMNS.map((status, index) => <div key={status} className="flex flex-1 items-center gap-2"><div className={`h-3 w-3 rounded-full ${index <= current ? 'bg-brand-500' : 'bg-slate-700'}`} />{index < WORK_ORDER_COLUMNS.length - 1 && <div className={`h-1 flex-1 ${index < current ? 'bg-brand-500' : 'bg-slate-700'}`} />}</div>)}</div><p className="mt-3 text-[10px] text-slate-500">{PROGRESS_LEGEND}</p>{order.diagnosis && <p className="mt-3 text-sm text-slate-300">Diagnóstico: {order.diagnosis}</p>}<p className="mt-3 text-xs text-slate-500">Registrada el {formatDate(order.createdAt)}</p></article>; })}</div>}</div><form onSubmit={requestAppointment} className="glass h-fit space-y-4 rounded-2xl p-6"><h3 className="text-lg font-semibold text-white">Agendar revisión</h3><select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="w-full rounded-xl px-4 py-3 text-white glass-input"><option value="">Selecciona un vehículo</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.make} {vehicle.model}</option>)}</select><input required type="datetime-local" value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} className="w-full rounded-xl px-4 py-3 text-white glass-input" /><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Motivo (opcional)" rows={4} className="w-full rounded-xl px-4 py-3 text-white placeholder:text-slate-500 glass-input" /><button type="submit" className="w-full rounded-xl px-4 py-3 font-semibold text-white btn-primary">Solicitar cita</button></form></div><div id="vehicles" className="glass scroll-mt-24 rounded-2xl p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Car className="text-brand-400" /> Mis vehículos</h3>{vehicles.length === 0 ? <p className="text-slate-400">No tienes vehículos registrados. Acércate al taller para registrarlo.</p> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{vehicles.map((vehicle) => { const active = orders.find((order) => order.vehicleId === vehicle.id && order.status !== 'CONCLUIDO'); return <article key={vehicle.id} className="rounded-xl p-4 glass-inset"><p className="font-mono font-semibold text-white">{vehicle.plate}</p><p className="text-sm text-slate-300">{vehicle.make} {vehicle.model}{vehicle.year ? ` · ${vehicle.year}` : ''}</p>{vehicle.color && <p className="text-xs text-slate-500">Color: {vehicle.color}</p>}<p className="mt-3 text-xs">{active ? <span className="text-brand-400">En taller: {active.number} · {WORK_ORDER_STATUS[active.status].label}</span> : <span className="text-emerald-400">Sin órdenes activas</span>}</p></article>; })}</div>}</div><p className="flex items-center gap-2 text-sm text-slate-400"><CheckCircle2 size={16} className="text-emerald-400" /> Solo puedes consultar tus vehículos y órdenes.</p></section>;
+}
+
+================
+File: src/components/ContadorDashboard.tsx
+================
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { BadgeCheck, ClipboardCheck, Clock, Receipt } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../api/errors';
+import { invoicesApi } from '../api/resources';
+import type { Invoice, WorkOrder } from '../api/types';
+import { formatCurrency, formatDate } from '../utils/format';
+import { StatGrid } from './ui/StatCard';
+
+const PREVIEW_LIMIT = 5;
+
+/** Suma montos Decimal (llegan como string). */
+const sumTotals = (invoices: Invoice[]) => invoices.reduce((sum, invoice) => sum + Number(invoice.total), 0);
+
+/** Panel del CONTADOR: cobros pendientes, cobrado y órdenes por facturar. */
+export default function ContadorDashboard() {
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [billable, setBillable] = useState<WorkOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [invoiceList, billableOrders] = await Promise.all([invoicesApi.list(), invoicesApi.billableOrders()]);
+        setInvoices(invoiceList);
+        setBillable(billableOrders);
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar los datos de facturación.'));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, []);
+
+  const pending = invoices.filter((invoice) => invoice.status === 'PENDIENTE');
+  const paid = invoices.filter((invoice) => invoice.status === 'PAGADA');
+
+  return (
+    <section className="space-y-6">
+      <header>
+        <h2 className="text-2xl font-bold text-white">Panel de facturación</h2>
+        <p className="text-sm text-slate-400">Cobros pendientes y órdenes concluidas por facturar.</p>
+      </header>
+      <StatGrid
+        cards={[
+          { label: 'Por facturar', value: billable.length, icon: ClipboardCheck, color: 'text-blue-400' },
+          { label: 'Facturas pendientes', value: pending.length, icon: Clock, color: 'text-amber-400' },
+          { label: 'Por cobrar', value: formatCurrency(sumTotals(pending)), icon: Receipt, color: 'text-rose-400' },
+          { label: 'Cobrado', value: formatCurrency(sumTotals(paid)), icon: BadgeCheck, color: 'text-emerald-400' },
+        ]}
+      />
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="glass rounded-2xl p-6">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-white"><ClipboardCheck className="text-brand-400" /> Órdenes por facturar</h3>
+            <Link to="/facturacion" className="text-sm font-medium text-brand-400 hover:text-brand-300">Facturar</Link>
+          </div>
+          {loading ? <p className="text-slate-400">Cargando...</p> : billable.length === 0 ? <p className="text-emerald-400">No hay órdenes pendientes de facturar.</p> : (
+            <div className="space-y-3">
+              {billable.slice(0, PREVIEW_LIMIT).map((order) => (
+                <div key={order.id} className="flex justify-between gap-3 rounded-xl p-4 glass-inset">
+                  <div><p className="font-semibold text-white">{order.number}</p><p className="text-xs text-slate-500">{order.vehicle?.plate} · {order.vehicle?.owner?.name ?? 'sin cliente'} · {formatDate(order.completedAt)}</p></div>
+                  <p className="text-sm text-slate-200">{formatCurrency(order.finalCost ?? order.estimatedCost)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="glass rounded-2xl p-6">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-white"><Clock className="text-amber-400" /> Facturas pendientes de pago</h3>
+            <Link to="/facturacion" className="text-sm font-medium text-brand-400 hover:text-brand-300">Ver todas</Link>
+          </div>
+          {loading ? <p className="text-slate-400">Cargando...</p> : pending.length === 0 ? <p className="text-emerald-400">No hay cobros pendientes.</p> : (
+            <div className="space-y-3">
+              {pending.slice(0, PREVIEW_LIMIT).map((invoice) => (
+                <div key={invoice.id} className="flex justify-between gap-3 rounded-xl p-4 glass-inset">
+                  <div><p className="font-semibold text-white">{invoice.number}</p><p className="text-xs text-slate-500">{invoice.client?.name ?? 'Cliente'} · emitida {formatDate(invoice.issuedAt)}</p></div>
+                  <p className="text-sm font-semibold text-white">{formatCurrency(invoice.total)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 ================
 File: src/components/Dashboard.tsx
 ================
 import { useAuth } from '../contexts/AuthContext';
+import BodegueroDashboard from './BodegueroDashboard';
 import ClienteDashboard from './ClienteDashboard';
+import ContadorDashboard from './ContadorDashboard';
 import GerenteDashboard from './GerenteDashboard';
 import MecanicoDashboard from './MecanicoDashboard';
+import ProveedorDashboard from './ProveedorDashboard';
 
+/** Orquestador: cada rol tiene su panel. */
 export default function Dashboard() {
   const { user } = useAuth();
 
@@ -3664,10 +4215,11 @@ export default function Dashboard() {
     case 'MECANICO':
       return <MecanicoDashboard />;
     case 'BODEGUERO':
-      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+      return <BodegueroDashboard />;
     case 'CONTADOR':
+      return <ContadorDashboard />;
     case 'PROVEEDOR':
-      return <p className="text-slate-400">Selecciona un módulo del menú.</p>;
+      return <ProveedorDashboard />;
     case 'CLIENTE':
       return <ClienteDashboard />;
     default:
@@ -3681,60 +4233,46 @@ File: src/components/GerenteDashboard.tsx
 import { useEffect, useState } from 'react';
 import { AlertCircle, ClipboardList, Cpu, Package, Server } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../api/axios';
-import { createHardwareSocket } from '../api/socket';
+import { getApiErrorMessage } from '../api/errors';
+import { inventoryApi, workOrdersApi } from '../api/resources';
+import { createHardwareSocket, HW_EVENTS, type HardwareStatus } from '../api/socket';
+import type { WorkOrder } from '../api/types';
+import { WORK_ORDER_STATUS } from '../utils/status';
+import StatCard, { type StatCardProps } from './ui/StatCard';
 
-interface HwStatus {
-  simulationMode: boolean;
-  ledCount: number;
-  gpioPin: number;
-}
-
-interface WorkOrder {
-  id: number;
-  number: string;
-  description: string;
-  status: string;
-  vehicle: { plate: string; make: string; model: string };
-}
-
-const activeStatuses = new Set(['EN_DIAGNOSTICO', 'EN_PROCESO', 'ESPERA_REPUESTOS']);
+/** Órdenes activas = todas menos las concluidas. */
+const isActiveOrder = (order: WorkOrder) => order.status !== 'CONCLUIDO';
 
 export default function GerenteDashboard() {
   const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });
-  const [hwStatus, setHwStatus] = useState<HwStatus | null>(null);
+  const [hwStatus, setHwStatus] = useState<HardwareStatus | null>(null);
   const [orders, setOrders] = useState<WorkOrder[]>([]);
 
   useEffect(() => {
     const loadData = async () => {
       try {
         const [boxes, parts, lowStock, workOrders] = await Promise.all([
-          api.get('/inventory/boxes'),
-          api.get('/inventory/parts'),
-          api.get('/inventory/parts/low-stock'),
-          api.get<WorkOrder[]>('/service/work-orders'),
+          inventoryApi.listBoxes(),
+          inventoryApi.listParts(),
+          inventoryApi.lowStockParts(),
+          workOrdersApi.list(),
         ]);
-        setStats({
-          boxes: boxes.data.length,
-          parts: parts.data.length,
-          lowStock: lowStock.data.length,
-        });
-        setOrders(workOrders.data.filter((order) => activeStatuses.has(order.status)));
+        setStats({ boxes: boxes.length, parts: parts.length, lowStock: lowStock.length });
+        setOrders(workOrders.filter(isActiveOrder));
       } catch (error) {
-        console.error('Error al cargar el dashboard del gerente', error);
-        toast.error('No se pudieron cargar las métricas.');
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar las métricas.'));
       }
     };
     void loadData();
 
     const socket = createHardwareSocket();
-    socket.on('hw:status', (status: HwStatus) => setHwStatus(status));
+    socket.on(HW_EVENTS.status, (status: HardwareStatus) => setHwStatus(status));
     return () => {
       socket.disconnect();
     };
   }, []);
 
-  const cards = [
+  const cards: StatCardProps[] = [
     { label: 'Total Cajas', value: stats.boxes, icon: Package, color: 'text-blue-400' },
     { label: 'Tipos de Piezas', value: stats.parts, icon: Server, color: 'text-emerald-400' },
     { label: 'Stock Bajo', value: stats.lowStock, icon: AlertCircle, color: 'text-rose-400' },
@@ -3747,12 +4285,7 @@ export default function GerenteDashboard() {
         <p className="text-sm text-slate-400">Visión general de la operación de GearTrace.</p>
       </header>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {cards.map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="glass flex items-center gap-4 rounded-2xl p-6">
-            <div className={`glass-inset rounded-xl p-4 ${color}`}><Icon size={28} /></div>
-            <div><p className="text-sm text-slate-400">{label}</p><p className="text-3xl font-bold text-white">{value}</p></div>
-          </div>
-        ))}
+        {cards.map((card) => <StatCard key={card.label} {...card} />)}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="glass rounded-2xl p-6">
@@ -3767,7 +4300,7 @@ export default function GerenteDashboard() {
         </div>
         <div className="glass rounded-2xl p-6">
           <h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><ClipboardList className="text-brand-400" /> Órdenes activas</h3>
-          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{order.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle.plate} · {order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
+          {orders.length === 0 ? <p className="text-slate-400">No hay órdenes activas.</p> : <div className="space-y-3">{orders.map((order) => <div key={order.id} className="rounded-xl p-4 glass-inset"><div className="flex justify-between gap-3"><span className="font-semibold text-white">{order.number}</span><span className="text-xs text-brand-400">{WORK_ORDER_STATUS[order.status].label}</span></div><p className="mt-1 text-sm text-slate-400">{order.vehicle?.plate} · {order.vehicle?.make} {order.vehicle?.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p></div>)}</div>}
         </div>
       </div>
     </section>
@@ -3842,28 +4375,33 @@ export default function Layout() {
 ================
 File: src/components/Login.tsx
 ================
-import { useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import api from '../api/axios';
+import { FormEvent, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../api/errors';
+import { authApi } from '../api/resources';
+import { useAuth } from '../contexts/AuthContext';
+
+/** Las cuentas de demostración (prisma/seed.ts) solo se anuncian en desarrollo. */
+const SHOW_DEMO_HINT = import.meta.env.DEV;
 
 export default function Login() {
-  const [email, setEmail] = useState('gerente@geartrace.com');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
     setLoading(true);
-    
+
     try {
-      const response = await api.post('/auth/login', { email, password });
-      toast.success(`Bienvenido, ${response.data.user.name}`);
-      login(response.data.accessToken, response.data.user);
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Error al iniciar sesión');
+      const { accessToken, user } = await authApi.login({ email: email.trim(), password });
+      toast.success(`Bienvenido, ${user.name}`);
+      login(accessToken, user);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'Error al iniciar sesión'));
     } finally {
       setLoading(false);
     }
@@ -3931,10 +4469,16 @@ export default function Login() {
             </button>
           </div>
           
-          <div className="text-center text-xs text-slate-500 mt-4 space-y-1">
-            <p>Demo accounts (pass: password123):</p>
-            <p>gerente@geartrace.com | mecanico@... | cliente@...</p>
-          </div>
+          <p className="text-center text-sm text-slate-400">
+            ¿Eres cliente y no tienes cuenta?{' '}
+            <Link to="/registro" className="font-medium text-brand-400 hover:text-brand-300">Regístrate</Link>
+          </p>
+
+          {SHOW_DEMO_HINT && (
+            <p className="text-center text-xs text-slate-500 mt-4">
+              Desarrollo: usa las cuentas de demostración creadas por <code>npm run prisma:seed</code>.
+            </p>
+          )}
         </form>
       </div>
     </div>
@@ -3946,69 +4490,90 @@ File: src/components/MecanicoDashboard.tsx
 ================
 import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
-import { Cpu, Search, Wrench } from 'lucide-react';
+import { Cpu, Lightbulb, Search, Wrench } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../api/axios';
-import { createHardwareSocket } from '../api/socket';
-import { useAuth } from '../contexts/AuthContext';
+import { getApiErrorMessage } from '../api/errors';
+import { inventoryApi, workOrdersApi } from '../api/resources';
+import {
+  createHardwareSocket,
+  HW_EVENTS,
+  LED_DEFAULT_COLOR,
+  LED_TEST_COLOR,
+  type HardwareStatus,
+  type LedActivatedEvent,
+  type LedOffEvent,
+} from '../api/socket';
+import type { InventoryPart, WorkOrder } from '../api/types';
+import { WORK_ORDER_STATUS } from '../utils/status';
 
 interface Led { index: number; isActive: boolean; color?: string; partName?: string }
-interface HwStatus { simulationMode: boolean; ledCount: number; gpioPin: number }
-interface WorkOrder { id: number; number: string; description: string; status: string; mechanic?: { id: number }; vehicle: { plate: string; make: string; model: string } }
-interface Part { id: number; name: string; code: string; quantity: number }
+
+/** LEDs que se dibujan hasta recibir `hw:status` con el número real. */
+const PLACEHOLDER_LED_COUNT = 5;
+
+const createLeds = (count: number): Led[] =>
+  Array.from({ length: count }, (_, index) => ({ index, isActive: false }));
 
 export default function MecanicoDashboard() {
-  const { user } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [hwStatus, setHwStatus] = useState<HwStatus | null>(null);
-  const [leds, setLeds] = useState<Led[]>([]);
+  const [hwStatus, setHwStatus] = useState<HardwareStatus | null>(null);
+  const [leds, setLeds] = useState<Led[]>(() => createLeds(PLACEHOLDER_LED_COUNT));
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [query, setQuery] = useState('');
-  const [parts, setParts] = useState<Part[]>([]);
+  const [parts, setParts] = useState<InventoryPart[]>([]);
 
   useEffect(() => {
     const loadOrders = async () => {
       try {
-        const response = await api.get<WorkOrder[]>('/service/work-orders');
-        setOrders(response.data.filter((order) => order.mechanic?.id === user?.id));
+        // El backend ya limita al MECANICO a sus órdenes asignadas (workOrderScope).
+        setOrders(await workOrdersApi.list());
       } catch (error) {
-        console.error('Error al cargar órdenes asignadas', error);
-        toast.error('No se pudieron cargar tus órdenes.');
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar tus órdenes.'));
       }
     };
     void loadOrders();
 
     const nextSocket = createHardwareSocket();
     setSocket(nextSocket);
-    nextSocket.on('hw:status', (status: HwStatus) => {
+    nextSocket.on(HW_EVENTS.status, (status: HardwareStatus) => {
       setHwStatus(status);
-      setLeds(Array.from({ length: status.ledCount }, (_, index) => ({ index, isActive: false })));
+      setLeds(createLeds(status.ledCount));
     });
-    nextSocket.on('led:activated', (data: { ledIndex: number; partName: string; colorHex?: string }) => {
-      setLeds((current) => current.map((led) => led.index === data.ledIndex ? { ...led, isActive: true, partName: data.partName, color: data.colorHex || '#F97316' } : led));
+    nextSocket.on(HW_EVENTS.ledActivated, (data: LedActivatedEvent) => {
+      setLeds((current) => current.map((led) => led.index === data.ledIndex ? { ...led, isActive: true, partName: data.partName, color: data.colorHex || LED_DEFAULT_COLOR } : led));
     });
-    nextSocket.on('led:off', (data: { ledIndex: number; manual?: boolean }) => {
+    nextSocket.on(HW_EVENTS.ledOff, (data: LedOffEvent) => {
       if (data.manual) toast.success(`LED ${data.ledIndex} apagado.`);
       setLeds((current) => current.map((led) => led.index === data.ledIndex ? { ...led, isActive: false, partName: undefined } : led));
     });
-    setLeds(Array.from({ length: 5 }, (_, index) => ({ index, isActive: false })));
     return () => {
       nextSocket.disconnect();
     };
-  }, [user?.id]);
+  }, []);
 
   const searchParts = async () => {
-    if (!query.trim()) return;
+    const term = query.trim();
+    if (!term) return;
     try {
-      setParts((await api.get<Part[]>(`/inventory/search/${encodeURIComponent(query.trim())}`)).data);
+      setParts(await inventoryApi.searchParts(term));
     } catch (error) {
-      console.error('Error al buscar repuestos', error);
-      toast.error('No se pudieron buscar repuestos.');
+      toast.error(getApiErrorMessage(error, 'No se pudieron buscar repuestos.'));
+    }
+  };
+
+  /** Mismo efecto que pedir la pieza a Alexa: enciende el LED de su caja. */
+  const locatePart = async (part: InventoryPart) => {
+    try {
+      const result = await inventoryApi.locatePart(part.id);
+      toast.success(`${result.partName}: ${result.boxName} (LED ${result.ledIndex}).`);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo encender el LED.'));
     }
   };
 
   const emitLedAction = (led: Led) => {
-    socket?.emit(led.isActive ? 'led:turnOff' : 'led:test', led.isActive ? { ledIndex: led.index } : { ledIndex: led.index, colorHex: '#38BDF8' });
+    if (led.isActive) socket?.emit(HW_EVENTS.turnOff, { ledIndex: led.index });
+    else socket?.emit(HW_EVENTS.test, { ledIndex: led.index, colorHex: LED_TEST_COLOR });
   };
 
   return (
@@ -4016,10 +4581,177 @@ export default function MecanicoDashboard() {
       <header><h2 className="text-2xl font-bold text-white">Panel del mecánico</h2><p className="text-sm text-slate-400">Operación diaria, órdenes asignadas y búsqueda de repuestos.</p></header>
       <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         <div className="glass rounded-2xl p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Cpu className="text-brand-400" /> Control WS2812B {hwStatus?.simulationMode && <span className="text-xs text-amber-400">(simulación)</span>}</h3><div className="grid grid-cols-2 gap-3 sm:grid-cols-5">{leds.map((led) => <div key={led.index} className="text-center"><div className={`h-16 rounded-lg border ${led.isActive ? 'border-white' : 'border-white/10 bg-slate-950'}`} style={led.isActive ? { backgroundColor: led.color, boxShadow: `0 0 20px ${led.color}` } : undefined} /><p className="mt-2 text-xs text-slate-400">LED {led.index}</p><button type="button" onClick={() => emitLedAction(led)} className="mt-2 rounded-lg bg-slate-700 px-2 py-1 text-xs text-white hover:bg-slate-600">{led.isActive ? 'Apagar' : 'Test'}</button></div>)}</div></div>
-        <div className="glass rounded-2xl p-6"><h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-white"><Search className="text-brand-400" /> Buscar repuesto</h3><div className="flex gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchParts(); }} placeholder="Nombre o código" className="min-w-0 flex-1 rounded-xl px-3 py-2 text-white glass-input" /><button type="button" onClick={() => void searchParts()} className="btn-primary rounded-xl px-3"><Search size={18} /></button></div><div className="mt-4 space-y-2">{parts.map((part) => <p key={part.id} className="rounded-lg p-3 text-sm text-slate-300 glass-inset">{part.name} <span className="text-slate-500">({part.code}) · stock {part.quantity}</span></p>)}</div></div>
+        <div className="glass rounded-2xl p-6"><h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-white"><Search className="text-brand-400" /> Buscar repuesto</h3><div className="flex gap-2"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchParts(); }} placeholder="Nombre o código" className="min-w-0 flex-1 rounded-xl px-3 py-2 text-white glass-input" /><button type="button" onClick={() => void searchParts()} className="btn-primary rounded-xl px-3"><Search size={18} /></button></div><div className="mt-4 space-y-2">{parts.map((part) => <div key={part.id} className="flex items-center justify-between gap-3 rounded-lg p-3 text-sm text-slate-300 glass-inset"><p>{part.name} <span className="text-slate-500">({part.code}) · stock {part.quantity}{part.box ? ` · ${part.box.name}` : ''}</span></p><button type="button" onClick={() => void locatePart(part)} title="Encender el LED de su caja" className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-brand-300 hover:bg-white/5"><Lightbulb size={14} /> Ubicar</button></div>)}</div></div>
       </div>
-      <div className="glass rounded-2xl p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Wrench className="text-brand-400" /> Mis órdenes asignadas</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes asignadas.</p> : <div className="grid gap-4 md:grid-cols-2">{orders.map((order) => <article key={order.id} className="rounded-xl p-4 glass-inset"><p className="font-semibold text-white">{order.number} · {order.vehicle.plate}</p><p className="text-sm text-slate-400">{order.vehicle.make} {order.vehicle.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p><span className="mt-3 inline-block rounded-full bg-brand-500/10 px-3 py-1 text-xs text-brand-400">{order.status.replace('_', ' ')}</span></article>)}</div>}</div>
+      <div className="glass rounded-2xl p-6"><h3 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white"><Wrench className="text-brand-400" /> Mis órdenes asignadas</h3>{orders.length === 0 ? <p className="text-slate-400">No tienes órdenes asignadas.</p> : <div className="grid gap-4 md:grid-cols-2">{orders.map((order) => <article key={order.id} className="rounded-xl p-4 glass-inset"><p className="font-semibold text-white">{order.number} · {order.vehicle?.plate}</p><p className="text-sm text-slate-400">{order.vehicle?.make} {order.vehicle?.model}</p><p className="mt-2 text-sm text-slate-300">{order.description}</p><span className="mt-3 inline-block rounded-full bg-brand-500/10 px-3 py-1 text-xs text-brand-400">{WORK_ORDER_STATUS[order.status].label}</span></article>)}</div>}</div>
     </section>
+  );
+}
+
+================
+File: src/components/ProveedorDashboard.tsx
+================
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { CheckCircle2, Clock, PackageCheck, Truck } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../api/errors';
+import { supplierPortalApi } from '../api/resources';
+import type { PurchaseOrder, PurchaseOrderStatus } from '../api/types';
+import { formatDate } from '../utils/format';
+import { StatGrid } from './ui/StatCard';
+
+const PREVIEW_LIMIT = 5;
+
+const countBy = (orders: PurchaseOrder[], status: PurchaseOrderStatus) =>
+  orders.filter((order) => order.status === status).length;
+
+/** Panel del PROVEEDOR: resumen de sus pedidos; responde en /portal-proveedor. */
+export default function ProveedorDashboard() {
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setOrders(await supplierPortalApi.list());
+      } catch (error) {
+        toast.error(getApiErrorMessage(error, 'No se pudieron cargar tus pedidos.'));
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, []);
+
+  const awaiting = orders.filter((order) => order.status === 'PENDIENTE');
+
+  return (
+    <section className="space-y-6">
+      <header>
+        <h2 className="text-2xl font-bold text-white">Portal del proveedor</h2>
+        <p className="text-sm text-slate-400">Pedidos de compra que el taller te ha enviado.</p>
+      </header>
+      <StatGrid
+        cards={[
+          { label: 'Por responder', value: awaiting.length, icon: Clock, color: 'text-amber-400' },
+          { label: 'Confirmados', value: countBy(orders, 'CONFIRMADA'), icon: Truck, color: 'text-blue-400' },
+          { label: 'Recibidos', value: countBy(orders, 'RECIBIDA'), icon: PackageCheck, color: 'text-emerald-400' },
+          { label: 'Total de pedidos', value: orders.length, icon: CheckCircle2, color: 'text-slate-300' },
+        ]}
+      />
+      <div className="glass rounded-2xl p-6">
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <h3 className="flex items-center gap-2 text-lg font-semibold text-white"><Clock className="text-amber-400" /> Pedidos por responder</h3>
+          <Link to="/portal-proveedor" className="text-sm font-medium text-brand-400 hover:text-brand-300">Responder</Link>
+        </div>
+        {loading ? <p className="text-slate-400">Cargando...</p> : awaiting.length === 0 ? <p className="text-emerald-400">No tienes pedidos pendientes de respuesta.</p> : (
+          <div className="space-y-3">
+            {awaiting.slice(0, PREVIEW_LIMIT).map((order) => (
+              <div key={order.id} className="flex justify-between gap-3 rounded-xl p-4 glass-inset">
+                <div><p className="font-semibold text-white">{order.number}</p><p className="text-xs text-slate-500">{order.items?.length ?? 0} ítem(s) · pedido {formatDate(order.orderedAt)}</p></div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+================
+File: src/components/Register.tsx
+================
+import { FormEvent, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { UserPlus } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getApiErrorMessage } from '../api/errors';
+import { authApi } from '../api/resources';
+import { useAuth } from '../contexts/AuthContext';
+
+/** Mismos límites que RegisterDto en el backend. */
+const MIN_PASSWORD = 6;
+const MAX_PASSWORD = 72;
+
+const inputClass =
+  'appearance-none rounded-xl block w-full px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 sm:text-sm glass-input';
+
+/** /registro — alta pública de clientes. El backend fuerza el rol CLIENTE. */
+export default function Register() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (password !== confirmPassword) {
+      toast.error('Las contraseñas no coinciden.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { accessToken, user } = await authApi.register({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+      });
+      toast.success(`Cuenta creada. Bienvenido, ${user.name}`);
+      login(accessToken, user);
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, 'No se pudo crear la cuenta.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-12 sm:px-6 lg:px-8">
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500 opacity-20 blur-[128px]" />
+
+      <div className="glass-strong relative z-10 w-full max-w-md space-y-8 rounded-2xl p-10 shadow-2xl">
+        <div>
+          <div className="icon-badge mx-auto flex h-16 w-16 items-center justify-center rounded-2xl">
+            <UserPlus size={32} strokeWidth={2.5} />
+          </div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-white">Crear cuenta</h2>
+          <p className="mt-2 text-center text-sm text-slate-400">
+            Registra tu cuenta de cliente para seguir tus reparaciones y agendar citas.
+          </p>
+        </div>
+
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <div>
+            <label htmlFor="register-name" className="sr-only">Nombre completo</label>
+            <input id="register-name" required maxLength={150} autoComplete="name" placeholder="Nombre completo" value={name} onChange={(event) => setName(event.target.value)} className={inputClass} />
+          </div>
+          <div>
+            <label htmlFor="register-email" className="sr-only">Correo electrónico</label>
+            <input id="register-email" type="email" required autoComplete="email" placeholder="Correo electrónico" value={email} onChange={(event) => setEmail(event.target.value)} className={inputClass} />
+          </div>
+          <div>
+            <label htmlFor="register-password" className="sr-only">Contraseña</label>
+            <input id="register-password" type="password" required minLength={MIN_PASSWORD} maxLength={MAX_PASSWORD} autoComplete="new-password" placeholder={`Contraseña (mín. ${MIN_PASSWORD} caracteres)`} value={password} onChange={(event) => setPassword(event.target.value)} className={inputClass} />
+          </div>
+          <div>
+            <label htmlFor="register-confirm" className="sr-only">Repite la contraseña</label>
+            <input id="register-confirm" type="password" required minLength={MIN_PASSWORD} maxLength={MAX_PASSWORD} autoComplete="new-password" placeholder="Repite la contraseña" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} className={inputClass} />
+          </div>
+
+          <button type="submit" disabled={loading} className="flex w-full justify-center rounded-xl px-4 py-3 text-sm font-semibold btn-primary disabled:cursor-not-allowed disabled:opacity-70">
+            {loading ? <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : 'Crear cuenta'}
+          </button>
+        </form>
+
+        <p className="text-center text-sm text-slate-400">
+          ¿Ya tienes cuenta?{' '}
+          <Link to="/login" className="font-medium text-brand-400 hover:text-brand-300">Inicia sesión</Link>
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -4068,7 +4800,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { Role, useAuth } from '../contexts/AuthContext';
+import { Role, ROLES, useAuth } from '../contexts/AuthContext';
 import { ROUTE_ROLES } from '../routes/routeRoles';
 import { ROLE_META } from '../utils/status';
 
@@ -4084,10 +4816,13 @@ type NavigationSection = 'General' | 'Servicio técnico' | 'Abastecimiento' | 'A
 
 const SECTIONS: NavigationSection[] = ['General', 'Servicio técnico', 'Abastecimiento', 'Administración'];
 
+/** El CLIENTE tiene su propio acceso al dashboard ("Mi vehículo"). */
+const STAFF_ROLES = ROLES.filter((role) => role !== 'CLIENTE');
+
 /** Los roles de cada módulo provienen de ROUTE_ROLES (mismo origen que App.tsx). */
 export const navigationItems: NavigationItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'PROVEEDOR'], section: 'General' },
-  { label: 'Mi vehículo', path: '/dashboard#vehicles', icon: LayoutDashboard, roles: ['CLIENTE'], section: 'General' },
+  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, roles: STAFF_ROLES, section: 'General' },
+  { label: 'Mis vehículos', path: '/dashboard#vehicles', icon: Car, roles: ['CLIENTE'], section: 'General' },
   { label: 'Órdenes de trabajo', path: '/ordenes-trabajo', icon: ClipboardList, roles: ROUTE_ROLES['ordenes-trabajo'], section: 'Servicio técnico' },
   { label: 'Vehículos', path: '/vehiculos', icon: Car, roles: ROUTE_ROLES.vehiculos, section: 'Servicio técnico' },
   { label: 'Citas', path: '/citas', icon: CalendarDays, roles: ROUTE_ROLES.citas, section: 'Servicio técnico' },
@@ -4227,10 +4962,13 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
 File: src/contexts/AuthContext.tsx
 ================
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import api from '../api/axios';
 import { useNavigate } from 'react-router-dom';
+import { authApi } from '../api/resources';
+import { AUTH_UNAUTHORIZED_EVENT, clearSession, getToken, saveToken } from '../api/session';
 
-export type Role = 'GERENTE' | 'MECANICO' | 'BODEGUERO' | 'CONTADOR' | 'CLIENTE' | 'PROVEEDOR';
+/** Roles del backend (enum Role de Prisma), en el orden en que se muestran. */
+export const ROLES = ['GERENTE', 'MECANICO', 'BODEGUERO', 'CONTADOR', 'CLIENTE', 'PROVEEDOR'] as const;
+export type Role = (typeof ROLES)[number];
 
 export interface User {
   id: number;
@@ -4257,40 +4995,38 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     // Restaurar sesión desde localStorage
     const initAuth = async () => {
-      const token = localStorage.getItem('geartrace_token');
-      if (token) {
+      if (getToken()) {
         try {
           // Validar el token contra el backend
-          const response = await api.get('/auth/me');
-          setUser(response.data.user);
+          setUser(await authApi.me());
         } catch (error) {
-          console.error("Token inválido o expirado");
-          localStorage.removeItem('geartrace_token');
+          console.error('Token inválido o expirado', error);
+          clearSession();
         }
       }
       setIsLoading(false);
     };
 
-    initAuth();
+    void initAuth();
 
     // Escuchar evento de interceptor de axios
     const handleUnauthorized = () => {
       setUser(null);
       navigate('/login');
     };
-    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
 
-    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized);
   }, [navigate]);
 
   const login = (token: string, userData: User) => {
-    localStorage.setItem('geartrace_token', token);
+    saveToken(token);
     setUser(userData);
     navigate('/dashboard');
   };
 
   const logout = () => {
-    localStorage.removeItem('geartrace_token');
+    clearSession();
     setUser(null);
     navigate('/login');
   };
@@ -4313,7 +5049,7 @@ export const useAuth = () => {
 ================
 File: src/pages/CitasPage.tsx
 ================
-import { CalendarCheck, CalendarDays, ClipboardPlus } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarX, ClipboardPlus } from 'lucide-react';
 import { appointmentActionsApi, appointmentsApi, clientApi, vehiclesApi } from '../api/resources';
 import type { Appointment, AppointmentStatus, Vehicle } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
@@ -4458,6 +5194,43 @@ const staffEditForm: EditFormConfig<Appointment> = {
   isEditable: isOpen,
 };
 
+/** El cliente reprograma su cita abierta; vuelve a AGENDADA hasta que el taller confirme. */
+const clientEditForm: EditFormConfig<Appointment> = {
+  title: (appointment) => `Reprogramar cita del ${formatDateTime(appointment.scheduledAt)}`,
+  fields: () => [
+    { name: 'scheduledAt', label: 'Nueva fecha y hora', type: 'datetime', required: true, help: 'Debe ser una fecha futura. El taller volverá a confirmarla.' },
+    { name: 'reason', label: 'Motivo', type: 'textarea', maxLength: 255 },
+  ],
+  initialValues: (appointment) => ({
+    scheduledAt: toDateTimeLocal(appointment.scheduledAt),
+    reason: appointment.reason ?? '',
+  }),
+  submit: (appointment, values) =>
+    clientApi.rescheduleAppointment(appointment.id, {
+      scheduledAt: fromDateTimeLocal(text(values, 'scheduledAt')),
+      reason: optionalText(values, 'reason'),
+    }),
+  isEditable: isOpen,
+};
+
+function clientRowActions(appointment: Appointment): ResourceRowAction[] {
+  if (!isOpen(appointment)) return [];
+  return [
+    {
+      key: 'cancel',
+      label: 'Cancelar cita',
+      shortLabel: 'Cancelar',
+      icon: CalendarX,
+      tone: 'danger',
+      confirm: `¿Cancelar tu cita del ${formatDateTime(appointment.scheduledAt)}?`,
+      run: async () => {
+        await clientApi.cancelAppointment(appointment.id);
+        return 'Cita cancelada.';
+      },
+    },
+  ];
+}
+
 function staffRowActions(appointment: Appointment): ResourceRowAction[] {
   if (!isOpen(appointment) || appointment.workOrder) return [];
   const actions: ResourceRowAction[] = [
@@ -4491,8 +5264,8 @@ function staffRowActions(appointment: Appointment): ResourceRowAction[] {
 
 /**
  * /citas — GERENTE y MECANICO gestionan la agenda (/api/appointments) y
- * generan la OT desde la cita; el CLIENTE ve y solicita sus citas
- * (/api/client/appointments).
+ * generan la OT desde la cita; el CLIENTE ve, solicita, reprograma y cancela
+ * sus citas (/api/client/appointments).
  */
 export default function CitasPage() {
   const { user } = useAuth();
@@ -4509,8 +5282,8 @@ export default function CitasPage() {
       emptyMessage={isClient ? 'Aún no has solicitado citas.' : 'No hay citas programadas.'}
       getRowLabel={(appointment) => formatDateTime(appointment.scheduledAt)}
       createForm={isClient ? clientCreateForm : staffCreateForm}
-      editForm={isClient ? undefined : staffEditForm}
-      rowActions={isClient ? undefined : staffRowActions}
+      editForm={isClient ? clientEditForm : staffEditForm}
+      rowActions={isClient ? clientRowActions : staffRowActions}
       onDelete={user?.role === 'GERENTE' ? appointmentsApi.remove : undefined}
     />
   );
@@ -4608,6 +5381,9 @@ const createForm: CreateFormConfig = {
 };
 
 const isPending = (order: PurchaseOrder) => order.status === 'PENDIENTE';
+/** Pendiente o confirmado por el proveedor: aún se puede recibir o cancelar. */
+const RECEIVABLE_STATUSES: PurchaseOrder['status'][] = ['PENDIENTE', 'CONFIRMADA'];
+const isReceivable = (order: PurchaseOrder) => RECEIVABLE_STATUSES.includes(order.status);
 
 const editForm: EditFormConfig<PurchaseOrder> = {
   title: (order) => `Editar ${order.number}`,
@@ -4621,7 +5397,7 @@ const editForm: EditFormConfig<PurchaseOrder> = {
 };
 
 function rowActions(order: PurchaseOrder): ResourceRowAction[] {
-  if (!isPending(order)) return [];
+  if (!isReceivable(order)) return [];
   return [
     {
       key: 'receive',
@@ -4650,7 +5426,7 @@ function rowActions(order: PurchaseOrder): ResourceRowAction[] {
   ];
 }
 
-/** /compras — solo GERENTE. Recibir un pedido es la única vía que suma stock. */
+/** /compras — GERENTE y BODEGUERO. Recibir un pedido es la única vía que suma stock. */
 export default function ComprasPage() {
   return (
     <ResourceListPage
@@ -4674,7 +5450,7 @@ export default function ComprasPage() {
 File: src/pages/FacturacionPage.tsx
 ================
 import { BadgeCheck, Receipt } from 'lucide-react';
-import { invoicesApi, workOrdersApi } from '../api/resources';
+import { invoicesApi } from '../api/resources';
 import type { Invoice } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage, {
@@ -4716,10 +5492,10 @@ const columns: Column<Invoice>[] = [
   { key: 'issuedAt', header: 'Emitida', hideOnMobile: true, render: (invoice) => formatDate(invoice.issuedAt) },
 ];
 
-/** Solo órdenes concluidas y aún sin factura pueden facturarse. */
+/** Solo órdenes concluidas y aún sin factura pueden facturarse (filtrado en el backend). */
 const loadBillableOrders = async () =>
   toOptions(
-    (await workOrdersApi.list()).filter((order) => order.status === 'CONCLUIDO' && !order.invoice),
+    await invoicesApi.billableOrders(),
     (order) => order.id,
     (order) =>
       `${order.number} · ${order.vehicle?.plate ?? ''} — ${order.vehicle?.owner?.name ?? 'sin cliente'} (${formatCurrency(order.finalCost ?? order.estimatedCost)})`,
@@ -4793,7 +5569,7 @@ function rowActions(invoice: Invoice): ResourceRowAction[] {
   ];
 }
 
-/** /facturacion — solo GERENTE. */
+/** /facturacion — GERENTE y CONTADOR. */
 export default function FacturacionPage() {
   return (
     <ResourceListPage
@@ -4809,6 +5585,133 @@ export default function FacturacionPage() {
       createForm={createForm}
       editForm={editForm}
       rowActions={rowActions}
+    />
+  );
+}
+
+================
+File: src/pages/InventarioPage.tsx
+================
+import { useState } from 'react';
+import { Boxes, Package, Warehouse } from 'lucide-react';
+import { inventoryApi } from '../api/resources';
+import type { InventoryBox } from '../api/types';
+import InventoryList from '../components/Inventory/InventoryList';
+import type { Column } from '../components/ui/DataTable';
+import type { FormField, FormValues } from '../components/ui/ResourceFormModal';
+import ResourceListPage, { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
+import ViewTabs, { ViewTab } from '../components/ui/ViewTabs';
+import { UserInputError } from '../api/errors';
+import { EMPTY } from '../utils/format';
+import { optionalText, requiredNumber, text } from '../utils/formValues';
+
+type View = 'parts' | 'boxes';
+
+const tabs: ViewTab<View>[] = [
+  { key: 'parts', label: 'Piezas', icon: Package },
+  { key: 'boxes', label: 'Cajas', icon: Boxes },
+];
+
+/** Color por defecto de una caja (mismo default que Prisma: `Box.colorHex`). */
+const DEFAULT_BOX_COLOR = '#FF6600';
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+
+const columns: Column<InventoryBox>[] = [
+  { key: 'name', header: 'Caja', render: (box) => <span className="font-semibold text-white">{box.name}</span> },
+  {
+    key: 'led',
+    header: 'LED',
+    render: (box) => (
+      <span className="inline-flex items-center gap-2 text-slate-200">
+        <span className="h-3 w-3 rounded-full border border-white/20" style={{ backgroundColor: box.colorHex }} />
+        #{box.ledIndex}
+      </span>
+    ),
+  },
+  { key: 'location', header: 'Ubicación', hideOnMobile: true, render: (box) => box.location ?? EMPTY },
+  { key: 'description', header: 'Descripción', hideOnMobile: true, render: (box) => box.description ?? EMPTY },
+  { key: 'parts', header: 'Piezas', align: 'right', render: (box) => box.parts?.length ?? 0 },
+];
+
+const boxFields: FormField[] = [
+  { name: 'name', label: 'Nombre', type: 'text', required: true, maxLength: 100 },
+  {
+    name: 'ledIndex',
+    label: 'Índice de LED',
+    type: 'number',
+    required: true,
+    min: 0,
+    step: '1',
+    help: 'Posición en la tira WS2812B. Cada LED se asigna a una sola caja.',
+  },
+  { name: 'colorHex', label: 'Color (#RRGGBB)', type: 'text', maxLength: 7, help: `Vacío = ${DEFAULT_BOX_COLOR}.` },
+  { name: 'location', label: 'Ubicación', type: 'text', maxLength: 150 },
+  { name: 'description', label: 'Descripción', type: 'textarea', maxLength: 255, wide: true },
+];
+
+function boxPayload(values: FormValues) {
+  const colorHex = text(values, 'colorHex');
+  if (colorHex && !HEX_COLOR.test(colorHex)) {
+    throw new UserInputError('El color debe tener el formato #RRGGBB (ej.: #FF6600).');
+  }
+  return {
+    name: text(values, 'name'),
+    ledIndex: requiredNumber(values, 'ledIndex', 'Índice de LED'),
+    colorHex: colorHex || undefined,
+    location: optionalText(values, 'location'),
+    description: optionalText(values, 'description'),
+  };
+}
+
+const createForm: CreateFormConfig = {
+  title: 'Nueva caja',
+  fields: boxFields,
+  initialValues: { name: '', ledIndex: '', colorHex: DEFAULT_BOX_COLOR, location: '', description: '' },
+  submit: (values) => inventoryApi.createBox(boxPayload(values)),
+  successMessage: 'Caja creada.',
+};
+
+const editForm: EditFormConfig<InventoryBox> = {
+  title: (box) => `Editar ${box.name}`,
+  fields: () => boxFields,
+  initialValues: (box) => ({
+    name: box.name,
+    ledIndex: String(box.ledIndex),
+    colorHex: box.colorHex,
+    location: box.location ?? '',
+    description: box.description ?? '',
+  }),
+  submit: (box, values) => inventoryApi.updateBox(box.id, boxPayload(values)),
+};
+
+/** /inventory — GERENTE y BODEGUERO: piezas (vista operativa) y cajas (CRUD). */
+export default function InventarioPage() {
+  const [view, setView] = useState<View>('parts');
+  const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
+
+  if (view === 'parts') {
+    return (
+      <div className="space-y-6">
+        {toolbar}
+        <InventoryList />
+      </div>
+    );
+  }
+
+  return (
+    <ResourceListPage
+      toolbar={toolbar}
+      title="Cajas"
+      description="Ubicaciones físicas del almacén y su LED indicador"
+      icon={Warehouse}
+      entityLabel="la caja"
+      fetchAll={inventoryApi.listBoxes}
+      columns={columns}
+      emptyMessage="No hay cajas registradas."
+      getRowLabel={(box) => box.name}
+      onDelete={inventoryApi.removeBox}
+      createForm={createForm}
+      editForm={editForm}
     />
   );
 }
@@ -5527,9 +6430,10 @@ import { ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './contexts/AuthContext'
 import Login from './components/Login'
+import Register from './components/Register'
 import Dashboard from './components/Dashboard'
 import Layout from './components/Layout'
-import InventoryList from './components/Inventory/InventoryList'
+import InventarioPage from './pages/InventarioPage'
 import AuditLogs from './components/AuditLogs'
 import RoleProtectedRoute from './components/RoleProtectedRoute'
 import UsuariosPage from './pages/UsuariosPage'
@@ -5544,7 +6448,7 @@ import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
 const protectedRoutes: Record<AppRoute, ReactNode> = {
-  inventory: <InventoryList />,
+  inventory: <InventarioPage />,
   logs: <AuditLogs />,
   // Administración
   usuarios: <UsuariosPage />,
@@ -5584,6 +6488,11 @@ function App() {
       <Route
         path="/login"
         element={!isAuthenticated ? <Login /> : <Navigate to="/dashboard" />}
+      />
+
+      <Route
+        path="/registro"
+        element={!isAuthenticated ? <Register /> : <Navigate to="/dashboard" />}
       />
 
       <Route
@@ -5786,10 +6695,12 @@ File: clinerules.md
 
 ## Estructura
 - `/src/api/axios.ts`: Instancia con interceptor para adjuntar token JWT automáticamente.
+- `/src/api/config.ts`: `API_BASE_URL` y `SOCKET_URL` (únicos lectores de `VITE_API_URL`/`VITE_SOCKET_URL`).
+- `/src/api/session.ts`: claves de `localStorage` (`getToken`, `saveToken`, `clearSession`) y `AUTH_UNAUTHORIZED_EVENT`.
 - `/src/api/resources.ts`: Servicios por dominio (`usersApi`, `vehiclesApi`, ...) creados con `createCrudApi` (`/src/api/crud.ts`); tipos en `/src/api/types.ts`.
 - `/src/contexts/AuthContext.tsx`: Contexto de autenticación global.
 - `/src/components/Dashboard.tsx`: Orquestador por rol. Los sockets viven en `GerenteDashboard`/`MecanicoDashboard` (`hw:status`, `led:activated`, `led:off`).
-- `/src/api/socket.ts`: `createHardwareSocket()`, única forma de abrir Socket.io (solo `websocket`).
+- `/src/api/socket.ts`: `createHardwareSocket()`, única forma de abrir Socket.io (solo `websocket`); nombres de eventos en `HW_EVENTS` y tipos de payload (`HardwareStatus`, `LedActivatedEvent`, `LedOffEvent`).
 
 ## Reglas de Desarrollo Frontend
 1. Usar componentes funcionales en TypeScript con tipos explícitos.
@@ -5802,6 +6713,12 @@ File: clinerules.md
 8. Tras una acción que responde con menos relaciones que el listado (p. ej. `/close`), recargar la entidad con su `get` antes de reemplazarla en el estado local.
 9. Socket.io siempre vía `createHardwareSocket()` (`transports: ['websocket']`, sin `extraHeaders`). Axios siempre vía la instancia `api` (header `ngrok-skip-browser-warning` incluido); no modificar `axios.defaults`.
 10. Validaciones de formulario lanzan `UserInputError` (helpers de `utils/formValues.ts`); no usar casts para tipar valores de select: validar con type guards o búsquedas en la lista de valores permitidos.
+11. Ningún componente importa `api/axios` ni escribe rutas del backend: todo pasa por `@/api/resources` (`authApi`, `inventoryApi`, `logsApi`, `clientApi`, CRUDs...). Tipos de entidades solo en `api/types.ts`; no redeclarar interfaces locales de entidades.
+12. Errores en `catch` sin `any`: mostrar `getApiErrorMessage(error, 'mensaje por defecto')` (`api/errors.ts`).
+13. Roles: lista única `ROLES` (y tipo `Role`) en `contexts/AuthContext.tsx`; etiquetas y tonos de roles/estados en `utils/status.ts` (nunca `status.replace('_', ' ')`).
+14. No hardcodear credenciales ni URLs: las cuentas demo solo se mencionan en desarrollo (`import.meta.env.DEV`). Archivos del backend (`/uploads/...`) con `backendAssetUrl(path)` de `api/config.ts`.
+15. Cada rol tiene su panel en `Dashboard.tsx` (nunca un "Selecciona un módulo"); las métricas usan `ui/StatCard.tsx` (`StatCard`/`StatGrid`) en lugar de repetir el markup.
+16. Rutas públicas solo `/login` y `/registro`; el resto vive bajo `Layout` y `RoleProtectedRoute`.
 
 ================
 File: index.html

@@ -11,7 +11,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { ChangeRoleDto, LoginDto, RegisterDto, ToggleActiveDto } from './dto/auth.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -80,9 +80,9 @@ export class AuthController {
   @Roles(Role.GERENTE)
   changeRole(
     @Param('id', ParseIntPipe) id: number,
-    @Body('role') role: Role,
+    @Body() dto: ChangeRoleDto,
   ) {
-    return this.authService.changeUserRole(id, role);
+    return this.authService.changeUserRole(id, dto.role);
   }
 
   /** PATCH /api/auth/users/:id → Editar el perfil completo de un usuario */
@@ -102,8 +102,8 @@ export class AuthController {
   @Roles(Role.GERENTE)
   toggleActive(
     @Param('id', ParseIntPipe) id: number,
-    @Body('isActive') isActive: boolean,
+    @Body() dto: ToggleActiveDto,
   ) {
-    return this.authService.toggleUserActive(id, isActive);
+    return this.authService.toggleUserActive(id, dto.isActive);
   }
 }

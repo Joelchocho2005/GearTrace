@@ -111,13 +111,18 @@ src/
   client/
     dto/
       create-appointment.dto.ts
+      reschedule-appointment.dto.ts
     client.controller.ts
     client.module.ts
     client.service.ts
   common/
     cors.ts
+    dates.ts
     document-number.ts
+    password.ts
     prisma-errors.ts
+    selects.ts
+    validation-messages.ts
   inventory/
     dto/
       create-box.dto.ts
@@ -183,6 +188,7 @@ src/
   users/
     dto/
       user.dto.ts
+    supplier-link.ts
     users.controller.ts
     users.module.ts
     users.service.ts
@@ -196,6 +202,7 @@ src/
     dto/
       work-order.dto.ts
     work-order-number.ts
+    work-order-rules.ts
     work-order-scope.ts
     work-orders.controller.ts
     work-orders.module.ts
@@ -206,6 +213,7 @@ src/
 clinerules.md
 package.json
 repomix.config.json
+tsconfig.build.json
 tsconfig.json
 
 ================================================================
@@ -2186,21 +2194,16 @@ export class AppointmentsModule {}
 ================
 File: src/appointments/appointments.service.ts
 ================
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { AppointmentStatus } from '@prisma/client';
+import { toFutureDate } from '../common/dates';
+import { USER_SUMMARY, WORK_ORDER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
 
 const APPOINTMENT_INCLUDE = {
-  vehicle: {
-    include: { owner: { select: { id: true, name: true, email: true } } },
-  },
-  workOrder: { select: { id: true, number: true, status: true } },
+  vehicle: { include: { owner: USER_SUMMARY } },
+  workOrder: WORK_ORDER_SUMMARY,
 } as const;
 
 const FINAL_STATUSES: AppointmentStatus[] = [
@@ -2232,7 +2235,7 @@ export class AppointmentsService {
     await this.ensureVehicle(dto.vehicleId);
     return this.prisma.appointment.create({
       data: {
-        scheduledAt: this.toFutureDate(dto.scheduledAt),
+        scheduledAt: toFutureDate(dto.scheduledAt),
         reason: dto.reason,
         vehicleId: dto.vehicleId,
       },
@@ -2251,7 +2254,7 @@ export class AppointmentsService {
       where: { id },
       data: {
         ...dto,
-        scheduledAt: dto.scheduledAt ? this.toFutureDate(dto.scheduledAt) : undefined,
+        scheduledAt: dto.scheduledAt ? toFutureDate(dto.scheduledAt) : undefined,
       },
       include: APPOINTMENT_INCLUDE,
     });
@@ -2260,14 +2263,6 @@ export class AppointmentsService {
   async remove(id: number) {
     await this.findOne(id);
     await this.prisma.appointment.delete({ where: { id } });
-  }
-
-  private toFutureDate(value: string): Date {
-    const date = new Date(value);
-    if (date <= new Date()) {
-      throw new BadRequestException('La cita debe agendarse para una fecha futura');
-    }
-    return date;
   }
 
   private async ensureVehicle(id: number) {
@@ -2313,8 +2308,9 @@ export const CurrentUser = createParamDecorator(
 ================
 File: src/auth/dto/auth.dto.ts
 ================
-import { IsEmail, IsInt, IsString, MinLength, MaxLength, IsEnum, IsOptional, Min } from 'class-validator';
+import { IsBoolean, IsEmail, IsInt, IsString, MinLength, MaxLength, IsEnum, IsOptional, Min } from 'class-validator';
 import { Role } from '@prisma/client';
+import { ROLE_VALIDATION_MESSAGE } from '../../common/validation-messages';
 
 export class LoginDto {
   @IsEmail({}, { message: 'El correo electrónico no es válido' })
@@ -2339,7 +2335,7 @@ export class RegisterDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role?: Role;
 
   @IsOptional()
@@ -2348,11 +2344,24 @@ export class RegisterDto {
   supplierId?: number;
 }
 
+/** PATCH /api/auth/users/:id/role */
+export class ChangeRoleDto {
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
+  role: Role;
+}
+
+/** PATCH /api/auth/users/:id/toggle */
+export class ToggleActiveDto {
+  @IsBoolean({ message: 'isActive debe ser verdadero o falso' })
+  isActive: boolean;
+}
+
 ================
 File: src/auth/dto/update-user.dto.ts
 ================
 import { IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { Role } from '@prisma/client';
+import { ROLE_VALIDATION_MESSAGE } from '../../common/validation-messages';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -2371,7 +2380,7 @@ export class UpdateUserDto {
   password?: string;
 
   @IsOptional()
-  @IsEnum(Role)
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role?: Role;
 
   @IsOptional()
@@ -2504,7 +2513,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   private readonly logger = new Logger(JwtStrategy.name);
 
   constructor(
-    private readonly config: ConfigService,
+    config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
     super({
@@ -2553,7 +2562,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { ChangeRoleDto, LoginDto, RegisterDto, ToggleActiveDto } from './dto/auth.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
@@ -2622,9 +2631,9 @@ export class AuthController {
   @Roles(Role.GERENTE)
   changeRole(
     @Param('id', ParseIntPipe) id: number,
-    @Body('role') role: Role,
+    @Body() dto: ChangeRoleDto,
   ) {
-    return this.authService.changeUserRole(id, role);
+    return this.authService.changeUserRole(id, dto.role);
   }
 
   /** PATCH /api/auth/users/:id → Editar el perfil completo de un usuario */
@@ -2644,9 +2653,9 @@ export class AuthController {
   @Roles(Role.GERENTE)
   toggleActive(
     @Param('id', ParseIntPipe) id: number,
-    @Body('isActive') isActive: boolean,
+    @Body() dto: ToggleActiveDto,
   ) {
-    return this.authService.toggleUserActive(id, isActive);
+    return this.authService.toggleUserActive(id, dto.isActive);
   }
 }
 
@@ -2687,22 +2696,45 @@ export class AuthModule {}
 File: src/auth/auth.service.ts
 ================
 import {
-  Injectable,
-  UnauthorizedException,
   ConflictException,
-  NotFoundException,
+  Injectable,
   Logger,
+  NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
-import * as bcrypt from 'bcryptjs';
+import { Prisma, Role, User } from '@prisma/client';
+import { hashOptionalPassword, hashPassword, verifyPassword } from '../common/password';
+import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { assertSupplierLink } from '../users/supplier-link';
 import { JwtPayload } from './auth.types';
-import { Prisma, Role } from '@prisma/client';
+import { LoginDto, RegisterDto } from './dto/auth.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-const BCRYPT_ROUNDS = 10;
+/** Mensaje genérico: no revela si el correo existe. */
+const INVALID_CREDENTIALS = 'Correo o contraseña incorrectos';
+const USER_NOT_FOUND = 'Usuario no encontrado';
+
+/** Campos públicos por respuesta (nunca `password`). */
+const REGISTERED_USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  createdAt: true,
+} satisfies Prisma.UserSelect;
+
+const MANAGED_USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  isActive: true,
+  createdAt: true,
+} satisfies Prisma.UserSelect;
+
+type TokenSubject = Pick<User, 'id' | 'email' | 'role' | 'name'>;
 
 @Injectable()
 export class AuthService {
@@ -2711,52 +2743,31 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
-    private readonly config: ConfigService,
   ) {}
 
-  // ──────────────────────────────────────────────────────────
-  // REGISTER
-  // ──────────────────────────────────────────────────────────
+  // ── Registro y login ───────────────────────────────────────
 
   async register(dto: RegisterDto) {
-    // Verificar que el correo no esté en uso
-    const exists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-    if (exists) {
-      throw new ConflictException(
-        `El correo "${dto.email}" ya está registrado`,
-      );
+    const exists = await this.prisma.user.count({ where: { email: dto.email } });
+    if (exists > 0) {
+      throw new ConflictException(`El correo "${dto.email}" ya está registrado`);
     }
 
-    if (dto.role === Role.PROVEEDOR && !dto.supplierId) {
-      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
-    }
-    if (dto.role !== Role.PROVEEDOR && dto.supplierId) {
-      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
-    }
-    if (dto.supplierId) {
-      const supplier = await this.prisma.supplier.findUnique({
-        where: { id: dto.supplierId },
-      });
-      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
-    }
-
-    // Hashear la contraseña con bcrypt
-    const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+    const role = dto.role ?? Role.CLIENTE;
+    await assertSupplierLink(this.prisma, role, dto.supplierId);
 
     const user = await this.prisma.user.create({
       data: {
         name: dto.name,
         email: dto.email,
-        password: hashedPassword,
-        role: dto.role ?? Role.CLIENTE,
+        password: await hashPassword(dto.password),
+        role,
         supplierId: dto.supplierId,
       },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      select: REGISTERED_USER_SELECT,
     });
 
-    this.logger.log(`✅ Usuario registrado: ${user.email} (${user.role})`);
+    this.logger.log(`Usuario registrado: ${user.email} (${user.role})`);
 
     return {
       message: 'Usuario registrado exitosamente',
@@ -2765,61 +2776,37 @@ export class AuthService {
     };
   }
 
-  // ──────────────────────────────────────────────────────────
-  // LOGIN
-  // ──────────────────────────────────────────────────────────
-
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-
-    // Mensaje genérico para no revelar si el email existe
-    const invalidMsg = 'Correo o contraseña incorrectos';
-
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (!user || !user.isActive) {
-      throw new UnauthorizedException(invalidMsg);
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    const passwordMatch = await bcrypt.compare(dto.password, user.password);
-    if (!passwordMatch) {
+    if (!(await verifyPassword(dto.password, user.password))) {
       this.logger.warn(`Login fallido para: ${dto.email}`);
-      throw new UnauthorizedException(invalidMsg);
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
     }
 
-    this.logger.log(`🔑 Login exitoso: ${user.email} (${user.role})`);
+    this.logger.log(`Login exitoso: ${user.email} (${user.role})`);
 
     return {
       message: 'Login exitoso',
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
       ...this.generateTokens(user),
     };
   }
 
-  // ──────────────────────────────────────────────────────────
-  // GESTIÓN DE USUARIOS (solo GERENTE)
-  // ──────────────────────────────────────────────────────────
+  // ── Gestión de usuarios (solo GERENTE) ─────────────────────
 
-  async findAllUsers() {
+  findAllUsers() {
     return this.prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
-        createdAt: true,
-      },
+      select: MANAGED_USER_SELECT,
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async toggleUserActive(userId: number, isActive: boolean) {
+    await this.ensureUserExists(userId);
     return this.prisma.user.update({
       where: { id: userId },
       data: { isActive },
@@ -2827,12 +2814,13 @@ export class AuthService {
     });
   }
 
+  /** Cambiar solo el rol no permite crear/romper el vínculo con un proveedor. */
   async changeUserRole(userId: number, role: Role) {
     const current = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { supplierId: true },
     });
-    if (!current) throw new NotFoundException('Usuario no encontrado');
+    if (!current) throw new NotFoundException(USER_NOT_FOUND);
     if (role === Role.PROVEEDOR && !current.supplierId) {
       throw new ConflictException('Asocia un proveedor antes de asignar el rol PROVEEDOR');
     }
@@ -2847,36 +2835,21 @@ export class AuthService {
   }
 
   async updateUser(userId: number, dto: UpdateUserDto) {
-    const existing = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!existing) {
-      throw new NotFoundException('Usuario no encontrado');
-    }
-    const targetRole = dto.role ?? existing.role;
-    const targetSupplierId = dto.supplierId ?? existing.supplierId ?? undefined;
-    if (targetRole === Role.PROVEEDOR && !targetSupplierId) {
-      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
-    }
-    if (targetRole !== Role.PROVEEDOR && targetSupplierId) {
-      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
-    }
-    if (dto.supplierId) {
-      const supplier = await this.prisma.supplier.findUnique({
-        where: { id: dto.supplierId },
-      });
-      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
-    }
-
-    const data = {
-      ...dto,
-      password: dto.password
-        ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
-        : undefined,
-    };
+    const existing = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, supplierId: true },
+    });
+    if (!existing) throw new NotFoundException(USER_NOT_FOUND);
+    await assertSupplierLink(
+      this.prisma,
+      dto.role ?? existing.role,
+      dto.supplierId ?? existing.supplierId,
+    );
 
     try {
       return await this.prisma.user.update({
         where: { id: userId },
-        data,
+        data: { ...dto, password: await hashOptionalPassword(dto.password) },
         select: {
           id: true,
           name: true,
@@ -2887,36 +2860,25 @@ export class AuthService {
         },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException('El correo electrónico ya está registrado');
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: 'El correo electrónico ya está registrado' });
     }
   }
 
-  // ──────────────────────────────────────────────────────────
-  // JWT helpers
-  // ──────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────
 
-  private generateTokens(user: {
-    id: number;
-    email: string;
-    role: Role;
-    name: string;
-  }) {
+  private async ensureUserExists(id: number) {
+    const count = await this.prisma.user.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(USER_NOT_FOUND);
+  }
+
+  private generateTokens(user: TokenSubject) {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
     };
-
-    const accessToken = this.jwt.sign(payload);
-
-    return { accessToken };
+    return { accessToken: this.jwt.sign(payload) };
   }
 }
 
@@ -2969,6 +2931,23 @@ export class CreateAppointmentDto {
 }
 
 ================
+File: src/client/dto/reschedule-appointment.dto.ts
+================
+import { IsDateString, IsOptional, IsString, MaxLength } from 'class-validator';
+
+/** PATCH /api/client/appointments/:id — el cliente reprograma su cita. */
+export class RescheduleAppointmentDto {
+  /** Fecha y hora ISO 8601; debe ser futura. */
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+}
+
+================
 File: src/client/client.controller.ts
 ================
 import {
@@ -2977,6 +2956,9 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseIntPipe,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -2986,6 +2968,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 import { ClientService } from './client.service';
 
 @Controller('client')
@@ -3013,6 +2996,25 @@ export class ClientController {
     return this.clientService.createAppointment(user.id, dto);
   }
 
+  /** Reprograma una cita propia (vuelve a AGENDADA). */
+  @Patch('appointments/:id(\\d+)')
+  rescheduleAppointment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RescheduleAppointmentDto,
+  ) {
+    return this.clientService.rescheduleAppointment(user.id, id, dto);
+  }
+
+  /** Cancela una cita propia agendada o confirmada. */
+  @Patch('appointments/:id(\\d+)/cancel')
+  cancelAppointment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.clientService.cancelAppointment(user.id, id);
+  }
+
   @Get('work-orders')
   findMyWorkOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.clientService.findMyWorkOrders(user.id);
@@ -3035,13 +3037,21 @@ export class ClientModule {}
 ================
 File: src/client/client.service.ts
 ================
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { AppointmentStatus } from '@prisma/client';
+import { toFutureDate } from '../common/dates';
+import { USER_SUMMARY, WORK_ORDER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
+
+const CLIENT_APPOINTMENT_INCLUDE = { vehicle: true, workOrder: WORK_ORDER_SUMMARY } as const;
+
+/** Solo una cita aún abierta puede reprogramarse o cancelarse. */
+const OPEN_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = [
+  AppointmentStatus.AGENDADA,
+  AppointmentStatus.CONFIRMADA,
+];
 
 @Injectable()
 export class ClientService {
@@ -3057,7 +3067,7 @@ export class ClientService {
   findMyAppointments(ownerId: number) {
     return this.prisma.appointment.findMany({
       where: { vehicle: { ownerId } },
-      include: { vehicle: true, workOrder: { select: { id: true, number: true, status: true } } },
+      include: CLIENT_APPOINTMENT_INCLUDE,
       orderBy: { scheduledAt: 'desc' },
     });
   }
@@ -3070,18 +3080,39 @@ export class ClientService {
       throw new NotFoundException('El vehículo no pertenece al cliente autenticado');
     }
 
-    const scheduledAt = new Date(dto.scheduledAt);
-    if (scheduledAt <= new Date()) {
-      throw new BadRequestException('La cita debe agendarse para una fecha futura');
-    }
-
     return this.prisma.appointment.create({
       data: {
-        scheduledAt,
+        scheduledAt: toFutureDate(dto.scheduledAt),
         reason: dto.reason,
         vehicleId: dto.vehicleId,
       },
       include: { vehicle: true },
+    });
+  }
+
+  /**
+   * Reprograma una cita propia. Vuelve a AGENDADA para que el taller
+   * confirme el nuevo horario.
+   */
+  async rescheduleAppointment(ownerId: number, id: number, dto: RescheduleAppointmentDto) {
+    await this.findOpenAppointment(ownerId, id);
+    return this.prisma.appointment.update({
+      where: { id },
+      data: {
+        scheduledAt: toFutureDate(dto.scheduledAt),
+        reason: dto.reason,
+        status: AppointmentStatus.AGENDADA,
+      },
+      include: CLIENT_APPOINTMENT_INCLUDE,
+    });
+  }
+
+  async cancelAppointment(ownerId: number, id: number) {
+    await this.findOpenAppointment(ownerId, id);
+    return this.prisma.appointment.update({
+      where: { id },
+      data: { status: AppointmentStatus.CANCELADA },
+      include: CLIENT_APPOINTMENT_INCLUDE,
     });
   }
 
@@ -3090,11 +3121,24 @@ export class ClientService {
       where: { vehicle: { ownerId } },
       include: {
         vehicle: true,
-        mechanic: { select: { id: true, name: true, email: true } },
+        mechanic: USER_SUMMARY,
         parts: { include: { part: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /** Cita de un vehículo del cliente (ajena → 404) que siga abierta (si no → 409). */
+  private async findOpenAppointment(ownerId: number, id: number) {
+    const appointment = await this.prisma.appointment.findFirst({
+      where: { id, vehicle: { ownerId } },
+      select: { status: true },
+    });
+    if (!appointment) throw new NotFoundException(`Cita con id ${id} no encontrada`);
+    if (!OPEN_APPOINTMENT_STATUSES.includes(appointment.status)) {
+      throw new ConflictException('Solo se pueden modificar citas agendadas o confirmadas');
+    }
+    return appointment;
   }
 }
 
@@ -3182,6 +3226,21 @@ export function corsOriginCallback(
 }
 
 ================
+File: src/common/dates.ts
+================
+import { BadRequestException } from '@nestjs/common';
+
+/** Convierte un ISO a `Date` y exige que sea posterior al momento actual. */
+export function toFutureDate(
+  value: string,
+  message = 'La cita debe agendarse para una fecha futura',
+): Date {
+  const date = new Date(value);
+  if (date <= new Date()) throw new BadRequestException(message);
+  return date;
+}
+
+================
 File: src/common/document-number.ts
 ================
 import { Prisma } from '@prisma/client';
@@ -3231,8 +3290,30 @@ export async function nextDocumentNumber(
 }
 
 ================
+File: src/common/password.ts
+================
+import * as bcrypt from 'bcryptjs';
+
+/** Costo de bcrypt. Único punto de configuración para todo el backend. */
+export const BCRYPT_ROUNDS = 10;
+
+export function hashPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, BCRYPT_ROUNDS);
+}
+
+/** Para actualizaciones parciales: `undefined` deja la contraseña como está. */
+export async function hashOptionalPassword(plain?: string): Promise<string | undefined> {
+  return plain ? hashPassword(plain) : undefined;
+}
+
+export function verifyPassword(plain: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(plain, hash);
+}
+
+================
 File: src/common/prisma-errors.ts
 ================
+import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
 /** P2002: violación de restricción única. P2003: violación de llave foránea. */
@@ -3241,6 +3322,52 @@ export type PrismaErrorCode = 'P2002' | 'P2003';
 export function isPrismaError(error: unknown, code: PrismaErrorCode): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
+
+/**
+ * Traduce errores conocidos de Prisma a `409 Conflict` con un mensaje de
+ * negocio; cualquier otro error se relanza tal cual. Uso:
+ *
+ *   } catch (error) {
+ *     rethrowAsConflict(error, { P2002: 'El correo ya está registrado' });
+ *   }
+ */
+export function rethrowAsConflict(
+  error: unknown,
+  messages: Partial<Record<PrismaErrorCode, string>>,
+): never {
+  for (const [code, message] of Object.entries(messages) as [PrismaErrorCode, string][]) {
+    if (isPrismaError(error, code)) throw new ConflictException(message);
+  }
+  throw error;
+}
+
+================
+File: src/common/selects.ts
+================
+import { Prisma } from '@prisma/client';
+
+/** Datos públicos mínimos de un usuario en relaciones (nunca `password`). */
+export const USER_SUMMARY_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+} satisfies Prisma.UserSelect;
+
+/** Relación con usuario lista para `include` (`owner`, `mechanic`, `client`). */
+export const USER_SUMMARY = { select: USER_SUMMARY_SELECT } as const;
+
+/** OT generada a partir de una cita (`Appointment.workOrder`). */
+export const WORK_ORDER_SUMMARY = {
+  select: { id: true, number: true, status: true },
+} as const;
+
+================
+File: src/common/validation-messages.ts
+================
+import { Role } from '@prisma/client';
+
+/** Se deriva del enum de Prisma: agregar un rol no exige tocar los DTOs. */
+export const ROLE_VALIDATION_MESSAGE = `El rol debe ser uno de: ${Object.values(Role).join(', ')}`;
 
 ================
 File: src/inventory/dto/create-box.dto.ts
@@ -3499,6 +3626,17 @@ export class InventoryController {
     return this.inventoryService.updatePartPhoto(id, `/uploads/${file.filename}`);
   }
 
+  /**
+   * POST /api/inventory/parts/:id/locate → Enciende el LED de su caja.
+   * También MECANICO (desde la búsqueda de su panel), igual que con Alexa.
+   */
+  @Post('parts/:id/locate')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
+  @HttpCode(HttpStatus.ACCEPTED)
+  locatePart(@Param('id', ParseIntPipe) id: number) {
+    return this.inventoryService.locatePart(id);
+  }
+
   /** PATCH /api/inventory/parts/:id → Actualizar una pieza */
   @Patch('parts/:id')
   updatePart(
@@ -3516,8 +3654,13 @@ export class InventoryController {
     return this.inventoryService.removePart(id);
   }
 
-  /** GET /api/inventory/search/:query → Búsqueda de piezas (usado internamente y por Alexa) */
+  /**
+   * GET /api/inventory/search/:query → Búsqueda de piezas (máx. 5).
+   * También MECANICO: busca repuestos en su panel y al registrarlos en una OT.
+   * Alexa no pasa por aquí (usa InventoryService directamente).
+   */
   @Get('search/:query')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
   searchPart(@Param('query') query: string) {
     return this.inventoryService.searchPartByName(query);
   }
@@ -3527,10 +3670,13 @@ export class InventoryController {
 File: src/inventory/inventory.module.ts
 ================
 import { Module } from '@nestjs/common';
+import { LedModule } from '../led/led.module';
 import { InventoryService } from './inventory.service';
 import { InventoryController } from './inventory.controller';
 
 @Module({
+  // LedModule: puerto LOCATION_INDICATOR para "ubicar" una pieza desde la web.
+  imports: [LedModule],
   controllers: [InventoryController],
   providers: [InventoryService],
   // Exportamos el servicio para que AlexaModule pueda inyectarlo
@@ -3542,20 +3688,35 @@ export class InventoryModule {}
 File: src/inventory/inventory.service.ts
 ================
 import {
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
+import { LOCATION_INDICATOR, LocationIndicator } from '../led/led.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePartDto } from './dto/create-part.dto';
 import { CreateBoxDto } from './dto/create-box.dto';
 import { UpdatePartDto } from './dto/update-part.dto';
 import { UpdateBoxDto } from './dto/update-box.dto';
-import { Prisma } from '@prisma/client';
+import { rethrowAsConflict } from '../common/prisma-errors';
+
+/** Máximo de coincidencias de la búsqueda por voz/autocompletar. */
+export const PART_SEARCH_LIMIT = 5;
+
+const duplicateLedIndex = (ledIndex?: number) =>
+  `Ya existe una caja con ledIndex ${ledIndex}. Cada LED solo puede asignarse a una caja.`;
+const duplicatePartCode = (code?: string) => `Ya existe una pieza con el código "${code}"`;
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(InventoryService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(LOCATION_INDICATOR) private readonly indicator: LocationIndicator,
+  ) {}
 
   // ──────────────────────────────────────────────────────────
   // BOXES
@@ -3593,15 +3754,7 @@ export class InventoryService {
     try {
       return await this.prisma.box.create({ data: dto });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicateLedIndex(dto.ledIndex) });
     }
   }
 
@@ -3614,15 +3767,7 @@ export class InventoryService {
         data: dto,
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una caja con ledIndex ${dto.ledIndex}. Cada LED solo puede asignarse a una caja.`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicateLedIndex(dto.ledIndex) });
     }
   }
 
@@ -3667,15 +3812,7 @@ export class InventoryService {
         include: { box: true },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una pieza con el código "${dto.code}"`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicatePartCode(dto.code) });
     }
   }
 
@@ -3702,21 +3839,19 @@ export class InventoryService {
         include: { box: true },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        throw new ConflictException(
-          `Ya existe una pieza con el código "${dto.code}"`,
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: duplicatePartCode(dto.code) });
     }
   }
 
   async removePart(id: number) {
     await this.findOnePart(id);
-    await this.prisma.part.delete({ where: { id } });
+    try {
+      await this.prisma.part.delete({ where: { id } });
+    } catch (error) {
+      rethrowAsConflict(error, {
+        P2003: 'La pieza está registrada en órdenes de trabajo o pedidos de compra; no se puede eliminar',
+      });
+    }
   }
 
   /**
@@ -3753,10 +3888,27 @@ export class InventoryService {
           },
         },
       },
-      take: 5, // Retornar máximo 5 coincidencias
+      take: PART_SEARCH_LIMIT,
     });
 
     return parts;
+  }
+
+  /**
+   * Enciende el LED de la caja de la pieza (mismo efecto que la búsqueda por
+   * Alexa). No espera la secuencia del LED: responde enseguida y un fallo del
+   * hardware solo se registra en el log.
+   */
+  async locatePart(id: number) {
+    const part = await this.findOnePart(id);
+    const { box } = part;
+    this.indicator
+      .locate({ ledIndex: box.ledIndex, label: part.name, colorHex: box.colorHex })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`No se pudo señalizar "${part.name}": ${message}`);
+      });
+    return { partId: part.id, partName: part.name, boxName: box.name, ledIndex: box.ledIndex };
   }
 
   async updatePartQuantity(id: number, delta: number) {
@@ -3865,7 +4017,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
 import { InvoicesService } from './invoices.service';
 
-/** /api/invoices — Facturación (solo GERENTE). */
+/** /api/invoices — Facturación (GERENTE, CONTADOR). */
 @Controller('invoices')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.GERENTE, Role.CONTADOR)
@@ -3875,6 +4027,15 @@ export class InvoicesController {
   @Get()
   findAll() {
     return this.invoicesService.findAll();
+  }
+
+  /**
+   * GET /api/invoices/billable-orders → órdenes concluidas sin factura.
+   * El CONTADOR no tiene acceso a /api/work-orders, por eso existe esta ruta.
+   */
+  @Get('billable-orders')
+  findBillableOrders() {
+    return this.invoicesService.findBillableOrders();
   }
 
   @Get(':id(\\d+)')
@@ -3924,12 +4085,13 @@ import {
 } from '@nestjs/common';
 import { InvoiceStatus, Prisma, WorkOrderStatus } from '@prisma/client';
 import { nextDocumentNumber } from '../common/document-number';
-import { isPrismaError } from '../common/prisma-errors';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from './dto/invoice.dto';
 
 const INVOICE_INCLUDE = {
-  client: { select: { id: true, name: true, email: true } },
+  client: USER_SUMMARY,
   workOrder: { include: { vehicle: true } },
 } as const;
 
@@ -3941,6 +4103,15 @@ export class InvoicesService {
     return this.prisma.invoice.findMany({
       include: INVOICE_INCLUDE,
       orderBy: { issuedAt: 'desc' },
+    });
+  }
+
+  /** Órdenes CONCLUIDO sin factura (selector "Nueva factura" y panel del CONTADOR). */
+  findBillableOrders() {
+    return this.prisma.workOrder.findMany({
+      where: { status: WorkOrderStatus.CONCLUIDO, invoice: null },
+      include: { vehicle: { include: { owner: USER_SUMMARY } } },
+      orderBy: { completedAt: 'desc' },
     });
   }
 
@@ -4007,10 +4178,7 @@ export class InvoicesService {
         }),
       );
     } catch (error) {
-      if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException('La orden de trabajo ya tiene una factura');
-      }
-      throw error;
+      rethrowAsConflict(error, { P2002: 'La orden de trabajo ya tiene una factura' });
     }
   }
 
@@ -5165,7 +5333,8 @@ import { CreatePurchaseOrderDto } from '../../supplier/dto/purchase-order.dto';
 export class CreatePurchaseDto extends CreatePurchaseOrderDto {}
 
 /**
- * Solo pedidos PENDIENTES pueden editarse. Estado admitido: CANCELADA.
+ * Solo pedidos PENDIENTES pueden editarse; uno CONFIRMADO solo admite
+ * `{ status: CANCELADA }`.
  * La recepción (RECIBIDA) incrementa stock y se hace en
  * POST /api/suppliers/purchase-orders/:id/receive.
  */
@@ -5293,11 +5462,11 @@ File: src/purchases/purchases.service.ts
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PurchaseOrderStatus, Role } from '@prisma/client';
-import { ForbiddenException } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupplierService } from '../supplier/supplier.service';
@@ -5342,8 +5511,15 @@ export class PurchasesService {
 
   async update(id: number, dto: UpdatePurchaseDto) {
     const order = await this.findOne(id);
-    if (order.status !== PurchaseOrderStatus.PENDIENTE) {
-      throw new ConflictException('Solo se pueden modificar pedidos pendientes');
+    // Un pedido confirmado por el proveedor solo admite cancelarse.
+    const cancelsConfirmed =
+      order.status === PurchaseOrderStatus.CONFIRMADA &&
+      dto.status === PurchaseOrderStatus.CANCELADA &&
+      dto.supplierId === undefined;
+    if (order.status !== PurchaseOrderStatus.PENDIENTE && !cancelsConfirmed) {
+      throw new ConflictException(
+        'Solo se pueden modificar pedidos pendientes; uno confirmado solo puede cancelarse',
+      );
     }
     if (dto.status === PurchaseOrderStatus.RECIBIDA) {
       throw new BadRequestException(
@@ -5372,11 +5548,8 @@ export class PurchasesService {
   }
 
   findSupplierOrders(user: AuthenticatedUser) {
-    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
-      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
-    }
     return this.prisma.purchaseOrder.findMany({
-      where: { supplierId: user.supplierId },
+      where: { supplierId: this.linkedSupplierId(user) },
       include: PURCHASE_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
@@ -5387,11 +5560,8 @@ export class PurchasesService {
     dto: SupplierPurchaseResponseDto,
     user: AuthenticatedUser,
   ) {
-    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
-      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
-    }
     const order = await this.prisma.purchaseOrder.findFirst({
-      where: { id, supplierId: user.supplierId },
+      where: { id, supplierId: this.linkedSupplierId(user) },
     });
     if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
     if (order.status !== PurchaseOrderStatus.PENDIENTE) {
@@ -5407,6 +5577,14 @@ export class PurchasesService {
       },
       include: PURCHASE_INCLUDE,
     });
+  }
+
+  /** Proveedor del usuario PROVEEDOR autenticado; solo ve sus propios pedidos. */
+  private linkedSupplierId(user: AuthenticatedUser): number {
+    if (user.role !== Role.PROVEEDOR || !user.supplierId) {
+      throw new ForbiddenException('El usuario proveedor no está vinculado a un proveedor');
+    }
+    return user.supplierId;
   }
 
   private async ensureSupplier(id: number) {
@@ -5594,6 +5772,7 @@ import {
 import { WorkOrderStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { startedAtOnTransition, USE_CLOSE_ENDPOINT } from '../work-orders/work-order-rules';
 import { workOrderScope } from '../work-orders/work-order-scope';
 
 const WORK_ORDER_INCLUDE = { vehicle: true, parts: { include: { part: true } } } as const;
@@ -5614,17 +5793,13 @@ export class ServiceService {
       throw new ConflictException('Una orden concluida no puede cambiar de estado');
     }
     if (status === WorkOrderStatus.CONCLUIDO) {
-      throw new BadRequestException(
-        'Para concluir la orden usa PATCH /api/service/work-orders/:id/close',
-      );
+      throw new BadRequestException(USE_CLOSE_ENDPOINT);
     }
     return this.prisma.workOrder.update({
       where: { id },
       data: {
         status,
-        // Solo la primera vez: reanudar desde ESPERA_REPUESTOS no reinicia la fecha.
-        startedAt:
-          status === WorkOrderStatus.EN_PROCESO && !order.startedAt ? new Date() : undefined,
+        startedAt: startedAtOnTransition(status, order.startedAt),
       },
       include: WORK_ORDER_INCLUDE,
     });
@@ -5782,10 +5957,25 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, PurchaseOrderStatus } from '@prisma/client';
+import { PurchaseOrderStatus } from '@prisma/client';
 import { nextDocumentNumber } from '../common/document-number';
+import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
+
+/**
+ * Un pedido se recibe estando pendiente o confirmado por el proveedor
+ * (portal de proveedor). RECHAZADA, CANCELADA y RECIBIDA no admiten recepción.
+ */
+export const RECEIVABLE_PURCHASE_STATUSES: readonly PurchaseOrderStatus[] = [
+  PurchaseOrderStatus.PENDIENTE,
+  PurchaseOrderStatus.CONFIRMADA,
+];
+
+const PURCHASE_ORDER_INCLUDE = {
+  supplier: true,
+  items: { include: { part: true } },
+} as const;
 
 @Injectable()
 export class SupplierService {
@@ -5806,7 +5996,7 @@ export class SupplierService {
 
   findPurchaseOrders() {
     return this.prisma.purchaseOrder.findMany({
-      include: { supplier: true, items: { include: { part: true } } },
+      include: PURCHASE_ORDER_INCLUDE,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -5850,14 +6040,13 @@ export class SupplierService {
               })),
             },
           },
-          include: { supplier: true, items: { include: { part: true } } },
+          include: PURCHASE_ORDER_INCLUDE,
         }),
       );
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('No se pudo generar un código de pedido único; intenta de nuevo');
-      }
-      throw error;
+      rethrowAsConflict(error, {
+        P2002: 'No se pudo generar un código de pedido único; intenta de nuevo',
+      });
     }
   }
 
@@ -5868,8 +6057,8 @@ export class SupplierService {
         include: { items: true },
       });
       if (!order) throw new NotFoundException(`Pedido con id ${id} no encontrado`);
-      if (order.status !== PurchaseOrderStatus.PENDIENTE) {
-        throw new ConflictException('Solo se pueden recibir pedidos pendientes');
+      if (!RECEIVABLE_PURCHASE_STATUSES.includes(order.status)) {
+        throw new ConflictException('Solo se pueden recibir pedidos pendientes o confirmados');
       }
 
       for (const item of order.items) {
@@ -5882,14 +6071,14 @@ export class SupplierService {
       return transaction.purchaseOrder.update({
         where: { id },
         data: { status: PurchaseOrderStatus.RECIBIDA, receivedAt: new Date() },
-        include: { supplier: true, items: { include: { part: true } } },
+        include: PURCHASE_ORDER_INCLUDE,
       });
     });
   }
 
   private async ensureSupplier(id: number) {
-    const supplier = await this.prisma.supplier.findUnique({ where: { id } });
-    if (!supplier) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
+    const count = await this.prisma.supplier.count({ where: { id } });
+    if (count === 0) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
   }
 }
 
@@ -6012,14 +6201,12 @@ export class SuppliersModule {}
 ================
 File: src/suppliers/suppliers.service.ts
 ================
-import {
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { isPrismaError } from '../common/prisma-errors';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSupplierDto, UpdateSupplierDto } from './dto/supplier.dto';
+
+const DUPLICATE_TAX_ID = 'El identificador fiscal ya está registrado';
 
 @Injectable()
 export class SuppliersService {
@@ -6046,8 +6233,7 @@ export class SuppliersService {
     try {
       return await this.prisma.supplier.create({ data: dto });
     } catch (error) {
-      this.throwDuplicateTaxId(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_TAX_ID });
     }
   }
 
@@ -6056,8 +6242,7 @@ export class SuppliersService {
     try {
       return await this.prisma.supplier.update({ where: { id }, data: dto });
     } catch (error) {
-      this.throwDuplicateTaxId(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_TAX_ID });
     }
   }
 
@@ -6066,24 +6251,15 @@ export class SuppliersService {
     try {
       await this.prisma.supplier.delete({ where: { id } });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException(
-          'No se puede eliminar un proveedor con pedidos de compra registrados',
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, {
+        P2003: 'No se puede eliminar un proveedor con pedidos de compra registrados',
+      });
     }
   }
 
   private async ensureExists(id: number) {
     const count = await this.prisma.supplier.count({ where: { id } });
     if (count === 0) throw new NotFoundException(`Proveedor con id ${id} no encontrado`);
-  }
-
-  private throwDuplicateTaxId(error: unknown) {
-    if (isPrismaError(error, 'P2002')) {
-      throw new ConflictException('El identificador fiscal ya está registrado');
-    }
   }
 }
 
@@ -6103,6 +6279,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { ROLE_VALIDATION_MESSAGE } from '../../common/validation-messages';
 
 export class CreateUserDto {
   @IsString()
@@ -6119,7 +6296,7 @@ export class CreateUserDto {
   password: string;
 
   @IsOptional()
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role?: Role;
 
   @IsOptional()
@@ -6136,8 +6313,38 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {}
 
 /** GET /api/users/lookup?role=CLIENTE → selectores de formularios. */
 export class UserLookupQueryDto {
-  @IsEnum(Role, { message: 'El rol debe ser GERENTE, MECANICO, BODEGUERO, CONTADOR, CLIENTE o PROVEEDOR' })
+  @IsEnum(Role, { message: ROLE_VALIDATION_MESSAGE })
   role: Role;
+}
+
+================
+File: src/users/supplier-link.ts
+================
+import { ConflictException, NotFoundException } from '@nestjs/common';
+import { Role } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+
+/**
+ * Regla única del vínculo usuario ↔ proveedor (UsersService y AuthService):
+ *  - Un usuario PROVEEDOR debe tener `supplierId`.
+ *  - Ningún otro rol puede tenerlo.
+ *  - El proveedor indicado debe existir.
+ */
+export async function assertSupplierLink(
+  prisma: PrismaService,
+  role: Role,
+  supplierId: number | null | undefined,
+): Promise<void> {
+  if (role === Role.PROVEEDOR && !supplierId) {
+    throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
+  }
+  if (role !== Role.PROVEEDOR && supplierId) {
+    throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
+  }
+  if (supplierId) {
+    const count = await prisma.supplier.count({ where: { id: supplierId } });
+    if (count === 0) throw new NotFoundException('Proveedor no encontrado');
+  }
 }
 
 ================
@@ -6232,15 +6439,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
-import * as bcrypt from 'bcryptjs';
-import { isPrismaError } from '../common/prisma-errors';
+import { hashOptionalPassword, hashPassword } from '../common/password';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY_SELECT } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+import { assertSupplierLink } from './supplier-link';
 
-const BCRYPT_ROUNDS = 10;
+const DUPLICATE_EMAIL = 'El correo electrónico ya está registrado';
 
 /** Campos públicos: nunca se expone `password`. */
-const USER_SELECT = {
+export const USER_SELECT = {
   id: true,
   name: true,
   email: true,
@@ -6266,7 +6475,7 @@ export class UsersService {
   lookup(role: Role) {
     return this.prisma.user.findMany({
       where: { role, isActive: true },
-      select: { id: true, name: true, email: true },
+      select: USER_SUMMARY_SELECT,
       orderBy: { name: 'asc' },
     });
   }
@@ -6281,43 +6490,34 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto) {
-    await this.validateSupplierAssignment(dto.role ?? Role.CLIENTE, dto.supplierId);
+    const role = dto.role ?? Role.CLIENTE;
+    await assertSupplierLink(this.prisma, role, dto.supplierId);
     try {
       return await this.prisma.user.create({
-        data: {
-          ...dto,
-          role: dto.role ?? Role.CLIENTE,
-          password: await bcrypt.hash(dto.password, BCRYPT_ROUNDS),
-        },
+        data: { ...dto, role, password: await hashPassword(dto.password) },
         select: USER_SELECT,
       });
     } catch (error) {
-      this.throwDuplicateEmail(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_EMAIL });
     }
   }
 
   async update(id: number, dto: UpdateUserDto) {
     const current = await this.prisma.user.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Usuario con id ${id} no encontrado`);
-    await this.validateSupplierAssignment(
+    await assertSupplierLink(
+      this.prisma,
       dto.role ?? current.role,
-      dto.supplierId ?? current.supplierId ?? undefined,
+      dto.supplierId ?? current.supplierId,
     );
     try {
       return await this.prisma.user.update({
         where: { id },
-        data: {
-          ...dto,
-          password: dto.password
-            ? await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
-            : undefined,
-        },
+        data: { ...dto, password: await hashOptionalPassword(dto.password) },
         select: USER_SELECT,
       });
     } catch (error) {
-      this.throwDuplicateEmail(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_EMAIL });
     }
   }
 
@@ -6329,31 +6529,9 @@ export class UsersService {
     try {
       await this.prisma.user.delete({ where: { id } });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException(
-          'El usuario tiene vehículos o facturas asociadas; desactívalo en lugar de eliminarlo',
-        );
-      }
-      throw error;
-    }
-  }
-
-  private throwDuplicateEmail(error: unknown) {
-    if (isPrismaError(error, 'P2002')) {
-      throw new ConflictException('El correo electrónico ya está registrado');
-    }
-  }
-
-  private async validateSupplierAssignment(role: Role, supplierId?: number) {
-    if (role === Role.PROVEEDOR && !supplierId) {
-      throw new ConflictException('Un usuario PROVEEDOR debe estar vinculado a un proveedor');
-    }
-    if (role !== Role.PROVEEDOR && supplierId) {
-      throw new ConflictException('Solo los usuarios PROVEEDOR pueden vincular un proveedor');
-    }
-    if (supplierId) {
-      const supplier = await this.prisma.supplier.findUnique({ where: { id: supplierId } });
-      if (!supplier) throw new NotFoundException('Proveedor no encontrado');
+      rethrowAsConflict(error, {
+        P2003: 'El usuario tiene vehículos o facturas asociadas; desactívalo en lugar de eliminarlo',
+      });
     }
   }
 }
@@ -6491,11 +6669,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { isPrismaError } from '../common/prisma-errors';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
 
-const OWNER_SELECT = { select: { id: true, name: true, email: true } } as const;
+const DUPLICATE_PLATE_OR_VIN = 'La placa o VIN ya está registrado';
 
 @Injectable()
 export class VehiclesService {
@@ -6503,7 +6682,7 @@ export class VehiclesService {
 
   findAll() {
     return this.prisma.vehicle.findMany({
-      include: { owner: OWNER_SELECT },
+      include: { owner: USER_SUMMARY },
       orderBy: { plate: 'asc' },
     });
   }
@@ -6512,7 +6691,7 @@ export class VehiclesService {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
       include: {
-        owner: OWNER_SELECT,
+        owner: USER_SUMMARY,
         workOrders: { orderBy: { createdAt: 'desc' } },
         appointments: { orderBy: { scheduledAt: 'desc' } },
       },
@@ -6528,11 +6707,10 @@ export class VehiclesService {
     try {
       return await this.prisma.vehicle.create({
         data: dto,
-        include: { owner: OWNER_SELECT },
+        include: { owner: USER_SUMMARY },
       });
     } catch (error) {
-      this.throwDuplicate(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_PLATE_OR_VIN });
     }
   }
 
@@ -6544,11 +6722,10 @@ export class VehiclesService {
       return await this.prisma.vehicle.update({
         where: { id },
         data: dto,
-        include: { owner: OWNER_SELECT },
+        include: { owner: USER_SUMMARY },
       });
     } catch (error) {
-      this.throwDuplicate(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_PLATE_OR_VIN });
     }
   }
 
@@ -6557,12 +6734,9 @@ export class VehiclesService {
     try {
       await this.prisma.vehicle.delete({ where: { id } });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException(
-          'No se puede eliminar un vehículo con órdenes o citas asociadas',
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, {
+        P2003: 'No se puede eliminar un vehículo con órdenes o citas asociadas',
+      });
     }
   }
 
@@ -6595,12 +6769,6 @@ export class VehiclesService {
       select: { id: true },
     });
     if (existing) throw new ConflictException(`La placa "${plate}" ya está registrada`);
-  }
-
-  private throwDuplicate(error: unknown) {
-    if (isPrismaError(error, 'P2002')) {
-      throw new ConflictException('La placa o VIN ya está registrado');
-    }
   }
 }
 
@@ -6742,6 +6910,27 @@ export function formatWorkOrderNumber(year: number, sequence: number): string {
 /** DEBE ejecutarse dentro de la transacción que crea la orden. */
 export function nextWorkOrderNumber(tx: Prisma.TransactionClient, date?: Date): Promise<string> {
   return nextDocumentNumber(tx, 'OT', date);
+}
+
+================
+File: src/work-orders/work-order-rules.ts
+================
+import { WorkOrderStatus } from '@prisma/client';
+
+/** Mensaje único cuando se intenta concluir fuera de `/close`. */
+export const USE_CLOSE_ENDPOINT =
+  'Para concluir la orden usa PATCH /api/service/work-orders/:id/close';
+
+/**
+ * `startedAt` se registra solo la primera vez que la orden pasa a EN_PROCESO;
+ * reanudar desde ESPERA_REPUESTOS no reinicia la fecha.
+ * `undefined` = Prisma no modifica el campo.
+ */
+export function startedAtOnTransition(
+  nextStatus: WorkOrderStatus | undefined,
+  currentStartedAt: Date | null,
+): Date | undefined {
+  return nextStatus === WorkOrderStatus.EN_PROCESO && !currentStartedAt ? new Date() : undefined;
 }
 
 ================
@@ -6899,7 +7088,8 @@ import {
 } from '@nestjs/common';
 import { AppointmentStatus, Prisma, Role, WorkOrderStatus } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/auth.types';
-import { isPrismaError } from '../common/prisma-errors';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AddUsedPartDto,
@@ -6909,9 +7099,8 @@ import {
   WorkOrderPartDto,
 } from './dto/work-order.dto';
 import { nextWorkOrderNumber } from './work-order-number';
+import { startedAtOnTransition, USE_CLOSE_ENDPOINT } from './work-order-rules';
 import { workOrderScope } from './work-order-scope';
-
-const USER_SUMMARY = { select: { id: true, name: true, email: true } } as const;
 
 const WORK_ORDER_INCLUDE = {
   vehicle: { include: { owner: USER_SUMMARY } },
@@ -6990,14 +7179,12 @@ export class WorkOrdersService {
         });
       });
     } catch (error) {
-      if (isPrismaError(error, 'P2002')) {
-        throw new ConflictException(
+      rethrowAsConflict(error, {
+        P2002:
           appointmentId !== undefined
             ? 'La cita ya generó una orden de trabajo'
             : 'No se pudo generar un código de orden único; intenta de nuevo',
-        );
-      }
-      throw error;
+      });
     }
   }
 
@@ -7044,20 +7231,16 @@ export class WorkOrdersService {
       throw new ConflictException('Una orden concluida no puede modificarse');
     }
     if (dto.status === WorkOrderStatus.CONCLUIDO) {
-      throw new BadRequestException(
-        'Para concluir la orden usa PATCH /api/service/work-orders/:id/close',
-      );
+      throw new BadRequestException(USE_CLOSE_ENDPOINT);
     }
     if (dto.mechanicId !== undefined) {
       this.resolveMechanicId(dto.mechanicId, user);
       await this.ensureMechanic(dto.mechanicId);
     }
 
-    const startsNow = dto.status === WorkOrderStatus.EN_PROCESO && !order.startedAt;
-
     return this.prisma.workOrder.update({
       where: { id },
-      data: { ...dto, startedAt: startsNow ? new Date() : undefined },
+      data: { ...dto, startedAt: startedAtOnTransition(dto.status, order.startedAt) },
       include: WORK_ORDER_INCLUDE,
     });
   }
@@ -7071,16 +7254,7 @@ export class WorkOrdersService {
     await this.findOne(id, user); // alcance del usuario: orden ajena → 404
 
     return this.prisma.$transaction(async (tx) => {
-      // Bloquea la orden para que no se concluya mientras se agrega el repuesto.
-      await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
-      const order = await tx.workOrder.findUniqueOrThrow({
-        where: { id },
-        select: { status: true },
-      });
-      if (order.status === WorkOrderStatus.CONCLUIDO) {
-        throw new ConflictException('No se pueden agregar repuestos a una orden concluida');
-      }
-
+      await this.lockOpenOrder(tx, id, 'No se pueden agregar repuestos a una orden concluida');
       await this.consumePart(tx, id, dto.partId, dto.quantity);
 
       return tx.workOrder.findUniqueOrThrow({ where: { id }, include: WORK_ORDER_INCLUDE });
@@ -7095,14 +7269,7 @@ export class WorkOrdersService {
     await this.findOne(id, user); // alcance del usuario: orden ajena → 404
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
-      const order = await tx.workOrder.findUniqueOrThrow({
-        where: { id },
-        select: { status: true },
-      });
-      if (order.status === WorkOrderStatus.CONCLUIDO) {
-        throw new ConflictException('No se pueden quitar repuestos de una orden concluida');
-      }
+      await this.lockOpenOrder(tx, id, 'No se pueden quitar repuestos de una orden concluida');
       const usedPart = await tx.usedPart.findUnique({
         where: { workOrderId_partId: { workOrderId: id, partId } },
       });
@@ -7138,10 +7305,7 @@ export class WorkOrdersService {
         await tx.workOrder.delete({ where: { id } });
       });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException('La orden tiene una factura asociada');
-      }
-      throw error;
+      rethrowAsConflict(error, { P2003: 'La orden tiene una factura asociada' });
     }
   }
 
@@ -7156,6 +7320,21 @@ export class WorkOrdersService {
       throw new ForbiddenException('Un mecánico solo puede asignarse órdenes a sí mismo');
     }
     return user.id;
+  }
+
+  /**
+   * Bloquea la orden (`FOR UPDATE`) hasta el fin de la transacción para que no
+   * se concluya mientras se modifican sus repuestos. Rechaza órdenes concluidas.
+   */
+  private async lockOpenOrder(tx: Prisma.TransactionClient, id: number, concludedMessage: string) {
+    await tx.$queryRaw`SELECT id FROM work_orders WHERE id = ${id} FOR UPDATE`;
+    const order = await tx.workOrder.findUniqueOrThrow({
+      where: { id },
+      select: { status: true },
+    });
+    if (order.status === WorkOrderStatus.CONCLUIDO) {
+      throw new ConflictException(concludedMessage);
+    }
   }
 
   /**
@@ -7408,7 +7587,7 @@ File: clinerules.md
  NestJS | Prisma ORM | PostgreSQL 15 | Socket.io | Class-Validator
 
 ## Arquitectura y Módulos
-- Auth: JWT, Guards (`JwtAuthGuard`, `RolesGuard`), Roles (`GERENTE`, `MECANICO`, `CLIENTE`).
+- Auth: JWT, Guards (`JwtAuthGuard`, `RolesGuard`), Roles (`GERENTE`, `MECANICO`, `BODEGUERO`, `CONTADOR`, `CLIENTE`, `PROVEEDOR`).
 - Inventory: Entidades `Box` y `Part`.
 - Alexa: Controller `/api/webhook/alexa` que maneja `BuscarPiezaIntent`.
 - LED & WebSockets: `LedControllerService` (fallback simulación/GPIO real) y `LedGateway`.
@@ -7420,7 +7599,7 @@ File: clinerules.md
 4. Refactorizar métodos por partes sin romper las firmas existentes.
 5. CRUD por dominio en `src/<dominio>/` (`users`, `vehicles`, `appointments`, `work-orders`, `suppliers`, `purchases`, `invoices`): Module + Controller + Service con `PrismaService` + DTOs (`Update*Dto` vía `PartialType` de `@nestjs/mapped-types` cuando aplique).
 6. Declarar parámetros numéricos como `:id(\\d+)` + `ParseIntPipe` para no colisionar con rutas literales del mismo prefijo.
-7. Mapear errores de Prisma con `isPrismaError` (`src/common/prisma-errors.ts`): P2002 → 409 (único), P2003 → 409 (registros asociados).
+7. Mapear errores de Prisma con `rethrowAsConflict(error, { P2002: '...', P2003: '...' })` (`src/common/prisma-errors.ts`) dentro del `catch`: traduce a 409 y relanza lo demás. No volver a escribir `error instanceof Prisma.PrismaClientKnownRequestError && error.code === ...` a mano.
 8. Toda modificación de stock ocurre en una `prisma.$transaction` junto con el registro que la origina: consumir repuesto (`UsedPart`, RF-INV-13) descuenta al insertarse; recibir pedido incrementa. Nunca en un `PATCH` genérico ni en el cierre de la orden (evita doble descuento). Descontar con `updateMany` condicionado a `quantity >= cantidad`; stock insuficiente → `ConflictException`.
 9. Nombres Prisma estables: modelos en inglés `PascalCase` singular, tablas `@@map` en `snake_case` plural, campos `@map` en `snake_case`. Renombrar modelos, tablas, campos o valores de enum SOLO por un cambio fuerte (cambia el significado o lo exige el ERS), nunca por estética o sinónimos.
 10. Todo renombrado lleva migración manual que conserve datos (`RENAME` de tabla, secuencia, PK, FKs e índices; `CASE` para valores de enum). Rechazar el `DROP`/`CREATE` que propone Prisma. Verificar que `prisma migrate diff --from-schema-datasource ... --to-schema-datamodel ...` quede vacío.
@@ -7430,6 +7609,12 @@ File: clinerules.md
 14. CORS: un solo lugar, `src/common/cors.ts`, para HTTP y Socket.io. El dominio de Vercel va explícito en `CORS_ORIGIN`; ngrok solo por sufijo HTTPS. Nunca `includes(...)` sobre el hostname ni `*.vercel.app` abierto por defecto. El gateway usa solo `websocket` y valida `Origin` en `allowRequest`.
 15. Todo controlador nuevo o existente expuesto por HTTP lleva `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...)`, salvo login/registro y el webhook de Alexa. Borrados de catálogo (piezas, cajas) solo `GERENTE`.
 16. Los precios que se facturan se congelan al consumir (`UsedPart.unitPrice`); no recalcular facturas con el precio actual de `Part`.
+17. Reutilizar los helpers de `src/common/` en lugar de repetir lógica: `selects.ts` (`USER_SUMMARY` para relaciones con usuario, `WORK_ORDER_SUMMARY`), `password.ts` (`hashPassword`, `hashOptionalPassword`, `verifyPassword`; `BCRYPT_ROUNDS` solo aquí), `dates.ts` (`toFutureDate`), `validation-messages.ts` (`ROLE_VALIDATION_MESSAGE`, derivado del enum `Role`). El vínculo usuario ↔ proveedor se valida solo con `assertSupplierLink` (`src/users/supplier-link.ts`). Las reglas de órdenes compartidas por `WorkOrdersService` y `ServiceService` viven en `src/work-orders/work-order-rules.ts` (`startedAtOnTransition`, `USE_CLOSE_ENDPOINT`).
+18. Nada de `@Body('campo')` sin DTO: incluso los cuerpos de un solo campo usan un DTO validado (p. ej. `ChangeRoleDto`, `ToggleActiveDto`).
+19. Pedidos de compra: recibir acepta `PENDIENTE` o `CONFIRMADA` (`RECEIVABLE_PURCHASE_STATUSES`); un `CONFIRMADA` solo puede cancelarse. Citas del cliente: solo propias y abiertas (`AGENDADA`/`CONFIRMADA`); reprogramar las devuelve a `AGENDADA`.
+20. Encender un LED desde otro módulo solo vía el puerto `LOCATION_INDICATOR` (Alexa e `InventoryService.locatePart`), sin esperar la secuencia y registrando el fallo en el log.
+21. Si un rol necesita datos de otro dominio que no le corresponde completo, exponer una consulta acotada en su propio módulo (p. ej. `GET /api/invoices/billable-orders` para el CONTADOR) en lugar de abrir el CRUD ajeno.
+22. El build (`nest build`) usa `tsconfig.build.json` (solo `src/`); la entrada debe quedar en `dist/main.js`.
 
 ================
 File: package.json
@@ -7550,6 +7735,18 @@ File: repomix.config.json
       "repomix-output.xml"
     ]
   }
+}
+
+================
+File: tsconfig.build.json
+================
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "prisma", "**/*.spec.ts"]
 }
 
 ================

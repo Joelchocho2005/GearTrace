@@ -1,18 +1,13 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { AppointmentStatus } from '@prisma/client';
+import { toFutureDate } from '../common/dates';
+import { USER_SUMMARY, WORK_ORDER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
 
 const APPOINTMENT_INCLUDE = {
-  vehicle: {
-    include: { owner: { select: { id: true, name: true, email: true } } },
-  },
-  workOrder: { select: { id: true, number: true, status: true } },
+  vehicle: { include: { owner: USER_SUMMARY } },
+  workOrder: WORK_ORDER_SUMMARY,
 } as const;
 
 const FINAL_STATUSES: AppointmentStatus[] = [
@@ -44,7 +39,7 @@ export class AppointmentsService {
     await this.ensureVehicle(dto.vehicleId);
     return this.prisma.appointment.create({
       data: {
-        scheduledAt: this.toFutureDate(dto.scheduledAt),
+        scheduledAt: toFutureDate(dto.scheduledAt),
         reason: dto.reason,
         vehicleId: dto.vehicleId,
       },
@@ -63,7 +58,7 @@ export class AppointmentsService {
       where: { id },
       data: {
         ...dto,
-        scheduledAt: dto.scheduledAt ? this.toFutureDate(dto.scheduledAt) : undefined,
+        scheduledAt: dto.scheduledAt ? toFutureDate(dto.scheduledAt) : undefined,
       },
       include: APPOINTMENT_INCLUDE,
     });
@@ -72,14 +67,6 @@ export class AppointmentsService {
   async remove(id: number) {
     await this.findOne(id);
     await this.prisma.appointment.delete({ where: { id } });
-  }
-
-  private toFutureDate(value: string): Date {
-    const date = new Date(value);
-    if (date <= new Date()) {
-      throw new BadRequestException('La cita debe agendarse para una fecha futura');
-    }
-    return date;
   }
 
   private async ensureVehicle(id: number) {

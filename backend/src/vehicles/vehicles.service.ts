@@ -4,11 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { isPrismaError } from '../common/prisma-errors';
+import { rethrowAsConflict } from '../common/prisma-errors';
+import { USER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
 
-const OWNER_SELECT = { select: { id: true, name: true, email: true } } as const;
+const DUPLICATE_PLATE_OR_VIN = 'La placa o VIN ya está registrado';
 
 @Injectable()
 export class VehiclesService {
@@ -16,7 +17,7 @@ export class VehiclesService {
 
   findAll() {
     return this.prisma.vehicle.findMany({
-      include: { owner: OWNER_SELECT },
+      include: { owner: USER_SUMMARY },
       orderBy: { plate: 'asc' },
     });
   }
@@ -25,7 +26,7 @@ export class VehiclesService {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
       include: {
-        owner: OWNER_SELECT,
+        owner: USER_SUMMARY,
         workOrders: { orderBy: { createdAt: 'desc' } },
         appointments: { orderBy: { scheduledAt: 'desc' } },
       },
@@ -41,11 +42,10 @@ export class VehiclesService {
     try {
       return await this.prisma.vehicle.create({
         data: dto,
-        include: { owner: OWNER_SELECT },
+        include: { owner: USER_SUMMARY },
       });
     } catch (error) {
-      this.throwDuplicate(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_PLATE_OR_VIN });
     }
   }
 
@@ -57,11 +57,10 @@ export class VehiclesService {
       return await this.prisma.vehicle.update({
         where: { id },
         data: dto,
-        include: { owner: OWNER_SELECT },
+        include: { owner: USER_SUMMARY },
       });
     } catch (error) {
-      this.throwDuplicate(error);
-      throw error;
+      rethrowAsConflict(error, { P2002: DUPLICATE_PLATE_OR_VIN });
     }
   }
 
@@ -70,12 +69,9 @@ export class VehiclesService {
     try {
       await this.prisma.vehicle.delete({ where: { id } });
     } catch (error) {
-      if (isPrismaError(error, 'P2003')) {
-        throw new ConflictException(
-          'No se puede eliminar un vehículo con órdenes o citas asociadas',
-        );
-      }
-      throw error;
+      rethrowAsConflict(error, {
+        P2003: 'No se puede eliminar un vehículo con órdenes o citas asociadas',
+      });
     }
   }
 
@@ -108,11 +104,5 @@ export class VehiclesService {
       select: { id: true },
     });
     if (existing) throw new ConflictException(`La placa "${plate}" ya está registrada`);
-  }
-
-  private throwDuplicate(error: unknown) {
-    if (isPrismaError(error, 'P2002')) {
-      throw new ConflictException('La placa o VIN ya está registrado');
-    }
   }
 }
