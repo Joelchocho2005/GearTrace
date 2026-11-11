@@ -15,7 +15,8 @@ GearTrace es una plataforma de logística y gestión visual de herramientas y re
 ┌───────────────────────┐        ┌───────────────────────┐        ┌───────────────────────┐
 │   Frontend en Vercel  │        │     Túnel HTTPS       │        │   Red Local (LAN)     │
 │   (React + Vite SPA)  │        │   (Ngrok / Cloudflare)│        │   (PC / Móvil Taller) │
-└───────────┬───────────┘        └──────────┬────────────┘        └───────────┬───────────┘
+└───────────┬───────────┘        
+└──────────┬────────────┘        └───────────┬───────────┘
             │ HTTPS / WSS                   │ POST /api/webhook/alexa         │ HTTP / WS
             ▼                               ▼                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -87,9 +88,9 @@ docker compose up -d postgres
    npm install
    npx prisma generate
    ```
-4. Aplica las migraciones e inserta los datos iniciales (Seed):
+4. Aplica las migraciones existentes e inserta los datos iniciales (Seed):
    ```bash
-   npm run prisma:migrate
+   npm run prisma:migrate:deploy
    npm run prisma:seed
    ```
 5. Inicia el servidor en modo desarrollo:
@@ -99,6 +100,42 @@ docker compose up -d postgres
    > Verás en la consola:
    > `⚠️  Hardware GPIO no disponible. Modo simulación activado.`
    > `🚀 GearTrace Backend corriendo en: http://localhost:3000/api`
+
+### Migraciones de Prisma
+
+Las migraciones se guardan en `backend/prisma/migrations` y deben aplicarse
+después de actualizar el código. Desde la carpeta `backend/`:
+
+```bash
+# Ver qué migraciones faltan por aplicar
+npx prisma migrate status
+
+# Aplicar todas las migraciones existentes (servidor, Raspberry Pi o CI)
+npm run prisma:migrate:deploy
+```
+
+Si modificas `backend/prisma/schema.prisma` durante el desarrollo, crea una
+nueva migración con un nombre descriptivo:
+
+```bash
+npm run prisma:migrate -- --name nombre_del_cambio
+```
+
+Este comando genera el archivo SQL, lo aplica a la base de datos configurada y
+actualiza el cliente Prisma. Después de cambiar el esquema también puedes
+regenerar el cliente explícitamente:
+
+```bash
+npm run prisma:generate
+```
+
+No uses `prisma migrate reset` en una base de datos con información importante:
+el comando elimina los datos y reconstruye todas las tablas. Para una base
+local desechable, el proyecto dispone de:
+
+```bash
+npm run db:reset
+```
 
 ### Paso 4: Configurar y Ejecutar el Frontend
 1. En otra terminal, ingresa a la carpeta del frontend y crea el archivo `.env`:
@@ -266,5 +303,7 @@ Tras ejecutar `npm run prisma:seed`, tienes a disposición los siguientes usuari
 | **Desarrollo** | `npm run start:dev` | `npm run dev` |
 | **Compilar producción** | `npm run build` | `npm run build` |
 | **Prisma Generate** | `npm run prisma:generate` | N/A |
-| **Prisma Migraciones** | `npm run prisma:migrate` | N/A |
+| **Estado de migraciones** | `npx prisma migrate status` | N/A |
+| **Crear migración (desarrollo)** | `npm run prisma:migrate -- --name nombre_del_cambio` | N/A |
+| **Aplicar migraciones existentes** | `npm run prisma:migrate:deploy` | N/A |
 | **Cargar Datos Demo** | `npm run prisma:seed` | N/A |
