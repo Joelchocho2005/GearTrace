@@ -10,6 +10,7 @@ import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
 import ViewTabs, { ViewTab } from '../components/ui/ViewTabs';
 import { EMPTY } from '../utils/format';
+import { useAuth } from '../contexts/AuthContext';
 
 type View = 'list' | 'restock';
 
@@ -80,8 +81,13 @@ const editForm: EditFormConfig<Supplier> = {
   submit: (supplier, values) => suppliersApi.update(supplier.id, supplierPayload(values)),
 };
 
-/** /proveedores — solo GERENTE. */
+/**
+ * /proveedores — ERS: registrar/editar/eliminar proveedor → GERENTE;
+ * consultar → GERENTE y BODEGUERO (también la vista de reposición).
+ */
 export default function ProveedoresPage() {
+  const { user } = useAuth();
+  const isManager = user?.role === 'GERENTE';
   const [view, setView] = useState<View>('list');
   const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
 
@@ -105,9 +111,9 @@ export default function ProveedoresPage() {
       columns={columns}
       emptyMessage="No hay proveedores registrados."
       getRowLabel={(supplier) => supplier.name}
-      onDelete={suppliersApi.remove}
-      createForm={createForm}
-      editForm={editForm}
+      onDelete={isManager ? suppliersApi.remove : undefined}
+      createForm={isManager ? createForm : undefined}
+      editForm={isManager ? editForm : undefined}
     />
   );
 }

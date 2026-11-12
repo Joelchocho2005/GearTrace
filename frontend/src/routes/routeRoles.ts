@@ -6,16 +6,21 @@ import type { Role } from '../contexts/AuthContext';
  * ruta rechazaría.
  */
 export const ROUTE_ROLES = {
-  inventory: ['GERENTE', 'BODEGUERO'],
+  // ERS: consultar inventario, buscar y localizar también MECANICO (solo lectura).
+  inventory: ['GERENTE', 'BODEGUERO', 'MECANICO'],
   logs: ['GERENTE', 'MECANICO'],
   usuarios: ['GERENTE'],
   vehiculos: ['GERENTE', 'MECANICO'],
   'ordenes-trabajo': ['GERENTE', 'MECANICO'],
   citas: ['GERENTE', 'MECANICO', 'CLIENTE'],
   proveedores: ['GERENTE', 'BODEGUERO'],
+  catalogo: ['GERENTE', 'BODEGUERO', 'MECANICO'],
+  reposicion: ['GERENTE', 'BODEGUERO', 'MECANICO'],
   compras: ['GERENTE', 'BODEGUERO'],
   facturacion: ['GERENTE', 'CONTADOR'],
   'portal-proveedor': ['PROVEEDOR'],
+  configuracion: ['GERENTE'],
+  auditoria: ['GERENTE'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type AppRoute = keyof typeof ROUTE_ROLES;

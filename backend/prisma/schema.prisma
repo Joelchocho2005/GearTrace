@@ -29,13 +29,18 @@ enum Role {
   PROVEEDOR
 }
 
-// Flujo SER: EN_DIAGNOSTICO → EN_PROCESO ⇄ ESPERA_REPUESTOS → CONCLUIDO
-// CONCLUIDO solo se alcanza por el cierre transaccional (descuenta stock).
+// Flujo SER (ver src/work-orders/work-order-rules.ts):
+// EN_DIAGNOSTICO → ESPERA_APROBACION (presupuesto) → EN_PROCESO ⇄ ESPERA_REPUESTOS
+// → CONCLUIDO (cierre técnico del mecánico) → ENTREGADA (con factura activa).
+// CANCELADA: el cliente rechaza el presupuesto o el GERENTE cancela (devuelve stock).
 enum WorkOrderStatus {
   EN_DIAGNOSTICO
+  ESPERA_APROBACION
   EN_PROCESO
   ESPERA_REPUESTOS
   CONCLUIDO
+  ENTREGADA
+  CANCELADA
 }
 
 enum AppointmentStatus {
@@ -43,19 +48,55 @@ enum AppointmentStatus {
   CONFIRMADA
   COMPLETADA
   CANCELADA
+  NO_ASISTIO
 }
 
 enum PurchaseOrderStatus {
   PENDIENTE
   CONFIRMADA
+  RECIBIDA_PARCIAL
   RECIBIDA
   CANCELADA
   RECHAZADA
 }
 
+// PARCIAL y PAGADA se derivan de los pagos registrados (Payment).
+// ANULADA: comprobante anulado (nunca se borra; conserva su número FAC-).
 enum InvoiceStatus {
   PENDIENTE
+  PARCIAL
   PAGADA
+  ANULADA
+}
+
+enum InvoiceLineType {
+  MANO_OBRA
+  REPUESTO
+}
+
+enum PaymentMethod {
+  EFECTIVO
+  TARJETA
+  TRANSFERENCIA
+  OTRO
+}
+
+// Kardex: todo cambio de Part.quantity deja un StockMovement.
+enum StockMovementType {
+  INVENTARIO_INICIAL
+  ENTRADA_COMPRA
+  SALIDA_OT
+  DEVOLUCION_OT
+  AJUSTE
+  DEVOLUCION_PROVEEDOR
+}
+
+// PENDIENTE → APROBADA | RECHAZADA (GERENTE) → ATENDIDA (incluida en una OC).
+enum ReplenishmentStatus {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+  ATENDIDA
 }
 
 // ────────────────────────────────────────────────────────────
@@ -82,6 +123,15 @@ model User {
   invoices   Invoice[]   @relation("InvoiceClient")
   supplierId Int?        @unique @map("supplier_id")
   supplier   Supplier?   @relation("SupplierUser", fields: [supplierId], references: [id], onDelete: SetNull)
+
+  serviceActivities     ServiceActivity[]
+  paymentsReceived      Payment[]              @relation("PaymentReceiver")
+  voidedInvoices        Invoice[]              @relation("InvoiceVoider")
+  stockMovements        StockMovement[]
+  replenishmentRequests ReplenishmentRequest[] @relation("ReplenishmentRequester")
+  replenishmentReviews  ReplenishmentRequest[] @relation("ReplenishmentReviewer")
+  notifications         Notification[]
+  auditLogs             AuditLog[]
 
   @@map("users")
 }
@@ -147,17 +197,23 @@ model Part {
   /// Stock mínimo antes de alertar reabastecimiento
   minStock Int @default(1) @map("min_stock")
 
-  /// Precio unitario de referencia (en la moneda local)
+  /// Precio unitario de VENTA (se congela en UsedPart al consumir)
   unitPrice Decimal? @map("unit_price") @db.Decimal(10, 2)
+
+  /// Costo unitario promedio ponderado (se actualiza al recibir compras)
+  costPrice Decimal? @map("cost_price") @db.Decimal(10, 2)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relación: Una pieza pertenece a una sola caja
-  boxId              Int                 @map("box_id")
-  box                Box                 @relation(fields: [boxId], references: [id], onDelete: Restrict)
-  purchaseOrderItems PurchaseOrderItem[]
-  usedParts          UsedPart[]
+  boxId                 Int                    @map("box_id")
+  box                   Box                    @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  purchaseOrderItems    PurchaseOrderItem[]
+  usedParts             UsedPart[]
+  stockMovements        StockMovement[]
+  supplierParts         SupplierPart[]
+  replenishmentRequests ReplenishmentRequest[]
 
   @@index([name])
   @@index([boxId])
@@ -218,24 +274,36 @@ model Vehicle {
 }
 
 model WorkOrder {
-  id            Int             @id @default(autoincrement())
-  number        String          @unique @db.VarChar(30)
-  description   String          @db.Text
-  diagnosis     String?         @db.Text
+  id                    Int                    @id @default(autoincrement())
+  number                String                 @unique @db.VarChar(30)
+  description           String                 @db.Text
+  diagnosis             String?                @db.Text
   /// Kilometraje del vehículo al ingresar al taller
-  mileage       Int?
-  status        WorkOrderStatus @default(EN_DIAGNOSTICO)
-  estimatedCost Decimal?        @map("estimated_cost") @db.Decimal(10, 2)
-  finalCost     Decimal?        @map("final_cost") @db.Decimal(10, 2)
-  vehicleId     Int             @map("vehicle_id")
-  mechanicId    Int?            @map("mechanic_id")
-  vehicle       Vehicle         @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
-  mechanic      User?           @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
+  mileage               Int?
+  status                WorkOrderStatus        @default(EN_DIAGNOSTICO)
+  estimatedCost         Decimal?               @map("estimated_cost") @db.Decimal(10, 2)
+  finalCost             Decimal?               @map("final_cost") @db.Decimal(10, 2)
+  vehicleId             Int                    @map("vehicle_id")
+  mechanicId            Int?                   @map("mechanic_id")
+  vehicle               Vehicle                @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  mechanic              User?                  @relation("AssignedMechanic", fields: [mechanicId], references: [id], onDelete: SetNull)
   /// Cita que originó la orden (una cita genera como máximo una OT)
-  appointmentId Int?            @unique @map("appointment_id")
-  appointment   Appointment?    @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
-  parts         UsedPart[]
-  invoice       Invoice?
+  appointmentId         Int?                   @unique @map("appointment_id")
+  appointment           Appointment?           @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  parts                 UsedPart[]
+  activities            ServiceActivity[]
+  /// Historial de comprobantes; solo uno puede estar activo (no ANULADA).
+  invoices              Invoice[]
+  replenishmentRequests ReplenishmentRequest[]
+
+  /// Presupuesto enviado al cliente (EN_DIAGNOSTICO → ESPERA_APROBACION)
+  quoteSentAt    DateTime? @map("quote_sent_at")
+  /// Decisión del cliente sobre el presupuesto (true aprobado, false rechazado)
+  quoteApproved  Boolean?  @map("quote_approved")
+  quoteDecidedAt DateTime? @map("quote_decided_at")
+  cancelReason   String?   @map("cancel_reason") @db.VarChar(255)
+  cancelledAt    DateTime? @map("cancelled_at")
+  deliveredAt    DateTime? @map("delivered_at")
 
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -267,7 +335,7 @@ model Appointment {
 // ────────────────────────────────────────────────────────────
 // UsedPart: Repuesto consumido en una orden de trabajo (SER)
 //
-//  Se descuenta del stock de Part al cerrar la orden (CONCLUIDO).
+//  RF-INV-13: descuenta stock al registrarse (StockMovement SALIDA_OT).
 // ────────────────────────────────────────────────────────────
 model UsedPart {
   id          Int       @id @default(autoincrement())
@@ -284,6 +352,101 @@ model UsedPart {
   @@map("used_parts")
 }
 
+// ────────────────────────────────────────────────────────────
+// ServiceActivity: actividad de servicio registrada por el mecánico.
+//  Horas × tarifa congelada (WorkshopSettings.laborRatePerHour) = mano de obra.
+// ────────────────────────────────────────────────────────────
+model ServiceActivity {
+  id          Int       @id @default(autoincrement())
+  description String    @db.VarChar(255)
+  hours       Decimal   @db.Decimal(6, 2)
+  /// Tarifa por hora vigente al registrar la actividad (congelada)
+  laborRate   Decimal   @map("labor_rate") @db.Decimal(10, 2)
+  performedAt DateTime  @default(now()) @map("performed_at")
+  workOrderId Int       @map("work_order_id")
+  mechanicId  Int       @map("mechanic_id")
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  mechanic    User      @relation(fields: [mechanicId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([workOrderId])
+  @@index([mechanicId])
+  @@map("service_activities")
+}
+
+// ────────────────────────────────────────────────────────────
+// WorkshopSettings: parámetros del taller (fila única id = 1).
+// ────────────────────────────────────────────────────────────
+model WorkshopSettings {
+  id                     Int     @id @default(1)
+  laborRatePerHour       Decimal @default(0) @map("labor_rate_per_hour") @db.Decimal(10, 2)
+  /// Tasa de impuesto como fracción (0.15 = 15 %)
+  taxRate                Decimal @default(0) @map("tax_rate") @db.Decimal(5, 4)
+  appointmentSlotMinutes Int     @default(60) @map("appointment_slot_minutes")
+  appointmentsPerSlot    Int     @default(2) @map("appointments_per_slot")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("workshop_settings")
+}
+
+// ────────────────────────────────────────────────────────────
+// StockMovement: kardex. `quantity` con signo; `balanceAfter` = stock resultante.
+// ────────────────────────────────────────────────────────────
+model StockMovement {
+  id              Int               @id @default(autoincrement())
+  type            StockMovementType
+  quantity        Int
+  balanceAfter    Int               @map("balance_after")
+  reason          String?           @db.VarChar(255)
+  partId          Int               @map("part_id")
+  userId          Int?              @map("user_id")
+  workOrderId     Int?              @map("work_order_id")
+  purchaseOrderId Int?              @map("purchase_order_id")
+  part            Part              @relation(fields: [partId], references: [id], onDelete: Cascade)
+  user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([partId, createdAt])
+  @@index([workOrderId])
+  @@index([purchaseOrderId])
+  @@map("stock_movements")
+}
+
+// ────────────────────────────────────────────────────────────
+// ReplenishmentRequest: solicitud de reposición (ABA).
+// ────────────────────────────────────────────────────────────
+model ReplenishmentRequest {
+  id              Int                 @id @default(autoincrement())
+  quantity        Int
+  reason          String?             @db.VarChar(255)
+  status          ReplenishmentStatus @default(PENDIENTE)
+  reviewNote      String?             @map("review_note") @db.VarChar(255)
+  reviewedAt      DateTime?           @map("reviewed_at")
+  partId          Int                 @map("part_id")
+  requestedById   Int                 @map("requested_by_id")
+  reviewedById    Int?                @map("reviewed_by_id")
+  /// OT que espera la pieza (opcional)
+  workOrderId     Int?                @map("work_order_id")
+  /// OC que atiende la solicitud
+  purchaseOrderId Int?                @map("purchase_order_id")
+  part            Part                @relation(fields: [partId], references: [id], onDelete: Restrict)
+  requestedBy     User                @relation("ReplenishmentRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  reviewedBy      User?               @relation("ReplenishmentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  workOrder       WorkOrder?          @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  purchaseOrder   PurchaseOrder?      @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([partId])
+  @@index([purchaseOrderId])
+  @@map("replenishment_requests")
+}
+
 model Supplier {
   id             Int             @id @default(autoincrement())
   name           String          @db.VarChar(150)
@@ -293,6 +456,7 @@ model Supplier {
   phone          String?         @db.VarChar(50)
   address        String?         @db.VarChar(255)
   purchaseOrders PurchaseOrder[]
+  catalog        SupplierPart[]
   user           User?           @relation("SupplierUser")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -301,16 +465,38 @@ model Supplier {
   @@map("suppliers")
 }
 
+// ────────────────────────────────────────────────────────────
+// SupplierPart: catálogo del proveedor (precio y plazo por pieza).
+// ────────────────────────────────────────────────────────────
+model SupplierPart {
+  id           Int      @id @default(autoincrement())
+  supplierCode String?  @map("supplier_code") @db.VarChar(50)
+  price        Decimal  @db.Decimal(10, 2)
+  leadTimeDays Int?     @map("lead_time_days")
+  supplierId   Int      @map("supplier_id")
+  partId       Int      @map("part_id")
+  supplier     Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  part         Part     @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([supplierId, partId])
+  @@index([partId])
+  @@map("supplier_parts")
+}
+
 model PurchaseOrder {
-  id         Int                 @id @default(autoincrement())
-  number     String              @unique @db.VarChar(30)
-  status     PurchaseOrderStatus @default(PENDIENTE)
-  orderedAt  DateTime            @default(now()) @map("ordered_at")
-  receivedAt DateTime?           @map("received_at")
-  expectedDeliveryAt DateTime?   @map("expected_delivery_at")
-  supplierId Int                 @map("supplier_id")
-  supplier   Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  items      PurchaseOrderItem[]
+  id                    Int                    @id @default(autoincrement())
+  number                String                 @unique @db.VarChar(30)
+  status                PurchaseOrderStatus    @default(PENDIENTE)
+  orderedAt             DateTime               @default(now()) @map("ordered_at")
+  receivedAt            DateTime?              @map("received_at")
+  expectedDeliveryAt    DateTime?              @map("expected_delivery_at")
+  supplierId            Int                    @map("supplier_id")
+  supplier              Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  items                 PurchaseOrderItem[]
+  replenishmentRequests ReplenishmentRequest[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -321,13 +507,15 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id              Int           @id @default(autoincrement())
-  quantity        Int
-  unitPrice       Decimal?      @map("unit_price") @db.Decimal(10, 2)
-  purchaseOrderId Int           @map("purchase_order_id")
-  partId          Int           @map("part_id")
-  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  part            Part          @relation(fields: [partId], references: [id], onDelete: Restrict)
+  id               Int           @id @default(autoincrement())
+  quantity         Int
+  /// Unidades ya recibidas (recepción parcial)
+  receivedQuantity Int           @default(0) @map("received_quantity")
+  unitPrice        Decimal?      @map("unit_price") @db.Decimal(10, 2)
+  purchaseOrderId  Int           @map("purchase_order_id")
+  partId           Int           @map("part_id")
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  part             Part          @relation(fields: [partId], references: [id], onDelete: Restrict)
 
   @@unique([purchaseOrderId, partId])
   @@index([partId])
@@ -335,30 +523,114 @@ model PurchaseOrderItem {
 }
 
 // ────────────────────────────────────────────────────────────
-// Invoice: Factura emitida por una orden de trabajo (FIN)
+// Invoice: comprobante interno de una orden de trabajo (FIN)
 //
-//  - Una orden de trabajo genera como máximo una factura.
-//  - clientId: Cliente facturado (normalmente el dueño del vehículo).
-//  - total = subtotal + tax (se calcula en el servicio).
+//  - Se arma con InvoiceLine (MANO_OBRA de ServiceActivity y REPUESTO de
+//    UsedPart, precios congelados); subtotal = Σ líneas, tax = subtotal × taxRate.
+//  - Una OT tiene a lo sumo una factura activa (no ANULADA); se valida con la
+//    OT bloqueada (FOR UPDATE) en InvoicesService.
+//  - Nunca se borra: se anula (voidedAt, voidReason, voidedById).
 // ────────────────────────────────────────────────────────────
 model Invoice {
   id          Int           @id @default(autoincrement())
   number      String        @unique @db.VarChar(30)
   subtotal    Decimal       @db.Decimal(10, 2)
+  /// Tasa aplicada (congelada desde WorkshopSettings)
+  taxRate     Decimal       @default(0) @map("tax_rate") @db.Decimal(5, 4)
   tax         Decimal       @default(0) @db.Decimal(10, 2)
   total       Decimal       @db.Decimal(10, 2)
+  /// Σ pagos registrados
+  paidAmount  Decimal       @default(0) @map("paid_amount") @db.Decimal(10, 2)
   status      InvoiceStatus @default(PENDIENTE)
+  notes       String?       @db.VarChar(255)
   issuedAt    DateTime      @default(now()) @map("issued_at")
   paidAt      DateTime?     @map("paid_at")
-  workOrderId Int           @unique @map("work_order_id")
+  voidedAt    DateTime?     @map("voided_at")
+  voidReason  String?       @map("void_reason") @db.VarChar(255)
+  voidedById  Int?          @map("voided_by_id")
+  workOrderId Int           @map("work_order_id")
   clientId    Int           @map("client_id")
   workOrder   WorkOrder     @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
   client      User          @relation("InvoiceClient", fields: [clientId], references: [id], onDelete: Restrict)
+  voidedBy    User?         @relation("InvoiceVoider", fields: [voidedById], references: [id], onDelete: SetNull)
+  lines       InvoiceLine[]
+  payments    Payment[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@index([workOrderId])
   @@index([clientId])
   @@index([status])
   @@map("invoices")
+}
+
+model InvoiceLine {
+  id          Int             @id @default(autoincrement())
+  type        InvoiceLineType
+  description String          @db.VarChar(255)
+  quantity    Decimal         @db.Decimal(10, 2)
+  unitPrice   Decimal         @map("unit_price") @db.Decimal(10, 2)
+  amount      Decimal         @db.Decimal(10, 2)
+  invoiceId   Int             @map("invoice_id")
+  invoice     Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+model Payment {
+  id           Int           @id @default(autoincrement())
+  amount       Decimal       @db.Decimal(10, 2)
+  method       PaymentMethod
+  reference    String?       @db.VarChar(100)
+  paidAt       DateTime      @default(now()) @map("paid_at")
+  invoiceId    Int           @map("invoice_id")
+  receivedById Int           @map("received_by_id")
+  invoice      Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  receivedBy   User          @relation("PaymentReceiver", fields: [receivedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([invoiceId])
+  @@index([paidAt])
+  @@map("payments")
+}
+
+// ────────────────────────────────────────────────────────────
+// Notification: avisos internos por usuario (stock bajo, presupuestos, etc.).
+// ────────────────────────────────────────────────────────────
+model Notification {
+  id      Int       @id @default(autoincrement())
+  title   String    @db.VarChar(150)
+  message String    @db.VarChar(500)
+  /// Ruta del frontend relacionada (p. ej. /ordenes-trabajo)
+  link    String?   @db.VarChar(255)
+  readAt  DateTime? @map("read_at")
+  userId  Int       @map("user_id")
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+// ────────────────────────────────────────────────────────────
+// AuditLog: quién cambió qué (estados, precios, stock, anulaciones, pagos).
+// ────────────────────────────────────────────────────────────
+model AuditLog {
+  id       Int    @id @default(autoincrement())
+  action   String @db.VarChar(80)
+  entity   String @db.VarChar(50)
+  entityId Int?   @map("entity_id")
+  detail   Json?
+  userId   Int?   @map("user_id")
+  user     User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
 }

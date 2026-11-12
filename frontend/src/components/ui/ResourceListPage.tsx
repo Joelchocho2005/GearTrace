@@ -25,7 +25,20 @@ export interface EditFormConfig<T> {
   isEditable?: (row: T) => boolean;
 }
 
-/** Acción de negocio por fila; `run` devuelve el mensaje de éxito. */
+/** Datos que una acción pide en un modal antes de ejecutarse. */
+export interface RowActionForm {
+  title: string;
+  submitLabel: string;
+  fields: FormField[];
+  initialValues: FormValues;
+}
+
+/**
+ * Acción de negocio por fila; `run` devuelve el mensaje de éxito (se muestra y
+ * se recarga el listado) o `null` si la acción no modifica datos (p. ej. abre
+ * una vista). Con `form` se abre un modal y `run` recibe sus valores (debe
+ * lanzar si son inválidos).
+ */
 export interface ResourceRowAction {
   key: string;
   label: string;
@@ -35,7 +48,8 @@ export interface ResourceRowAction {
   tone?: RowAction['tone'];
   /** Si se define, se pide confirmación antes de ejecutar. */
   confirm?: string;
-  run: () => Promise<string>;
+  form?: RowActionForm;
+  run: (values: FormValues) => Promise<string | null>;
 }
 
 interface ResourceListPageProps<T extends { id: number }> {
@@ -58,7 +72,11 @@ interface ResourceListPageProps<T extends { id: number }> {
   toolbar?: ReactNode;
 }
 
-type FormState<T> = { mode: 'create' } | { mode: 'edit'; row: T } | null;
+type FormState<T> =
+  | { mode: 'create' }
+  | { mode: 'edit'; row: T }
+  | { mode: 'action'; rowId: number; action: ResourceRowAction & { form: RowActionForm } }
+  | null;
 
 /**
  * Página de listado CRUD: encabezado + "Nuevo Registro" + tabla con carga,
@@ -139,10 +157,18 @@ export default function ResourceListPage<T extends { id: number }>({
   const runAction = async (rowId: number, action: ResourceRowAction) => {
     if (busyAction) return;
     if (action.confirm && !window.confirm(action.confirm)) return;
+    const { form } = action;
+    if (form) {
+      setFormState({ mode: 'action', rowId, action: { ...action, form } });
+      return;
+    }
     setBusyAction(`${rowId}:${action.key}`);
     try {
-      toast.success(await action.run());
-      await load();
+      const message = await action.run({});
+      if (message) {
+        toast.success(message);
+        await load();
+      }
     } catch (actionError) {
       toast.error(getApiErrorMessage(actionError, `No se pudo completar "${action.label}".`));
     } finally {
@@ -158,6 +184,9 @@ export default function ResourceListPage<T extends { id: number }>({
     } else if (formState.mode === 'edit' && editForm) {
       await editForm.submit(formState.row, values);
       toast.success(`Se actualizó ${entityLabel} "${getRowLabel(formState.row)}".`);
+    } else if (formState.mode === 'action') {
+      const message = await formState.action.run(values);
+      if (message) toast.success(message);
     }
     setFormState(null);
     await load();
@@ -237,6 +266,17 @@ export default function ResourceListPage<T extends { id: number }>({
           submitLabel="Guardar cambios"
           fields={editForm.fields(formState.row)}
           initialValues={editForm.initialValues(formState.row)}
+          onSubmit={submitForm}
+          onClose={closeForm}
+        />
+      )}
+
+      {formState?.mode === 'action' && (
+        <ResourceFormModal
+          title={formState.action.form.title}
+          submitLabel={formState.action.form.submitLabel}
+          fields={formState.action.form.fields}
+          initialValues={formState.action.form.initialValues}
           onSubmit={submitForm}
           onClose={closeForm}
         />

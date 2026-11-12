@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Boxes, Package, Warehouse } from 'lucide-react';
+import { Boxes, History, Package, Warehouse } from 'lucide-react';
 import { inventoryApi } from '../api/resources';
 import type { InventoryBox } from '../api/types';
 import InventoryList from '../components/Inventory/InventoryList';
+import StockMovementsList from '../components/Inventory/StockMovementsList';
+import { useAuth } from '../contexts/AuthContext';
 import type { Column } from '../components/ui/DataTable';
 import type { FormField, FormValues } from '../components/ui/ResourceFormModal';
 import ResourceListPage, { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
@@ -11,11 +13,12 @@ import { UserInputError } from '../api/errors';
 import { EMPTY } from '../utils/format';
 import { optionalText, requiredNumber, text } from '../utils/formValues';
 
-type View = 'parts' | 'boxes';
+type View = 'parts' | 'boxes' | 'movements';
 
-const tabs: ViewTab<View>[] = [
+const allTabs: ViewTab<View>[] = [
   { key: 'parts', label: 'Piezas', icon: Package },
   { key: 'boxes', label: 'Cajas', icon: Boxes },
+  { key: 'movements', label: 'Kardex', icon: History },
 ];
 
 /** Color por defecto de una caja (mismo default que Prisma: `Box.colorHex`). */
@@ -90,10 +93,20 @@ const editForm: EditFormConfig<InventoryBox> = {
   submit: (box, values) => inventoryApi.updateBox(box.id, boxPayload(values)),
 };
 
-/** /inventory — GERENTE y BODEGUERO: piezas (vista operativa) y cajas (CRUD). */
+/**
+ * /inventory — GERENTE y BODEGUERO gestionan piezas, cajas (ubicaciones + LED)
+ * y consultan el kardex; el MECANICO consulta piezas y cajas (solo lectura).
+ */
 export default function InventarioPage() {
+  const { user } = useAuth();
+  const canManage = user?.role === 'GERENTE' || user?.role === 'BODEGUERO';
   const [view, setView] = useState<View>('parts');
+  const tabs = canManage ? allTabs : allTabs.filter((tab) => tab.key !== 'movements');
   const toolbar = <ViewTabs tabs={tabs} active={view} onChange={setView} />;
+
+  if (view === 'movements' && canManage) {
+    return <StockMovementsList toolbar={toolbar} />;
+  }
 
   if (view === 'parts') {
     return (
@@ -115,9 +128,9 @@ export default function InventarioPage() {
       columns={columns}
       emptyMessage="No hay cajas registradas."
       getRowLabel={(box) => box.name}
-      onDelete={inventoryApi.removeBox}
-      createForm={createForm}
-      editForm={editForm}
+      onDelete={canManage ? inventoryApi.removeBox : undefined}
+      createForm={canManage ? createForm : undefined}
+      editForm={canManage ? editForm : undefined}
     />
   );
 }

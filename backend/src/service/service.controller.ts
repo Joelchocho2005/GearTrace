@@ -20,24 +20,21 @@ import { VehiclesService } from '../vehicles/vehicles.service';
 import { WorkOrdersService } from '../work-orders/work-orders.service';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
 import {
-  CloseWorkOrderDto,
   CreateWorkOrderDto,
   DiagnoseWorkOrderDto,
   UpdateWorkOrderStatusDto,
 } from './dto/work-order.dto';
-import { ServiceService } from './service.service';
 
 /**
- * Rutas legadas /api/service/* (las consume el frontend actual). Mantienen sus
- * paths, pero delegan en VehiclesService/WorkOrdersService para no duplicar
- * reglas (placa única, código OT-YYYY-NNN, alcance por mecánico).
+ * Rutas legadas /api/service/* (compatibilidad). No contienen lógica: delegan
+ * en VehiclesService/WorkOrdersService (misma máquina de estados, mismos
+ * roles del ERS y mismo alcance por mecánico).
  */
 @Controller('service')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.MECANICO, Role.GERENTE)
 export class ServiceController {
   constructor(
-    private readonly serviceService: ServiceService,
     private readonly vehiclesService: VehiclesService,
     private readonly workOrdersService: WorkOrdersService,
   ) {}
@@ -53,20 +50,20 @@ export class ServiceController {
   }
 
   @Post('vehicles')
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.CREATED)
   createVehicle(@Body() dto: CreateVehicleDto) {
     return this.vehiclesService.create(dto);
   }
 
   @Patch('vehicles/:id')
-  updateVehicle(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateVehicleDto,
-  ) {
+  @Roles(Role.GERENTE)
+  updateVehicle(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateVehicleDto) {
     return this.vehiclesService.update(id, dto);
   }
 
   @Delete('vehicles/:id')
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.NO_CONTENT)
   removeVehicle(@Param('id', ParseIntPipe) id: number) {
     return this.vehiclesService.remove(id);
@@ -78,11 +75,9 @@ export class ServiceController {
   }
 
   @Post('work-orders')
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.CREATED)
-  createWorkOrder(
-    @Body() dto: CreateWorkOrderDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
+  createWorkOrder(@Body() dto: CreateWorkOrderDto, @CurrentUser() user: AuthenticatedUser) {
     return this.workOrdersService.create(dto, user);
   }
 
@@ -92,7 +87,7 @@ export class ServiceController {
     @Body() dto: UpdateWorkOrderStatusDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.serviceService.updateWorkOrderStatus(id, dto.status, user);
+    return this.workOrdersService.changeStatus(id, dto.status, user);
   }
 
   @Patch('work-orders/:id/diagnosis')
@@ -101,15 +96,12 @@ export class ServiceController {
     @Body() dto: DiagnoseWorkOrderDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.serviceService.diagnoseWorkOrder(id, dto.diagnosis, user);
+    return this.workOrdersService.diagnose(id, dto.diagnosis, user);
   }
 
+  /** Cierre técnico; el costo final lo calcula el servidor (no se recibe). */
   @Patch('work-orders/:id/close')
-  closeWorkOrder(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: CloseWorkOrderDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    return this.serviceService.closeWorkOrder(id, dto.finalCost, user);
+  closeWorkOrder(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.workOrdersService.close(id, user);
   }
 }

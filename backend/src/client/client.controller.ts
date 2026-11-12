@@ -18,12 +18,17 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 import { ClientService } from './client.service';
+import { OptionalReasonDto } from '../work-orders/dto/work-order.dto';
+import { WorkOrdersService } from '../work-orders/work-orders.service';
 
 @Controller('client')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.CLIENTE)
 export class ClientController {
-  constructor(private readonly clientService: ClientService) {}
+  constructor(
+    private readonly clientService: ClientService,
+    private readonly workOrdersService: WorkOrdersService,
+  ) {}
 
   @Get('vehicles')
   findMyVehicles(@CurrentUser() user: AuthenticatedUser) {
@@ -66,5 +71,21 @@ export class ClientController {
   @Get('work-orders')
   findMyWorkOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.clientService.findMyWorkOrders(user.id);
+  }
+
+  /** Aprueba el presupuesto de una orden propia (ESPERA_APROBACION → EN_PROCESO). */
+  @Patch('work-orders/:id(\\d+)/quote/approve')
+  approveQuote(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.workOrdersService.decideQuote(id, true, undefined, user);
+  }
+
+  /** Rechaza el presupuesto: la orden queda CANCELADA. */
+  @Patch('work-orders/:id(\\d+)/quote/reject')
+  rejectQuote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: OptionalReasonDto,
+  ) {
+    return this.workOrdersService.decideQuote(id, false, dto.reason, user);
   }
 }

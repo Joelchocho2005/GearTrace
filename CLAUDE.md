@@ -27,16 +27,21 @@ Ngrok. El frontend puede ejecutarse localmente o desplegarse en Vercel.
 │   └── src/
 │       ├── alexa/
 │       ├── appointments/
+│       ├── audit/          # AuditLog (global)
 │       ├── auth/
 │       ├── client/
 │       ├── common/
-│       ├── inventory/
+│       ├── events/         # contratos de eventos de dominio
+│       ├── inventory/      # incluye stock-ledger.ts (kardex)
 │       ├── invoices/
 │       ├── led/
 │       ├── logs/
+│       ├── notifications/
 │       ├── prisma/
 │       ├── purchases/
+│       ├── replenishment/
 │       ├── service/
+│       ├── settings/       # WorkshopSettings (global)
 │       ├── supplier/
 │       ├── suppliers/
 │       ├── users/
@@ -101,47 +106,82 @@ Fuente: `backend/clinerules.md`.
 
 - `auth`: login, registro público de clientes, administración de usuarios y
   roles.
-- `inventory`: cajas (`Box`), piezas (`Part`, con `unitPrice`), stock, imágenes
-  y búsqueda. Protegido con JWT: `GERENTE`/`BODEGUERO` (también para borrar).
-  `GET /api/inventory/search/:query` y `POST /api/inventory/parts/:id/locate`
-  (enciende el LED de la caja, igual que Alexa; responde `202` sin esperar la
-  secuencia) también admiten `MECANICO`. Borrar una pieza usada en órdenes o
-  pedidos → 409.
-  Alexa no usa estas rutas (llama a `InventoryService` directamente).
-- `client`: vehículos, citas y órdenes visibles para el cliente autenticado.
-- `service`: CRUD de vehículos y gestión de órdenes de trabajo.
-- `supplier`: stock bajo, pedidos de reposición y recepción (flujo con reglas
-  de inventario). Exporta `SupplierService`.
+- `inventory`: cajas (`Box` = ubicación de almacén + indicador LED), piezas
+  (`Part`: `unitPrice` = precio de venta, `costPrice` = costo promedio
+  ponderado), stock, imágenes, búsqueda y kardex. Escritura `GERENTE`/`BODEGUERO`;
+  consulta (`GET boxes|parts|parts/:id`), `GET /api/inventory/search/:query` y
+  `POST /api/inventory/parts/:id/locate` (pick-to-light; responde `202` con la
+  ubicación textual sin esperar la secuencia) también `MECANICO`. Borrar una
+  pieza con historial → 409. Alexa no usa estas rutas (llama a
+  `InventoryService` directamente).
+- `inventory/stock-ledger.ts` (**kardex**): `decreaseStock` / `increaseStock`
+  son el ÚNICO punto que modifica `Part.quantity`; cada cambio crea un
+  `StockMovement` (`INVENTARIO_INICIAL`, `ENTRADA_COMPRA`, `SALIDA_OT`,
+  `DEVOLUCION_OT`, `AJUSTE`, `DEVOLUCION_PROVEEDOR`) con `balanceAfter`, dentro
+  de la transacción que lo origina. `increaseStock(tx, change, unitCost)`
+  recalcula `costPrice`. `decreaseStock` devuelve `lowStock` si cruzó el mínimo;
+  `emitLowStockAlerts` publica el evento tras confirmar.
+- `client`: vehículos, citas, órdenes (con actividades y factura vigente) y
+  decisión sobre el presupuesto del cliente autenticado.
+- `service`: rutas legadas; solo delegan en `VehiclesService` y
+  `WorkOrdersService` (ya no existe `ServiceService`).
+- `supplier`: stock bajo, pedidos de reposición y recepción total o parcial
+  (con put-to-light). Exporta `SupplierService`, `PURCHASE_ORDER_INCLUDE` y
+  `releasePurchaseRequests`.
+- `suppliers`: CRUD de proveedores + catálogo (`SupplierPart`).
+- `replenishment`: solicitudes de reposición (`ReplenishmentRequest`).
+- `settings`: `WorkshopSettings` (fila única: `laborRatePerHour`, `taxRate`,
+  `appointmentSlotMinutes`, `appointmentsPerSlot`). Global; `get(tx?)`.
+- `notifications`: bandeja por usuario + `NotificationListeners` (`@OnEvent`).
+- `audit`: `AuditService.record(entry, tx?)` (global) y `GET /api/audit-logs`.
+- `events/domain-events.ts`: `DOMAIN_EVENTS` y sus payloads. Se emiten con
+  `EventEmitter2` DESPUÉS del commit; los oyentes nunca revierten la operación.
 - `users`, `vehicles`, `appointments`, `work-orders`, `suppliers`,
-  `purchases`, `invoices`: CRUD REST por dominio (`GET`, `GET :id`, `POST`,
-  `PATCH :id`, `DELETE :id`). Ver "CRUD por dominio".
+  `purchases`, `invoices`: CRUD REST por dominio. Ver "CRUD por dominio".
 - `common/prisma-errors.ts`: `isPrismaError(error, 'P2002' | 'P2003')` y
   `rethrowAsConflict(error, { P2002?: msg, P2003?: msg })` (409 o relanza).
 - `common/selects.ts` (`USER_SUMMARY`, `WORK_ORDER_SUMMARY`), `common/password.ts`
   (bcrypt: `hashPassword`, `hashOptionalPassword`, `verifyPassword`),
-  `common/dates.ts` (`toFutureDate`), `common/validation-messages.ts`
+  `common/dates.ts` (`toFutureDate`, `businessYear`), `common/money.ts`
+  (`roundMoney`, `sumMoney`, `ZERO`), `common/validation-messages.ts`
   (`ROLE_VALIDATION_MESSAGE`). Usarlos en vez de repetir la lógica.
 - `users/supplier-link.ts`: `assertSupplierLink(prisma, role, supplierId)`,
   regla única del vínculo usuario `PROVEEDOR` ↔ proveedor (users y auth).
+- `users/mechanic-status.ts`: `updateUserReleasingOrders(prisma, events, id, update)`
+  es la única vía para modificar usuarios desde auth y users: si deja de ser
+  `MECANICO` activo, libera sus OT abiertas (`work-orders/mechanic-release.ts`)
+  en la misma transacción y avisa al GERENTE.
 - `alexa`: webhook `/api/webhook/alexa` para búsqueda de piezas. Las
   respuestas a consultas usan `buildAnswer` (agrega la frase `FOLLOW_UP` y
   deja la sesión abierta); toda respuesta con sesión abierta lleva
   `reprompt`. Solo Cancel/Stop cierran la skill (`shouldEndSession: true`).
-- `led`: Socket.io y control físico/simulado de LEDs.
+  Las búsquedas por voz son anónimas (`SearchLog.userId` nulo).
+- `led`: Socket.io y control físico/simulado de LEDs. Cada LED tiene su propia
+  señal: cajas distintas se encienden en paralelo y una nueva señal en la misma
+  caja reemplaza a la anterior (auto-apagado por LED).
 - `logs`: historial de búsquedas (JWT, `GERENTE`/`MECANICO`).
 
 ### Backend: autorización
 
-- `GERENTE`: acceso administrativo y operativo completo.
-- `MECANICO`: vehículos, citas, historial de búsquedas, búsqueda de repuestos
-  (web y Alexa; no el CRUD de inventario), hardware y **solo las
-  órdenes de trabajo asignadas a él** (lectura y operación; ver
-  `workOrderScope`).
-- `BODEGUERO`: inventario, proveedores, reposición y compras.
-- `CONTADOR`: facturación.
-- `PROVEEDOR`: solo los pedidos de su proveedor (`/api/purchases/supplier-portal`);
-  debe estar vinculado (`supplierId`).
-- `CLIENTE`: únicamente sus vehículos, sus citas y sus órdenes.
+Roles alineados con el ERS (casos de uso por módulo):
+
+- `GERENTE`: acceso administrativo y operativo completo. Exclusivo: registrar
+  vehículo y proveedor, programar/confirmar citas, registrar OT, asignar
+  mecánico, aprobar/rechazar solicitudes de reposición, entregar y cancelar OT,
+  configuración y auditoría.
+- `MECANICO`: consulta vehículos (e historial), citas, inventario, catálogo de
+  proveedores e historial de búsquedas; busca/localiza repuestos (web y Alexa);
+  solicita reposición; y **solo sus órdenes asignadas** (`workOrderScope`):
+  diagnóstico, presupuesto, avance, actividades, repuestos y cierre. No crea OT.
+- `BODEGUERO`: inventario (registrar, actualizar, ajustar stock, ubicaciones,
+  LED), consulta de proveedores, catálogo, solicitudes de reposición, pedidos y
+  recepción.
+- `CONTADOR`: cargos, facturas, pagos, anulación y transacciones.
+- `PROVEEDOR`: solo los pedidos de su proveedor (`/api/purchases/supplier-portal`):
+  confirmar (con fecha de entrega), rechazar e informar fecha; debe estar
+  vinculado (`supplierId`).
+- `CLIENTE`: únicamente sus vehículos, sus citas (solicitar, reprogramar,
+  cancelar), sus órdenes y la decisión sobre sus presupuestos.
 - El registro público fuerza el rol `CLIENTE`.
 - La ruta administrativa para crear usuarios es:
   `POST /api/auth/admin/create`.
@@ -167,105 +207,180 @@ Fuente: `backend/clinerules.md`.
 
 - `GET /api/client/vehicles`
 - `GET /api/client/appointments`
-- `POST /api/client/appointments`
+- `POST /api/client/appointments` (queda `AGENDADA`; respeta el cupo de agenda)
 - `PATCH /api/client/appointments/:id` (reprogramar: `scheduledAt` futura,
-  `reason` opcional; la cita vuelve a `AGENDADA`)
+  `reason` opcional; la cita vuelve a `AGENDADA`; respeta el cupo)
 - `PATCH /api/client/appointments/:id/cancel`
-- `GET /api/client/work-orders`
+- `GET /api/client/work-orders` (incluye actividades y solo la factura vigente)
+- `PATCH /api/client/work-orders/:id/quote/approve` y `.../quote/reject`
+  (`{ reason? }`): decisión sobre el presupuesto de una orden propia.
 
 `GET /api/client/appointments` incluye la OT generada (`workOrder`).
 Reprogramar o cancelar solo aplica a citas propias (ajena → 404) en
 `AGENDADA`/`CONFIRMADA` (si no → 409).
 
-#### Servicio
+#### Ciclo de vida de la orden de trabajo (SER)
 
-- `GET /api/service/vehicles`
-- `GET /api/service/vehicles/:id`
-- `POST /api/service/vehicles`
-- `PATCH /api/service/vehicles/:id`
-- `DELETE /api/service/vehicles/:id`
-- `GET /api/service/work-orders`
-- `POST /api/service/work-orders`
-- `PATCH /api/service/work-orders/:id/status`
-- `PATCH /api/service/work-orders/:id/diagnosis`
-- `PATCH /api/service/work-orders/:id/close`
+Máquina de estados en `src/work-orders/work-order-rules.ts`:
 
-**RF-INV-13 — el stock se descuenta al registrar el repuesto, no al cerrar:**
+```text
+EN_DIAGNOSTICO ──POST /:id/quote──► ESPERA_APROBACION ──cliente/GERENTE aprueba──► EN_PROCESO ⇄ ESPERA_REPUESTOS
+      │                                     └──rechaza──► CANCELADA                   │
+      └─────────── PATCH /:id/cancel (GERENTE, cualquier estado abierto) ──► CANCELADA │
+EN_PROCESO ──PATCH /:id/close (cierre técnico)──► CONCLUIDO ──PATCH /:id/deliver (con factura activa)──► ENTREGADA
+```
 
-- `POST /api/work-orders/:id/parts` (`{ partId, quantity }`) y los `parts`
-  iniciales de `POST /api/work-orders` descuentan `Part.quantity` y registran
-  el `UsedPart` en la misma `prisma.$transaction` (helper privado
-  `consumePart`). Stock insuficiente → `409 ConflictException` con disponible y
-  solicitado; no se registra nada. Si la pieza ya está en la orden, suma la
-  cantidad.
-- El descuento es un `updateMany` condicionado a `quantity >= cantidad`
-  (atómico: el stock nunca queda negativo con peticiones simultáneas) y la
-  orden se bloquea con `SELECT ... FOR UPDATE` mientras se agrega.
-- `PATCH /api/service/work-orders/:id/close` solo pasa la orden a `CONCLUIDO`
-  (`finalCost`, `completedAt`); **no toca inventario**. A una orden concluida
-  no se le agregan repuestos.
-- Eliminar una orden no concluida devuelve sus repuestos al inventario en la
-  misma transacción.
-- `DELETE /api/work-orders/:id/parts/:partId` quita un repuesto y devuelve su
-  cantidad al stock (transacción, orden bloqueada; no en `CONCLUIDO`).
-- `UsedPart.unitPrice` congela `Part.unitPrice` al primer consumo (sumar
-  cantidad no lo cambia); es la base del subtotal de factura por repuestos.
+- `MANUAL_TRANSITIONS`: solo `EN_PROCESO ⇄ ESPERA_REPUESTOS` por `PATCH /:id`
+  o `PATCH /api/service/work-orders/:id/status`; el resto → 400
+  (`DEDICATED_TRANSITION_MESSAGE`). `OPEN_STATUSES`, `WORKING_STATUSES`
+  (`EN_PROCESO`, `ESPERA_REPUESTOS`) y `BILLABLE_STATUSES` (`CONCLUIDO`,
+  `ENTREGADA`) son la fuente única.
+- Toda transición bloquea la orden (`SELECT ... FOR UPDATE`, helper privado
+  `lock`) y registra `WORK_ORDER_STATUS` en auditoría.
+- `POST /api/work-orders/:id/quote` (`{ diagnosis?, estimatedCost }`): exige
+  diagnóstico y mecánico asignado. `estimatedCost` solo se edita antes de
+  enviarlo. El GERENTE puede registrar la decisión del cliente con
+  `PATCH /:id/quote/approve|reject`.
+- **Mano de obra**: `POST /:id/activities` (`{ description, hours, performedAt? }`)
+  crea `ServiceActivity` con `laborRate` congelada desde `WorkshopSettings`;
+  `DELETE /:id/activities/:activityId`. Solo en `WORKING_STATUSES`.
+- **RF-INV-13 — el stock se descuenta al registrar el repuesto, no al cerrar**:
+  `POST /:id/parts` (`{ partId, quantity, locate? }`) solo en
+  `WORKING_STATUSES` (nunca antes de aprobar el presupuesto): `decreaseStock`
+  (`SALIDA_OT`) + `UsedPart` en la misma transacción; stock insuficiente → 409;
+  pieza sin precio de venta → 409; si ya está en la orden suma la cantidad;
+  `UsedPart.unitPrice` congela `Part.unitPrice` al primer consumo. Después
+  enciende el LED de la caja (`locate` por defecto `true`, pick-to-light).
+  `DELETE /:id/parts/:partId` devuelve el stock (`DEVOLUCION_OT`).
+- `PATCH /:id/close` (también `PATCH /api/service/work-orders/:id/close`):
+  solo desde `EN_PROCESO`, exige diagnóstico y ≥ 1 actividad, **no recibe
+  precios**: `finalCost` = Σ horas × tarifa + Σ repuestos a precio congelado.
+  No toca inventario.
+- `PATCH /:id/deliver` (GERENTE): `CONCLUIDO` → `ENTREGADA`, exige factura no
+  anulada.
+- `PATCH /:id/cancel` (GERENTE, `{ reason }`): devuelve los repuestos
+  (`DEVOLUCION_OT`), rechaza sus solicitudes de reposición pendientes y
+  conserva la orden. `DELETE /:id` solo para órdenes `EN_DIAGNOSTICO` sin
+  repuestos, actividades ni facturas (si no → 409, usar cancelar).
+- `PATCH /:id/assign` (GERENTE, `{ mechanicId }`, solo `MECANICO` activo).
+  `GET /api/work-orders?unassigned=true`: abiertas sin mecánico.
+- `GET /api/vehicles/:id/history` (GERENTE, MECANICO): historial completo del
+  vehículo.
 
-**Cita → OT:** `POST /api/appointments/:id/work-order` (`GERENTE`,
-`MECANICO`; body opcional `description`, `mileage`, `estimatedCost`,
-`mechanicId`) crea la OT con el vehículo y motivo de la cita, la vincula
-(`WorkOrder.appointmentId`, único) y marca la cita `COMPLETADA` en la misma
-transacción. Solo citas `AGENDADA`/`CONFIRMADA` y sin OT previa (409).
-- `PATCH .../status` no acepta `CONCLUIDO`; al pasar por primera vez a
-  `EN_PROCESO` se registra `startedAt` (reanudar no lo reinicia).
+**Cita → OT:** `POST /api/appointments/:id/work-order` (`GERENTE`; body
+opcional `description`, `mileage`, `estimatedCost`, `mechanicId`) crea la OT
+con el vehículo y motivo de la cita, la vincula (`WorkOrder.appointmentId`,
+único) y marca la cita `COMPLETADA` en la misma transacción. Solo citas
+`AGENDADA`/`CONFIRMADA` y sin OT previa (409).
 
-#### Proveedores (reposición)
+#### Citas (agenda)
 
-- `GET /api/suppliers/low-stock`
-- `GET /api/suppliers/purchase-orders`
-- `POST /api/suppliers/purchase-orders`
-- `POST /api/suppliers/purchase-orders/:id/receive`
+- `appointments/appointment-capacity.ts`: `lockAgenda(tx)` (advisory lock) +
+  `assertSlotAvailable(tx, settings, fecha, excludeId?)`: un bloque de
+  `appointmentSlotMinutes` admite `appointmentsPerSlot` citas activas; si no →
+  409. Se aplica al solicitar (cliente), programar y reprogramar.
+- El GERENTE programa citas ya `CONFIRMADA`; las del cliente nacen `AGENDADA`.
+- `NO_ASISTIO` solo cuando ya pasó la hora; `COMPLETADA` solo vía "Generar OT".
+  Citas finales (`COMPLETADA`, `CANCELADA`, `NO_ASISTIO`) no se editan; una cita
+  con OT no se borra.
 
-La creación de pedidos valida que las piezas estén bajo `minStock`. La
-recepción incrementa el stock dentro de una transacción y acepta pedidos
-`PENDIENTE` o `CONFIRMADA` (confirmado por el proveedor en su portal;
-`RECEIVABLE_PURCHASE_STATUSES`). Un pedido `CONFIRMADA` solo admite
-`PATCH /api/purchases/:id` con `{ status: 'CANCELADA' }`.
+#### Proveedores, reposición y compras (ABA)
+
+- `GET /api/suppliers/low-stock`, `GET/POST /api/suppliers/purchase-orders`
+- `POST /api/suppliers/purchase-orders/:id/receive` (`{ items?: [{ itemId, quantity }] }`):
+  sin `items` recibe todo lo pendiente; con `items`, recepción parcial
+  (`PurchaseOrderItem.receivedQuantity`, estado `RECIBIDA_PARCIAL` hasta
+  completar → `RECIBIDA` + `receivedAt`). Cada ítem usa `increaseStock`
+  (`ENTRADA_COMPRA`, recalcula `costPrice`); después enciende los LED de las
+  cajas donde guardar lo recibido (put-to-light) y avisa a los solicitantes y
+  mecánicos de las OT ligadas. `RECEIVABLE_PURCHASE_STATUSES` = `PENDIENTE`,
+  `CONFIRMADA`, `RECIBIDA_PARCIAL`.
+- **Crear pedido** (`createPurchaseOrder`): cada pieza debe estar en el
+  catálogo del proveedor (`SupplierPart`; `unitPrice` por defecto = precio del
+  catálogo) y, o bien en/bajo `minStock`, o bien cubierta por una solicitud
+  `APROBADA` incluida en `replenishmentRequestIds` (pasan a `ATENDIDA` en la
+  misma transacción).
+- **Solicitudes** `/api/replenishment-requests`: `GET` (`?status=`; MECANICO
+  solo las suyas), `POST` (`{ partId, quantity, reason?, workOrderId? }`;
+  GERENTE, BODEGUERO, MECANICO; una abierta por pieza y destino),
+  `PATCH /:id/approve` (`{ note? }`) y `PATCH /:id/reject` (`{ note }`) solo
+  GERENTE. Flujo: `PENDIENTE → APROBADA | RECHAZADA → ATENDIDA`.
+- **Alerta de stock bajo**: automática. El kardex emite `inventory.low-stock`
+  cuando un movimiento deja la pieza en o bajo su mínimo; se notifica a
+  GERENTE y BODEGUERO. La solicitud es la respuesta humana a esa alerta.
+- **Catálogo**: `GET /api/suppliers/:id/catalog` y
+  `GET /api/suppliers/catalog/by-part/:partId` (GERENTE, BODEGUERO, MECANICO);
+  `POST /api/suppliers/:id/catalog` (upsert por pieza) y
+  `DELETE /api/suppliers/:id/catalog/:partId` (GERENTE, BODEGUERO).
+- **Portal del proveedor**: `PATCH /api/purchases/supplier-portal/:id`
+  (`CONFIRMADA` exige `expectedDeliveryAt` futura; `RECHAZADA` devuelve las
+  solicitudes a `APROBADA`) y `PATCH .../:id/delivery-date` (informar fecha de
+  un pedido confirmado).
+- Cancelar (`PATCH /api/purchases/:id { status: 'CANCELADA' }`) aplica a
+  `PENDIENTE`, `CONFIRMADA` y `RECIBIDA_PARCIAL`; sin recepciones libera las
+  solicitudes. Cambiar de proveedor solo en `PENDIENTE` y si el nuevo tiene
+  todas las piezas en su catálogo. Un pedido con unidades recibidas no se borra.
+
+#### Facturación (FIN)
+
+- `invoices/billing-charges.ts` (función pura, con pruebas):
+  `buildCharges(order, taxRate)` genera líneas `MANO_OBRA` (horas × tarifa
+  congelada) y `REPUESTO` (cantidad × precio congelado), `subtotal`,
+  `tax = subtotal × taxRate` y `total`; `statusFromPayments`.
+- `GET /api/invoices/charges/:workOrderId`: consultar cargos (vista previa).
+- `POST /api/invoices` (`{ workOrderId, clientId?, notes? }`): bloquea la OT,
+  exige estado facturable y ninguna factura activa, crea `Invoice` +
+  `InvoiceLine` con `taxRate` congelada y el código `FAC-YYYY-NNN`. No acepta
+  montos.
+- `POST /api/invoices/:id/payments` (`{ amount, method, reference? }`): pagos
+  parciales o totales, nunca más que el saldo; `paidAmount` y el estado
+  (`PENDIENTE → PARCIAL → PAGADA`) se derivan.
+- `PATCH /api/invoices/:id/void` (`{ reason }`): anula (no se borra; conserva
+  el número). Solo sin pagos registrados; la OT vuelve a ser facturable.
+- `GET /api/invoices/payments`: consultar transacciones.
+- `PATCH /api/invoices/:id`: solo `notes`. **No existe `DELETE`.**
+
+#### Configuración, notificaciones y auditoría
+
+- `GET /api/settings` (personal interno) y `PATCH /api/settings` (GERENTE).
+- `GET /api/notifications` (`{ items, unread }`), `PATCH /:id/read`,
+  `PATCH /read-all`: bandeja propia de cualquier usuario autenticado.
+- `GET /api/audit-logs?entity=` (GERENTE).
 
 #### CRUD por dominio
 
-Todos exponen `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`.
-El parámetro se declara como `:id(\\d+)` para no capturar rutas literales que
-comparten prefijo (p. ej. `/api/suppliers/low-stock`).
+Todos exponen `GET /`, `GET /:id`, `POST /`, `PATCH /:id` y, salvo
+facturas, `DELETE /:id`. El parámetro se declara como `:id(\\d+)` para no
+capturar rutas literales que comparten prefijo (p. ej. `/api/suppliers/low-stock`).
 
-| Ruta | Roles | `DELETE` | Reglas |
-| --- | --- | --- | --- |
-| `/api/users` | `GERENTE` | `GERENTE` | Hashea con bcrypt, nunca devuelve `password`, no permite borrarse a sí mismo; con FK → 409 (usar desactivar). |
-| `/api/vehicles` | `GERENTE`, `MECANICO` | `GERENTE` | RF-SER-01: placa normalizada (trim + mayúsculas) y única sin distinguir mayúsculas; dueño debe ser `CLIENTE` activo; 409 si tiene órdenes o citas. |
-| `/api/appointments` (+ `POST /:id/work-order`) | `GERENTE`, `MECANICO` | `GERENTE` | Fecha futura al crear o reprogramar; citas `COMPLETADA`/`CANCELADA` no se editan. Incluye `workOrder` (OT generada). |
-| `/api/work-orders` (+ `POST /:id/parts`) | `GERENTE`, `MECANICO` | `GERENTE` | RF-INV-13: `POST /:id/parts` descuenta stock (ver arriba). RF-SER-05: `number` lo genera el servidor (`OT-YYYY-NNN`, no se acepta en el body). MECANICO solo ve/opera sus órdenes (ajenas → 404), se autoasigna al crear y no puede asignar a otro (403). Acepta `mileage`. `PATCH` no acepta `CONCLUIDO` (usar `/api/service/work-orders/:id/close`); órdenes concluidas no se editan ni borran. |
-| `/api/suppliers` | `GERENTE`, `BODEGUERO` | `GERENTE`, `BODEGUERO` | `GET` conserva `_count.purchaseOrders`; 409 si tiene pedidos. |
-| `/api/purchases` | `GERENTE`, `BODEGUERO` | `GERENTE`, `BODEGUERO` | `number` lo genera el servidor (`OC-YYYY-NNN`, no se acepta en el body). `POST` delega en `SupplierService.createPurchaseOrder` (piezas en o bajo `minStock`, sin repetir); solo pedidos `PENDIENTE` se editan (un `CONFIRMADA` solo se cancela); `RECIBIDA` solo vía `/receive`; recibidos no se borran. |
-| `/api/invoices` (+ `GET /billable-orders`) | `GERENTE`, `CONTADOR` | `GERENTE`, `CONTADOR` | `GET /billable-orders`: órdenes `CONCLUIDO` sin factura (el CONTADOR no accede a `/api/work-orders`). `number` lo genera el servidor (`FAC-YYYY-NNN`). Solo órdenes `CONCLUIDO`, una factura por orden; `subtotal` por defecto = `finalCost ?? estimatedCost ??` suma de repuestos (`UsedPart.unitPrice × cantidad`), `total = subtotal + tax`; pagadas no se editan ni borran. |
+| Ruta | Lectura | Escritura | `DELETE` | Reglas |
+| --- | --- | --- | --- | --- |
+| `/api/users` | `GERENTE` | `GERENTE` | `GERENTE` | Hashea con bcrypt, nunca devuelve `password`, no permite borrarse a sí mismo; con FK → 409 (usar desactivar). Desactivar/cambiar rol de un mecánico libera sus OT abiertas. |
+| `/api/vehicles` (+ `GET /:id/history`) | `GERENTE`, `MECANICO` | `GERENTE` | `GERENTE` | RF-SER-01: placa normalizada (trim + mayúsculas) y única sin distinguir mayúsculas; dueño debe ser `CLIENTE` activo; 409 si tiene órdenes o citas. |
+| `/api/appointments` (+ `POST /:id/work-order`) | `GERENTE`, `MECANICO` | `GERENTE` | `GERENTE` | Fecha futura y con cupo al crear o reprogramar; citas finales no se editan; `NO_ASISTIO` solo pasada la hora. Incluye `workOrder`. |
+| `/api/work-orders` (+ acciones del ciclo) | `GERENTE`, `MECANICO` (sus OT) | Crear/asignar/entregar/cancelar `GERENTE`; resto ambos | `GERENTE` | Ver "Ciclo de vida de la orden de trabajo". RF-SER-05: `number` lo genera el servidor (`OT-YYYY-NNN`). MECANICO solo ve/opera sus órdenes (ajenas → 404). |
+| `/api/suppliers` (+ catálogo) | `GERENTE`, `BODEGUERO` (lista también `MECANICO`) | `GERENTE` | `GERENTE` | `GET` conserva `_count.purchaseOrders`; 409 si tiene pedidos. |
+| `/api/purchases` | `GERENTE`, `BODEGUERO` | `GERENTE`, `BODEGUERO` | `GERENTE`, `BODEGUERO` | `number` = `OC-YYYY-NNN`. `POST` delega en `SupplierService.createPurchaseOrder`. Ver "Proveedores, reposición y compras". |
+| `/api/invoices` (+ `billable-orders`, `charges`, `payments`, `void`) | `GERENTE`, `CONTADOR` | `GERENTE`, `CONTADOR` | — | Ver "Facturación". `billable-orders`: `CONCLUIDO`/`ENTREGADA` sin factura activa (el CONTADOR no accede a `/api/work-orders`). |
 
 Las rutas legadas `/api/service/vehicles*` y `/api/service/work-orders*`
-siguen activas por compatibilidad (el frontend solo usa
-`PATCH /api/service/work-orders/:id/close`; el resto va por los CRUD), pero **delegan** en
-`VehiclesService` y `WorkOrdersService` (misma validación de placa, mismo
-generador de código y mismo alcance por mecánico). `ServiceService` solo
-conserva las transiciones estado/diagnóstico/cierre, también con
-`workOrderScope`.
+siguen activas por compatibilidad (el frontend ya no las usa), con los mismos
+roles del ERS, y **solo delegan** en `VehiclesService` y `WorkOrdersService`
+(misma validación de placa, mismo generador de código, misma máquina de
+estados y mismo alcance por mecánico).
 
 #### Códigos correlativos y alcance de órdenes
 
 - `src/common/document-number.ts`: `nextDocumentNumber(tx, 'OT' | 'OC' | 'FAC')`
-  calcula `PREFIJO-YYYY-NNN` (correlativo por año, MAX numérico) bajo un
-  `pg_advisory_xact_lock` por tipo; debe llamarse dentro de la transacción que
+  calcula `PREFIJO-YYYY-NNN` (correlativo por año de `BUSINESS_TIMEZONE` vía
+  `businessYear`, MAX numérico) bajo un `pg_advisory_xact_lock` por tipo; debe llamarse dentro de la transacción que
   crea el registro. `OT` → órdenes de trabajo (`nextWorkOrderNumber` es su
   envoltorio), `OC` → órdenes de compra, `FAC` → facturas. El cliente nunca
   envía `number` (la validación lo rechaza).
-- `src/work-orders/work-order-rules.ts`: `startedAtOnTransition` y
-  `USE_CLOSE_ENDPOINT`, compartidos por `WorkOrdersService` y `ServiceService`.
+- `src/work-orders/work-order-rules.ts`: máquina de estados
+  (`MANUAL_TRANSITIONS`, `OPEN_STATUSES`, `WORKING_STATUSES`,
+  `BILLABLE_STATUSES`, `STATUS_LABELS`, `isManualTransition`,
+  `startedAtOnTransition`, `DEDICATED_TRANSITION_MESSAGE`).
 - `src/work-orders/work-order-scope.ts`: `workOrderScope(user)` → GERENTE
   `{}`, MECANICO `{ mechanicId }`, CLIENTE `{ vehicle.ownerId }`. Toda
   consulta o mutación de órdenes por id usa `findFirst({ id, ...scope })`.
@@ -274,20 +389,31 @@ conserva las transiciones estado/diagnóstico/cierre, también con
 
 Modelos principales:
 
-- `User`, `Box`, `Part`, `SearchLog`
-- `Vehicle`, `WorkOrder` (incluye `mileage` y `appointmentId` único → `Appointment`),
-  `UsedPart` (tabla `used_parts`, con `unitPrice` congelado), `Appointment`
-- `Supplier`, `PurchaseOrder`, `PurchaseOrderItem`
-- `Invoice` (facturación: 1 factura por `WorkOrder`, `clientId` → `User`)
+- `User`, `Box`, `Part` (`unitPrice` venta, `costPrice` costo), `SearchLog`
+- `Vehicle`, `WorkOrder` (incluye `mileage`, `appointmentId` único →
+  `Appointment`, `quoteSentAt`/`quoteApproved`/`quoteDecidedAt`,
+  `cancelReason`/`cancelledAt`, `deliveredAt`), `UsedPart` (tabla
+  `used_parts`, con `unitPrice` congelado), `ServiceActivity` (horas ×
+  `laborRate` congelada), `Appointment`
+- `StockMovement` (kardex), `ReplenishmentRequest`
+- `Supplier`, `SupplierPart` (catálogo), `PurchaseOrder`, `PurchaseOrderItem`
+  (`receivedQuantity`)
+- `Invoice` (historial por `WorkOrder`, una sola activa; `taxRate`,
+  `paidAmount`, `voidedAt`/`voidReason`/`voidedById`), `InvoiceLine`,
+  `Payment`
+- `WorkshopSettings` (fila única id = 1), `Notification`, `AuditLog`
 
 Enums:
 
 - `Role`
-- `WorkOrderStatus`: `EN_DIAGNOSTICO` (inicial) → `EN_PROCESO` ⇄
-  `ESPERA_REPUESTOS` → `CONCLUIDO` (solo vía `/close`)
-- `AppointmentStatus`
-- `PurchaseOrderStatus`
-- `InvoiceStatus`: `PENDIENTE`, `PAGADA`
+- `WorkOrderStatus`: `EN_DIAGNOSTICO` → `ESPERA_APROBACION` → `EN_PROCESO` ⇄
+  `ESPERA_REPUESTOS` → `CONCLUIDO` → `ENTREGADA`; `CANCELADA`
+- `AppointmentStatus`: `AGENDADA`, `CONFIRMADA`, `COMPLETADA`, `CANCELADA`,
+  `NO_ASISTIO`
+- `PurchaseOrderStatus`: `PENDIENTE`, `CONFIRMADA`, `RECIBIDA_PARCIAL`,
+  `RECIBIDA`, `CANCELADA`, `RECHAZADA`
+- `InvoiceStatus`: `PENDIENTE`, `PARCIAL`, `PAGADA`, `ANULADA`
+- `InvoiceLineType`, `PaymentMethod`, `StockMovementType`, `ReplenishmentStatus`
 
 Comandos Prisma:
 
@@ -383,20 +509,24 @@ Fuente: `frontend/clinerules.md`.
 - `src/api/crud.ts`: `createCrudApi<Entidad, Create, Update>(recurso)` expone
   `list`, `get`, `create`, `update` (PATCH, el backend no usa PUT) y
   `remove`.
-- `src/api/resources.ts`: `usersApi`, `vehiclesApi`, `appointmentsApi`,
-  `workOrdersApi`, `suppliersApi`, `purchasesApi`, `invoicesApi`, más
-  `authApi` (`login`, `register`, `me`, `listUsers`, `adminCreate`,
-  `changeRole`, `setActive`), `logsApi`, `clientApi` (endpoints `/client/*`,
-  incluye `rescheduleAppointment` y `cancelAppointment`),
-  `invoicesApi.billableOrders`,
+- `src/api/resources.ts`: `usersApi` (+ `lookup`), `vehiclesApi` (+ `history`),
+  `appointmentsApi`, `appointmentActionsApi`, `workOrdersApi` (+ `unassigned`),
+  `suppliersApi` (+ `catalog`, `offersForPart`, `upsertCatalogItem`,
+  `removeCatalogItem`), `purchasesApi`, `supplierPortalApi` (`respond`,
+  `informDeliveryDate`), `invoicesApi` (`list`, `get`, `create`, `update`,
+  `billableOrders`, `charges`, `registerPayment`, `void`, `payments`; **sin
+  `remove`**), `authApi`, `logsApi`, `clientApi` (incluye
+  `rescheduleAppointment`, `cancelAppointment`, `approveQuote`, `rejectQuote`),
   `inventoryApi` (`listBoxes`, `createBox`, `updateBox`, `removeBox`,
-  `listParts`, `createPart`, `updatePart` con PATCH, `removePart`,
-  `uploadPartImage` (multipart `image`), `locatePart`, `searchParts` →
-  `/inventory/search/:query` máx. 5, `lowStockParts` →
-  `/suppliers/low-stock`, que devuelve piezas completas con `minStock` y
-  `code`), `workOrderActionsApi` (`addUsedPart`
-  → `POST /work-orders/:id/parts`; `conclude` → `/service/.../close`) e
-  `inventoryFlowsApi` (recibir pedido).
+  `listParts`, `createPart`, `updatePart` con PATCH sin `quantity`,
+  `adjustStock`, `movements`, `removePart`, `uploadPartImage` (multipart
+  `image`), `locatePart`, `searchParts` → `/inventory/search/:query` máx. 5,
+  `lowStockParts` → `/suppliers/low-stock`), `workOrderActionsApi`
+  (`assign`, `sendQuote`, `approveQuote`, `rejectQuote`, `addActivity`,
+  `removeActivity`, `addUsedPart`, `removeUsedPart`, `conclude` →
+  `/work-orders/:id/close` sin precios, `deliver`, `cancel`),
+  `inventoryFlowsApi` (`receivePurchase(id, { items? })`), `replenishmentApi`,
+  `settingsApi`, `notificationsApi` y `auditApi`.
 - Las vistas deben consumir estos servicios en lugar de llamar
   `api.get(...)` con rutas sueltas; ningún componente importa `api/axios`.
 - Errores: `getApiErrorMessage(error, fallback)` (`api/errors.ts`), sin
@@ -429,15 +559,19 @@ en otro lugar.
 | --- | --- | --- |
 | `/dashboard` | autenticados | `Dashboard` |
 | `/logs` | `GERENTE`, `MECANICO` | `AuditLogs` |
-| `/inventory` | `GERENTE`, `BODEGUERO` | `InventarioPage` (pestañas Piezas = `InventoryList` con Ubicar / foto / editar / eliminar, y Cajas = CRUD de `Box`) |
+| `/inventory` | `GERENTE`, `BODEGUERO`, `MECANICO` | `InventarioPage` (Piezas = `InventoryList`, Cajas, Kardex = `StockMovementsList`; el MECANICO solo consulta y ubica) |
 | `/usuarios` | `GERENTE` | `UsuariosPage` (pestañas Listado / Gestión de accesos = `UsersList`) |
-| `/vehiculos` | `GERENTE`, `MECANICO` | `VehiculosPage` |
+| `/vehiculos` | `GERENTE`, `MECANICO` | `VehiculosPage` (alta/edición solo GERENTE; acción "Historial" → `VehicleHistoryModal`) |
 | `/ordenes-trabajo` | `GERENTE`, `MECANICO` | `OrdenesTrabajoPage` (pestañas Tablero = `WorkOrdersList` por defecto / Listado) |
-| `/citas` | `GERENTE`, `MECANICO`, `CLIENTE` | `CitasPage` (el CLIENTE usa `/api/client/appointments`: solicita, reprograma y cancela) |
-| `/proveedores` | `GERENTE`, `BODEGUERO` | `ProveedoresPage` (pestañas Listado / Reposición = `SuppliersList`) |
-| `/compras` | `GERENTE`, `BODEGUERO` | `ComprasPage` |
-| `/facturacion` | `GERENTE`, `CONTADOR` | `FacturacionPage` |
-| `/portal-proveedor` | `PROVEEDOR` | `ProveedorPortalPage` |
+| `/citas` | `GERENTE`, `MECANICO`, `CLIENTE` | `CitasPage` (GERENTE programa, confirma, "No asistió" y genera OT; MECANICO consulta; CLIENTE solicita, reprograma y cancela) |
+| `/proveedores` | `GERENTE`, `BODEGUERO` | `ProveedoresPage` (alta/edición/borrado solo GERENTE; pestaña Reposición = `SuppliersList`) |
+| `/catalogo` | `GERENTE`, `BODEGUERO`, `MECANICO` | `CatalogoPage` (catálogo por proveedor; mantenimiento GERENTE/BODEGUERO) |
+| `/reposicion` | `GERENTE`, `BODEGUERO`, `MECANICO` | `ReposicionPage` (solicitar; aprobar/rechazar GERENTE) |
+| `/compras` | `GERENTE`, `BODEGUERO` | `ComprasPage` (pedido desde stock bajo o solicitudes aprobadas; recepción parcial) |
+| `/facturacion` | `GERENTE`, `CONTADOR` | `FacturacionPage` (pestañas Comprobantes / Transacciones) |
+| `/portal-proveedor` | `PROVEEDOR` | `ProveedorPortalPage` (confirmar con fecha, rechazar, informar fecha) |
+| `/configuracion` | `GERENTE` | `ConfiguracionPage` (tarifa, impuesto %, agenda) |
+| `/auditoria` | `GERENTE` | `AuditoriaPage` |
 
 Las rutas antiguas `/users`, `/work-orders`, `/suppliers` y `/billing`
 redirigen a su equivalente en español (`legacyRedirects`).
@@ -459,11 +593,16 @@ redirigen a su equivalente en español (`legacyRedirects`).
 - "Ver" abre un modal con todas las columnas (incluidas las ocultas en
   móvil). Eliminar pide confirmación y solo se ofrece al `GERENTE`.
 - `rowActions` (`ResourceRowAction`, con `label` como tooltip y `shortLabel`
-  visible): acciones de negocio por fila con
-  confirmación opcional; `run()` devuelve el mensaje de éxito y el listado se
-  recarga. Usadas para: confirmar cita y generar OT (Citas), cancelar cita
-  propia (Citas, CLIENTE), recibir y cancelar pedido `PENDIENTE`/`CONFIRMADA`
-  (Compras), marcar factura pagada (Facturación).
+  visible): acciones de negocio por fila con confirmación opcional y `form`
+  opcional (`RowActionForm`: abre `ResourceFormModal` y `run(values)` recibe
+  sus valores). `run` devuelve el mensaje de éxito (se muestra y el listado se
+  recarga) o `null` si solo abre una vista (p. ej. "Historial"). Usadas para:
+  confirmar cita, "No asistió" y generar OT (Citas), cancelar cita propia
+  (CLIENTE), recibir (cantidades por ítem) y cancelar pedidos (Compras),
+  registrar pago y anular (Facturación), aprobar/rechazar solicitudes
+  (Reposición), confirmar/rechazar/informar fecha (Portal proveedor).
+- `Column.detailOnly`: la columna solo aparece en el modal "Ver" (líneas de
+  factura, pagos, detalle de auditoría).
 - Tras crear, editar o ejecutar una acción, el listado se recarga (las
   respuestas pueden traer menos relaciones que el `list`).
 - `utils/formValues.ts`: `text`, `optionalText`, `optionalNumber`,
@@ -505,21 +644,36 @@ Editar y Eliminar quedan como íconos.
 
 `src/components/WorkOrders/`:
 
-- `WorkOrdersList.tsx`: Kanban por `WorkOrderStatus` (columnas de
-  `workOrderFlow.ts`), filtro local (OT, placa, cliente, mecánico), botón
-  "Nueva Orden" y apertura del detalle al hacer clic en una tarjeta. Las
-  respuestas reemplazan la orden en el estado local (`upsertOrder`).
-- `NewWorkOrderModal.tsx`: vehículo, motivo, kilometraje, costo estimado y,
-  solo para `GERENTE`, mecánico asignado (el MECANICO se autoasigna). No envía
-  `number`: lo genera el backend.
-- `WorkOrderDetailPanel.tsx`: panel lateral con vehículo/propietario,
-  transición de estado (`WORK_ORDER_TRANSITIONS`), diagnóstico, "Concluir"
-  (con costo final; tras `/close` recarga con `workOrdersApi.get` porque esa
-  respuesta no incluye mecánico ni factura) y "Repuestos utilizados".
+- `workOrderFlow.ts`: espejo de la máquina de estados del backend
+  (`WORK_ORDER_COLUMNS`, `CLOSED_COLUMNS`, `PROGRESS_STEPS`,
+  `WORK_ORDER_TRANSITIONS` solo `EN_PROCESO ⇄ ESPERA_REPUESTOS`,
+  `OPEN_STATUSES`, `WORKING_STATUSES`) y helpers `isOpen`, `isWorking`,
+  `activeInvoice`, `laborTotal`, `partsTotal`.
+- `WorkOrdersList.tsx`: Kanban por estado (las cerradas con "Mostrar
+  cerradas"), filtro local, contador "sin mecánico" y "Nueva Orden" solo para
+  el GERENTE. Las respuestas reemplazan la orden en el estado local
+  (`upsertOrder`).
+- `NewWorkOrderModal.tsx` (GERENTE): vehículo, motivo, kilometraje, costo
+  estimado y mecánico (opcional). No envía `number`.
+- `WorkOrderDetailPanel.tsx`: diagnóstico + "Enviar presupuesto"
+  (`EN_DIAGNOSTICO`), "Aprobó/Rechazó el cliente" (GERENTE, `ESPERA_APROBACION`),
+  transición manual, "Cerrar orden" (cierre técnico sin precio), "Entregar
+  vehículo" (GERENTE, requiere factura), "Cancelar orden" (GERENTE, con
+  motivo), reasignar mecánico (GERENTE), actividades (mano de obra) y
+  repuestos solo en `WORKING_STATUSES`. Todas las acciones responden la OT
+  completa (`WORK_ORDER_INCLUDE`), sin recargar.
 - `PartAutocomplete.tsx`: combobox accesible (teclado, `aria-*`) con debounce
   de 250 ms y descarte de respuestas obsoletas; piezas sin stock no se pueden
-  elegir. Agregar descuenta stock en el backend (RF-INV-13); el 409 de stock
-  insuficiente se muestra con toast y se conserva la selección.
+  elegir. Agregar descuenta stock en el backend (RF-INV-13) y enciende el LED
+  de la caja; el 409 se muestra con toast y se conserva la selección.
+
+### Frontend: notificaciones
+
+`components/NotificationBell.tsx` (en el encabezado de `Layout`) consulta
+`notificationsApi.inbox()` cada 60 s, marca leída al abrir y navega a
+`notification.link`. Los avisos los generan los eventos de dominio del backend
+(stock bajo, solicitudes, pedidos, presupuestos, OT concluida/cancelada,
+factura emitida, cambios de cita, OT sin mecánico).
 
 ### Frontend: dashboards por rol
 
@@ -528,9 +682,9 @@ Editar y Eliminar quedan como íconos.
 - `GERENTE` → `GerenteDashboard.tsx`
 - `MECANICO` → `MecanicoDashboard.tsx`
 - `BODEGUERO` → `BodegueroDashboard.tsx` (cajas, piezas, stock bajo, pedidos
-  por recibir)
-- `CONTADOR` → `ContadorDashboard.tsx` (órdenes por facturar, por cobrar,
-  cobrado)
+  por recibir incluidos los `RECIBIDA_PARCIAL`)
+- `CONTADOR` → `ContadorDashboard.tsx` (órdenes por facturar, saldo por
+  cobrar de facturas `PENDIENTE`/`PARCIAL`, cobrado = Σ `paidAmount`)
 - `PROVEEDOR` → `ProveedorDashboard.tsx` (pedidos por responder; responde en
   `/portal-proveedor`)
 - `CLIENTE` → `ClienteDashboard.tsx`
@@ -578,9 +732,11 @@ inventario global. Solo permite:
 
 - Consultar sus vehículos (sección `#vehicles`, enlace "Mis vehículos" del
   menú; el componente hace scroll al ancla).
-- Ver el historial y progreso de sus órdenes.
-- Consultar el diagnóstico.
-- Solicitar una cita.
+- Ver el historial y progreso de sus órdenes (`PROGRESS_STEPS`), cargos y
+  factura vigente.
+- Consultar el diagnóstico y **aprobar o rechazar el presupuesto**
+  (`ESPERA_APROBACION`).
+- Solicitar una cita (sujeta al cupo de la agenda).
 
 ## 7. Variables de entorno
 
@@ -599,6 +755,8 @@ Usar `backend/.env.example` como referencia. Las variables principales son:
 - `LED_GPIO_PIN`
 - `SIMULATE_HARDWARE`
 - `ALEXA_SKILL_ID`
+- `BUSINESS_TIMEZONE` (año de los códigos `OT-/OC-/FAC-`; por defecto
+  `America/Guayaquil`)
 
 Nunca usar el `JWT_SECRET` de ejemplo en producción.
 
@@ -672,3 +830,12 @@ que se solicite expresamente.
 6. Usar transacciones Prisma para operaciones que modifiquen stock y pedidos.
 7. Ejecutar el build del área modificada y revisar `git diff --check`.
 8. No documentar secretos ni copiar valores reales de `.env`.
+9. Toda modificación de stock pasa por `inventory/stock-ledger.ts`; toda
+   transición de OT por `WorkOrdersService` (máquina de `work-order-rules.ts`);
+   los montos facturados salen de `buildCharges`, nunca del body.
+10. Los efectos entre módulos (avisos, alertas) se publican como eventos de
+    dominio después del commit; los cambios sensibles (estados, precios,
+    stock, pagos, anulaciones) se registran con `AuditService`.
+11. Al terminar, regenerar los contextos empaquetados con
+    `npm run repomix:all` desde la raíz (ejecuta `npx repomix` en backend y
+    frontend).

@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Menu } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ROLE_META } from '../utils/status';
+import NotificationBell from './NotificationBell';
 import Sidebar, { findNavigationItem, initials } from './Sidebar';
 
 export default function Layout() {
@@ -40,13 +41,16 @@ export default function Layout() {
           </div>
 
           {user && (
-            <div className="ml-auto hidden items-center gap-3 sm:flex">
-              <div className="text-right leading-tight">
-                <p className="text-sm font-medium text-white">{user.name}</p>
-                <p className="text-xs text-slate-400">{ROLE_META[user.role].label}</p>
-              </div>
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-sm font-bold text-white ring-2 ring-white/10">
-                {initials(user.name)}
+            <div className="ml-auto flex items-center gap-3">
+              <NotificationBell />
+              <div className="hidden items-center gap-3 sm:flex">
+                <div className="text-right leading-tight">
+                  <p className="text-sm font-medium text-white">{user.name}</p>
+                  <p className="text-xs text-slate-400">{ROLE_META[user.role].label}</p>
+                </div>
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-sm font-bold text-white ring-2 ring-white/10">
+                  {initials(user.name)}
+                </div>
               </div>
             </div>
           )}

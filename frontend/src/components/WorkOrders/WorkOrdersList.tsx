@@ -14,15 +14,19 @@ import { workOrdersApi } from '../../api/resources';
 import type { WorkOrder, WorkOrderStatus } from '../../api/types';
 import { formatDate } from '../../utils/format';
 import { WORK_ORDER_STATUS } from '../../utils/status';
+import { useAuth } from '../../contexts/AuthContext';
 import NewWorkOrderModal from './NewWorkOrderModal';
 import WorkOrderDetailPanel from './WorkOrderDetailPanel';
-import { WORK_ORDER_COLUMNS } from './workOrderFlow';
+import { CLOSED_COLUMNS, WORK_ORDER_COLUMNS, isOpen } from './workOrderFlow';
 
 const columnAccent: Record<WorkOrderStatus, string> = {
   EN_DIAGNOSTICO: 'bg-sky-400',
+  ESPERA_APROBACION: 'bg-amber-300',
   EN_PROCESO: 'bg-brand-500',
-  ESPERA_REPUESTOS: 'bg-amber-400',
+  ESPERA_REPUESTOS: 'bg-amber-500',
   CONCLUIDO: 'bg-emerald-400',
+  ENTREGADA: 'bg-emerald-600',
+  CANCELADA: 'bg-red-400',
 };
 
 const kmFormatter = new Intl.NumberFormat('es');
@@ -81,11 +85,15 @@ function OrderCard({ order, onOpen }: { order: WorkOrder; onOpen: () => void }) 
 }
 
 /**
- * Tablero Kanban de órdenes de trabajo por estado, con alta de nuevas OT y
- * panel lateral de detalle (flujo de estados, diagnóstico y repuestos).
- * El backend limita al MECANICO a sus órdenes asignadas.
+ * Tablero Kanban de órdenes de trabajo por estado, con alta de nuevas OT
+ * (solo GERENTE) y panel lateral de detalle (presupuesto, actividades,
+ * repuestos, cierre, entrega y cancelación). El backend limita al MECANICO a
+ * sus órdenes asignadas.
  */
 export default function WorkOrdersList() {
+  const { user } = useAuth();
+  const isManager = user?.role === 'GERENTE';
+  const [showClosed, setShowClosed] = useState(false);
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,12 +128,13 @@ export default function WorkOrdersList() {
   const term = filter.trim().toLowerCase();
   const columns = useMemo(
     () =>
-      WORK_ORDER_COLUMNS.map((status) => ({
+      [...WORK_ORDER_COLUMNS, ...(showClosed ? CLOSED_COLUMNS : [])].map((status) => ({
         status,
         orders: orders.filter((order) => order.status === status && matchesFilter(order, term)),
       })),
-    [orders, term],
+    [orders, term, showClosed],
   );
+  const unassigned = orders.filter((order) => isOpen(order) && order.mechanicId === null).length;
 
   const selectedOrder = orders.find((order) => order.id === selectedId) ?? null;
 
@@ -152,6 +161,11 @@ export default function WorkOrdersList() {
             <p className="text-sm text-slate-400">
               Flujo del taller por estado
               {!isLoading && !error && <span className="text-slate-500"> · {orders.length} órdenes</span>}
+              {isManager && unassigned > 0 && (
+                <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-300">
+                  {unassigned} sin mecánico
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -168,13 +182,24 @@ export default function WorkOrdersList() {
               className="glass w-full rounded-xl py-2.5 pl-9 pr-3 text-sm text-white placeholder:text-slate-500 outline-none focus:border-brand-500 sm:w-72"
             />
           </div>
-          <button
-            type="button"
-            onClick={() => setIsCreating(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 btn-primary"
-          >
-            <Plus size={18} /> Nueva Orden
-          </button>
+          <label className="inline-flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm text-slate-300 glass">
+            <input
+              type="checkbox"
+              checked={showClosed}
+              onChange={(event) => setShowClosed(event.target.checked)}
+              className="h-4 w-4 accent-orange-500"
+            />
+            Mostrar cerradas
+          </label>
+          {isManager && (
+            <button
+              type="button"
+              onClick={() => setIsCreating(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white shadow-[0_0_15px_rgba(249,115,22,0.25)] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 btn-primary"
+            >
+              <Plus size={18} /> Nueva Orden
+            </button>
+          )}
         </div>
       </header>
 
@@ -191,7 +216,7 @@ export default function WorkOrdersList() {
           </button>
         </div>
       ) : (
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           {columns.map(({ status, orders: columnOrders }) => (
             <div
               key={status}

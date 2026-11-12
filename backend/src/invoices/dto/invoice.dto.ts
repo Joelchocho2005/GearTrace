@@ -1,9 +1,13 @@
-import { InvoiceStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsNumber, IsOptional, Min } from 'class-validator';
+import { PaymentMethod } from '@prisma/client';
+import { IsEnum, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 
-/** El código `number` (FAC-YYYY-NNN) lo genera el servidor; no se acepta en el body. */
+/**
+ * Emitir factura interna. El código FAC-YYYY-NNN, las líneas (mano de obra y
+ * repuestos) y el impuesto los calcula el servidor desde la OT; no se aceptan
+ * montos en el body.
+ */
 export class CreateInvoiceDto {
-  /** La orden debe estar CONCLUIDO y no tener factura previa */
+  /** La orden debe estar CONCLUIDO/ENTREGADA y sin factura activa */
   @IsInt()
   @Min(1)
   workOrderId: number;
@@ -14,32 +18,39 @@ export class CreateInvoiceDto {
   @Min(1)
   clientId?: number;
 
-  /** Por defecto: finalCost, si no estimatedCost, si no la suma de repuestos de la orden */
   @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  subtotal?: number;
-
-  /** Monto de impuestos; por defecto 0. total = subtotal + tax */
-  @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  tax?: number;
+  @IsString()
+  @MaxLength(255)
+  notes?: string;
 }
 
-/** Solo facturas PENDIENTES pueden editarse; total se recalcula. */
+/** Solo notas: los montos salen de la OT y el estado de los pagos. */
 export class UpdateInvoiceDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  notes?: string;
+}
+
+/** Registrar pago (total o parcial). */
+export class RegisterPaymentDto {
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  subtotal?: number;
+  @Min(0.01)
+  amount: number;
+
+  @IsEnum(PaymentMethod)
+  method: PaymentMethod;
 
   @IsOptional()
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  tax?: number;
+  @IsString()
+  @MaxLength(100)
+  reference?: string;
+}
 
-  @IsOptional()
-  @IsEnum(InvoiceStatus)
-  status?: InvoiceStatus;
+/** Anular comprobante. */
+export class VoidInvoiceDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(255)
+  reason: string;
 }

@@ -10,8 +10,8 @@ import { StatGrid } from './ui/StatCard';
 
 const PREVIEW_LIMIT = 5;
 
-/** Suma montos Decimal (llegan como string). */
-const sumTotals = (invoices: Invoice[]) => invoices.reduce((sum, invoice) => sum + Number(invoice.total), 0);
+/** Saldo pendiente de una factura (los Decimal llegan como string). */
+const balanceOf = (invoice: Invoice) => Number(invoice.total) - Number(invoice.paidAmount);
 
 /** Panel del CONTADOR: cobros pendientes, cobrado y órdenes por facturar. */
 export default function ContadorDashboard() {
@@ -34,8 +34,11 @@ export default function ContadorDashboard() {
     void load();
   }, []);
 
-  const pending = invoices.filter((invoice) => invoice.status === 'PENDIENTE');
-  const paid = invoices.filter((invoice) => invoice.status === 'PAGADA');
+  // Pendientes y con pago parcial tienen saldo por cobrar; lo cobrado suma los pagos de facturas vigentes.
+  const pending = invoices.filter((invoice) => invoice.status === 'PENDIENTE' || invoice.status === 'PARCIAL');
+  const active = invoices.filter((invoice) => invoice.status !== 'ANULADA');
+  const receivable = pending.reduce((sum, invoice) => sum + balanceOf(invoice), 0);
+  const collected = active.reduce((sum, invoice) => sum + Number(invoice.paidAmount), 0);
 
   return (
     <section className="space-y-6">
@@ -47,8 +50,8 @@ export default function ContadorDashboard() {
         cards={[
           { label: 'Por facturar', value: billable.length, icon: ClipboardCheck, color: 'text-blue-400' },
           { label: 'Facturas pendientes', value: pending.length, icon: Clock, color: 'text-amber-400' },
-          { label: 'Por cobrar', value: formatCurrency(sumTotals(pending)), icon: Receipt, color: 'text-rose-400' },
-          { label: 'Cobrado', value: formatCurrency(sumTotals(paid)), icon: BadgeCheck, color: 'text-emerald-400' },
+          { label: 'Por cobrar', value: formatCurrency(receivable), icon: Receipt, color: 'text-rose-400' },
+          { label: 'Cobrado', value: formatCurrency(collected), icon: BadgeCheck, color: 'text-emerald-400' },
         ]}
       />
       <div className="grid gap-6 lg:grid-cols-2">
@@ -62,7 +65,7 @@ export default function ContadorDashboard() {
               {billable.slice(0, PREVIEW_LIMIT).map((order) => (
                 <div key={order.id} className="flex justify-between gap-3 rounded-xl p-4 glass-inset">
                   <div><p className="font-semibold text-white">{order.number}</p><p className="text-xs text-slate-500">{order.vehicle?.plate} · {order.vehicle?.owner?.name ?? 'sin cliente'} · {formatDate(order.completedAt)}</p></div>
-                  <p className="text-sm text-slate-200">{formatCurrency(order.finalCost ?? order.estimatedCost)}</p>
+                  <p className="text-sm text-slate-200">{formatCurrency(order.finalCost)} <span className="text-xs text-slate-500">+ imp.</span></p>
                 </div>
               ))}
             </div>
@@ -78,7 +81,7 @@ export default function ContadorDashboard() {
               {pending.slice(0, PREVIEW_LIMIT).map((invoice) => (
                 <div key={invoice.id} className="flex justify-between gap-3 rounded-xl p-4 glass-inset">
                   <div><p className="font-semibold text-white">{invoice.number}</p><p className="text-xs text-slate-500">{invoice.client?.name ?? 'Cliente'} · emitida {formatDate(invoice.issuedAt)}</p></div>
-                  <p className="text-sm font-semibold text-white">{formatCurrency(invoice.total)}</p>
+                  <p className="text-sm font-semibold text-white">{formatCurrency(balanceOf(invoice))}</p>
                 </div>
               ))}
             </div>

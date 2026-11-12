@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarDays, CalendarX, ClipboardPlus } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarX, ClipboardPlus, UserX } from 'lucide-react';
 import { appointmentActionsApi, appointmentsApi, clientApi, vehiclesApi } from '../api/resources';
 import type { Appointment, AppointmentStatus, Vehicle } from '../api/types';
 import type { Column } from '../components/ui/DataTable';
@@ -95,12 +95,13 @@ const appointmentPayload = (values: FormValues) => ({
   reason: optionalText(values, 'reason'),
 });
 
+/** Programar cita (GERENTE): queda confirmada y respeta el cupo de la agenda. */
 const staffCreateForm: CreateFormConfig = {
-  title: 'Agendar cita',
+  title: 'Programar cita',
   fields: appointmentFields(async () => toOptions(await vehiclesApi.list(), (vehicle) => vehicle.id, vehicleLabel)),
   initialValues: emptyAppointment,
   submit: (values) => appointmentsApi.create(appointmentPayload(values)),
-  successMessage: 'Cita agendada.',
+  successMessage: 'Cita programada y confirmada.',
 };
 
 const clientCreateForm: CreateFormConfig = {
@@ -111,8 +112,11 @@ const clientCreateForm: CreateFormConfig = {
   successMessage: 'Cita solicitada. El taller la confirmará.',
 };
 
-/** La cita se completa al generar su OT; aquí solo se agenda, confirma o cancela. */
-const EDITABLE_STATUSES: AppointmentStatus[] = ['AGENDADA', 'CONFIRMADA', 'CANCELADA'];
+/**
+ * La cita se completa al generar su OT; aquí se agenda, confirma, cancela o
+ * marca "No asistió" (solo si ya pasó la hora; lo valida el backend).
+ */
+const EDITABLE_STATUSES: AppointmentStatus[] = ['AGENDADA', 'CONFIRMADA', 'CANCELADA', 'NO_ASISTIO'];
 const editableStatusOptions: SelectOption[] = EDITABLE_STATUSES.map((status) => ({
   value: status,
   label: APPOINTMENT_STATUS[status].label,
@@ -182,19 +186,25 @@ function clientRowActions(appointment: Appointment): ResourceRowAction[] {
 
 function staffRowActions(appointment: Appointment): ResourceRowAction[] {
   if (!isOpen(appointment) || appointment.workOrder) return [];
-  const actions: ResourceRowAction[] = [
-    {
-      key: 'work-order',
-      label: 'Generar orden de trabajo',
-      shortLabel: 'Generar OT',
-      icon: ClipboardPlus,
-      confirm: `¿Generar la orden de trabajo para ${appointment.vehicle?.plate ?? 'esta cita'}? La cita quedará completada.`,
-      run: async () => {
-        const order = await appointmentActionsApi.createWorkOrder(appointment.id);
-        return `Orden ${order.number} creada desde la cita.`;
+  if (new Date(appointment.scheduledAt) <= new Date()) {
+    // Ya pasó la hora: o llegó (se genera la OT) o no asistió.
+    return [
+      generateWorkOrderAction(appointment),
+      {
+        key: 'no-show',
+        label: 'Marcar que el cliente no asistió',
+        shortLabel: 'No asistió',
+        icon: UserX,
+        tone: 'danger',
+        confirm: `¿Marcar la cita de ${appointment.vehicle?.plate ?? 'este vehículo'} como "No asistió"?`,
+        run: async () => {
+          await appointmentsApi.update(appointment.id, { status: 'NO_ASISTIO' });
+          return 'Cita marcada como no asistida.';
+        },
       },
-    },
-  ];
+    ];
+  }
+  const actions: ResourceRowAction[] = [generateWorkOrderAction(appointment)];
   if (appointment.status === 'AGENDADA') {
     actions.unshift({
       key: 'confirm',
@@ -211,14 +221,32 @@ function staffRowActions(appointment: Appointment): ResourceRowAction[] {
   return actions;
 }
 
+function generateWorkOrderAction(appointment: Appointment): ResourceRowAction {
+  return {
+    key: 'work-order',
+    label: 'Generar orden de trabajo',
+    shortLabel: 'Generar OT',
+    icon: ClipboardPlus,
+    confirm: `¿Generar la orden de trabajo para ${appointment.vehicle?.plate ?? 'esta cita'}? La cita quedará completada.`,
+    run: async () => {
+      const order = await appointmentActionsApi.createWorkOrder(appointment.id);
+      return `Orden ${order.number} creada desde la cita.`;
+    },
+  };
+}
+
 /**
- * /citas — GERENTE y MECANICO gestionan la agenda (/api/appointments) y
- * generan la OT desde la cita; el CLIENTE ve, solicita, reprograma y cancela
- * sus citas (/api/client/appointments).
+ * /citas — ERS: el GERENTE programa, confirma, reprograma, marca "No asistió"
+ * y genera la OT; el MECANICO consulta la agenda; el CLIENTE solicita,
+ * reprograma y cancela sus citas (/api/client/appointments).
  */
 export default function CitasPage() {
   const { user } = useAuth();
   const isClient = user?.role === 'CLIENTE';
+  const isManager = user?.role === 'GERENTE';
+  const staffForms = isManager
+    ? { createForm: staffCreateForm, editForm: staffEditForm, rowActions: staffRowActions }
+    : {};
 
   return (
     <ResourceListPage
@@ -230,10 +258,10 @@ export default function CitasPage() {
       columns={isClient ? baseColumns : staffColumns}
       emptyMessage={isClient ? 'Aún no has solicitado citas.' : 'No hay citas programadas.'}
       getRowLabel={(appointment) => formatDateTime(appointment.scheduledAt)}
-      createForm={isClient ? clientCreateForm : staffCreateForm}
-      editForm={isClient ? clientEditForm : staffEditForm}
-      rowActions={isClient ? clientRowActions : staffRowActions}
-      onDelete={user?.role === 'GERENTE' ? appointmentsApi.remove : undefined}
+      {...(isClient
+        ? { createForm: clientCreateForm, editForm: clientEditForm, rowActions: clientRowActions }
+        : staffForms)}
+      onDelete={isManager ? appointmentsApi.remove : undefined}
     />
   );
 }

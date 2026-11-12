@@ -1,14 +1,18 @@
 import { Type } from 'class-transformer';
 import { WorkOrderStatus } from '@prisma/client';
 import {
-  IsArray,
+  IsBoolean,
+  IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  Max,
+  MaxLength,
   Min,
-  ValidateNested,
+  MinLength,
 } from 'class-validator';
 
 export class WorkOrderPartDto {
@@ -21,12 +25,19 @@ export class WorkOrderPartDto {
   quantity: number;
 }
 
-/** RF-INV-13: repuesto consumido que se agrega a una orden y descuenta stock. */
-export class AddUsedPartDto extends WorkOrderPartDto {}
+/**
+ * RF-INV-13: repuesto consumido que se agrega a una orden y descuenta stock.
+ * `locate` (por defecto true) enciende el LED de su caja (pick-to-light).
+ */
+export class AddUsedPartDto extends WorkOrderPartDto {
+  @IsOptional()
+  @IsBoolean()
+  locate?: boolean;
+}
 
 /**
- * Cita → OT. Vehículo y motivo salen de la cita; `description` permite
- * reemplazar el motivo. El mecánico sigue las reglas de create().
+ * Cita → OT (GERENTE). Vehículo y motivo salen de la cita; `description`
+ * permite reemplazar el motivo.
  */
 export class CreateWorkOrderFromAppointmentDto {
   @IsOptional()
@@ -50,12 +61,14 @@ export class CreateWorkOrderFromAppointmentDto {
 }
 
 /**
- * El código `number` (OT-YYYY-NNN) lo genera el servidor (RF-SER-05); si el
- * cliente lo envía, la validación global lo rechaza (forbidNonWhitelisted).
+ * Registrar orden de trabajo (GERENTE). El código `number` (OT-YYYY-NNN) lo
+ * genera el servidor (RF-SER-05). Los repuestos se registran después de que
+ * el cliente apruebe el presupuesto (POST /:id/parts).
  */
 export class CreateWorkOrderDto {
   /** Motivo de ingreso / trabajo solicitado */
   @IsString()
+  @MinLength(3)
   description: string;
 
   @IsOptional()
@@ -77,18 +90,12 @@ export class CreateWorkOrderDto {
   @IsInt()
   @Min(1)
   mechanicId?: number;
-
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => WorkOrderPartDto)
-  parts?: WorkOrderPartDto[];
 }
 
 /**
- * Edición general de la orden. El cierre (CONCLUIDO) no se permite aquí: usar
- * PATCH /api/service/work-orders/:id/close (registra finalCost y completedAt).
- * Los repuestos se agregan con POST /api/work-orders/:id/parts.
+ * Edición general de la orden abierta. `status` solo acepta las transiciones
+ * manuales (EN_PROCESO ⇄ ESPERA_REPUESTOS); el resto tiene endpoint propio.
+ * Reasignar mecánico: PATCH /:id/assign.
  */
 export class UpdateWorkOrderDto {
   @IsOptional()
@@ -110,11 +117,80 @@ export class UpdateWorkOrderDto {
   mileage?: number;
 
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  mechanicId?: number;
-
-  @IsOptional()
   @IsEnum(WorkOrderStatus)
   status?: WorkOrderStatus;
+}
+
+export class UpdateWorkOrderStatusDto {
+  @IsEnum(WorkOrderStatus)
+  status: WorkOrderStatus;
+}
+
+export class DiagnoseWorkOrderDto {
+  @IsString()
+  @MinLength(3)
+  diagnosis: string;
+}
+
+/** Asignar mecánico (GERENTE). */
+export class AssignMechanicDto {
+  @IsInt()
+  @Min(1)
+  mechanicId: number;
+}
+
+/**
+ * Envía el presupuesto al cliente: EN_DIAGNOSTICO → ESPERA_APROBACION.
+ * Requiere diagnóstico (en el body o ya registrado) y costo estimado.
+ */
+export class SendQuoteDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  diagnosis?: string;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  estimatedCost: number;
+}
+
+/** Rechazo del presupuesto o cancelación de la orden. */
+export class ReasonDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(255)
+  reason: string;
+}
+
+export class OptionalReasonDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reason?: string;
+}
+
+/** Registrar actividad de servicio (horas × tarifa vigente = mano de obra). */
+export class CreateServiceActivityDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(255)
+  description: string;
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.25)
+  @Max(24)
+  hours: number;
+
+  @IsOptional()
+  @IsDateString()
+  performedAt?: string;
+}
+
+/** Filtros de GET /api/work-orders. */
+export class WorkOrderQueryDto {
+  /** `true`: solo órdenes abiertas sin mecánico asignado (cola del GERENTE). */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  unassigned?: 'true' | 'false';
 }

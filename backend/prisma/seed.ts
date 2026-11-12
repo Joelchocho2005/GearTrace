@@ -1,4 +1,4 @@
-import { PrismaClient, Role, WorkOrderStatus } from '@prisma/client';
+import { Prisma, PrismaClient, Role, StockMovementType, WorkOrderStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
@@ -59,6 +59,13 @@ async function main() {
   });
 
   console.log(`✅ Usuarios creados: ${gerente.email}, ${mecanico.email}, ${cliente.email}`);
+
+  // Parámetros del taller (demo): tarifa de mano de obra, IVA y capacidad de agenda.
+  await prisma.workshopSettings.upsert({
+    where: { id: 1 },
+    update: {},
+    create: { id: 1, laborRatePerHour: 20, taxRate: 0.15, appointmentSlotMinutes: 60, appointmentsPerSlot: 2 },
+  });
 
   // 3. Crear vehículos de prueba
   console.log('🚗 Creando vehículos de prueba...');
@@ -131,33 +138,39 @@ async function main() {
   const cajaB = await prisma.box.findUnique({ where: { ledIndex: 1 } });
 
   if (cajaA && cajaB) {
-    const filtroAceite = await prisma.part.upsert({
-      where: { code: 'FLT-OIL-001' },
-      update: {},
-      create: {
-        name: 'Filtro de aceite Toyota',
-        code: 'FLT-OIL-001',
-        unitPrice: 12.5,
-        quantity: 15,
-        minStock: 3,
-        boxId: cajaA.id,
-        keywords: ['filtro aceite', 'filtro toyota', 'filtro'],
-      },
+    const filtroAceite = await upsertPartWithInitialStock({
+      name: 'Filtro de aceite Toyota',
+      code: 'FLT-OIL-001',
+      unitPrice: 12.5,
+      costPrice: 8.5,
+      quantity: 15,
+      minStock: 3,
+      boxId: cajaA.id,
+      keywords: ['filtro aceite', 'filtro toyota', 'filtro'],
     });
 
-    const pastillasFreno = await prisma.part.upsert({
-      where: { code: 'BRK-PAD-001' },
-      update: {},
-      create: {
-        name: 'Pastillas de freno Brembo',
-        code: 'BRK-PAD-001',
-        unitPrice: 35,
-        quantity: 6,
-        minStock: 2,
-        boxId: cajaB.id,
-        keywords: ['pastillas', 'frenos', 'pastillas freno'],
-      },
+    const pastillasFreno = await upsertPartWithInitialStock({
+      name: 'Pastillas de freno Brembo',
+      code: 'BRK-PAD-001',
+      unitPrice: 35,
+      costPrice: 25,
+      quantity: 6,
+      minStock: 2,
+      boxId: cajaB.id,
+      keywords: ['pastillas', 'frenos', 'pastillas freno'],
     });
+
+    // Catálogo del proveedor: una OC solo admite piezas de su catálogo.
+    for (const [part, price, leadTimeDays] of [
+      [filtroAceite, 8.5, 2],
+      [pastillasFreno, 25, 4],
+    ] as const) {
+      await prisma.supplierPart.upsert({
+        where: { supplierId_partId: { supplierId: proveedor.id, partId: part.id } },
+        update: {},
+        create: { supplierId: proveedor.id, partId: part.id, price, leadTimeDays },
+      });
+    }
 
     await prisma.purchaseOrder.upsert({
       where: { number: 'PO-0001' },
@@ -178,19 +191,37 @@ async function main() {
   // 7. Crear órdenes de trabajo ficticias
   // Mismo formato que genera WorkOrdersService (RF-SER-05): OT-YYYY-NNN
   const currentYear = new Date().getFullYear();
-  await prisma.workOrder.upsert({
+  // OT concluida con su actividad (mano de obra 1.5 h × 20 = 30): lista para facturar.
+  const concluded = await prisma.workOrder.upsert({
     where: { number: `OT-${currentYear}-001` },
     update: {},
     create: {
       number: `OT-${currentYear}-001`,
       description: 'Cambio de aceite y filtro',
+      diagnosis: 'Aceite degradado; se requiere cambio preventivo.',
       status: WorkOrderStatus.CONCLUIDO,
-      finalCost: 45,
+      estimatedCost: 30,
+      finalCost: 30,
+      quoteSentAt: new Date(),
+      quoteApproved: true,
+      quoteDecidedAt: new Date(),
       vehicleId: vehiculoCliente.id,
       mechanicId: mecanico.id,
+      startedAt: new Date(),
       completedAt: new Date(),
     },
   });
+  if ((await prisma.serviceActivity.count({ where: { workOrderId: concluded.id } })) === 0) {
+    await prisma.serviceActivity.create({
+      data: {
+        workOrderId: concluded.id,
+        mechanicId: mecanico.id,
+        description: 'Cambio de aceite y revisión de niveles',
+        hours: 1.5,
+        laborRate: 20,
+      },
+    });
+  }
 
   await prisma.workOrder.upsert({
     where: { number: `OT-${currentYear}-002` },
@@ -205,6 +236,25 @@ async function main() {
   });
 
   console.log('🎉 ¡Seed finalizado exitosamente!');
+}
+
+/** Crea la pieza con su saldo inicial en el kardex (solo la primera vez). */
+async function upsertPartWithInitialStock(data: Prisma.PartUncheckedCreateInput & { quantity: number }) {
+  const existing = await prisma.part.findUnique({ where: { code: data.code } });
+  if (existing) return existing;
+  return prisma.$transaction(async (tx) => {
+    const part = await tx.part.create({ data });
+    await tx.stockMovement.create({
+      data: {
+        partId: part.id,
+        type: StockMovementType.INVENTARIO_INICIAL,
+        quantity: data.quantity,
+        balanceAfter: data.quantity,
+        reason: 'Saldo inicial (seed)',
+      },
+    });
+    return part;
+  });
 }
 
 main()

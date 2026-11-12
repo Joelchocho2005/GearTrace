@@ -6,10 +6,12 @@ import { inventoryApi, workOrdersApi } from '../api/resources';
 import { createHardwareSocket, HW_EVENTS, type HardwareStatus } from '../api/socket';
 import type { WorkOrder } from '../api/types';
 import { WORK_ORDER_STATUS } from '../utils/status';
+import { isOpen } from './WorkOrders/workOrderFlow';
 import StatCard, { type StatCardProps } from './ui/StatCard';
 
 /** Órdenes activas = todas menos las concluidas. */
-const isActiveOrder = (order: WorkOrder) => order.status !== 'CONCLUIDO';
+/** Órdenes abiertas (aún en el taller y sin cierre técnico). */
+const isActiveOrder = (order: WorkOrder) => isOpen(order);
 
 export default function GerenteDashboard() {
   const [stats, setStats] = useState({ boxes: 0, parts: 0, lowStock: 0 });

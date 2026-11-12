@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { businessYear } from './dates';
 
 /**
  * Códigos correlativos por año, formato PREFIJO-YYYY-NNN (NNN crece a 4+ dígitos):
@@ -29,7 +30,8 @@ export async function nextDocumentNumber(
   prefix: DocumentPrefix,
   date: Date = new Date(),
 ): Promise<string> {
-  const year = date.getFullYear();
+  // Año en la zona horaria del negocio (BUSINESS_TIMEZONE), no la del servidor.
+  const year = businessYear(date);
   const table = Prisma.raw(`"${DOCUMENTS[prefix].table}"`);
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`geartrace:document_number:${prefix}`}))`;
 

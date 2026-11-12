@@ -19,6 +19,7 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/auth.decorators';
 import {
   CreatePurchaseDto,
+  DeliveryDateDto,
   SupplierPurchaseResponseDto,
   UpdatePurchaseDto,
 } from './dto/purchase.dto';
@@ -43,20 +44,24 @@ export class PurchasesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(@Body() dto: CreatePurchaseDto) {
-    return this.purchasesService.create(dto);
+  create(@Body() dto: CreatePurchaseDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.purchasesService.create(dto, user);
   }
 
   @Patch(':id(\\d+)')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdatePurchaseDto) {
-    return this.purchasesService.update(id, dto);
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePurchaseDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasesService.update(id, dto, user);
   }
 
   @Delete(':id(\\d+)')
   @Roles(Role.GERENTE, Role.BODEGUERO)
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.purchasesService.remove(id);
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.purchasesService.remove(id, user);
   }
 
   @Get('supplier-portal')
@@ -73,5 +78,16 @@ export class PurchasesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.purchasesService.respondAsSupplier(id, dto, user);
+  }
+
+  /** Informar fecha de entrega de un pedido confirmado. */
+  @Patch('supplier-portal/:id(\\d+)/delivery-date')
+  @Roles(Role.PROVEEDOR)
+  informDeliveryDate(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DeliveryDateDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.purchasesService.informDeliveryDate(id, dto.expectedDeliveryAt, user);
   }
 }

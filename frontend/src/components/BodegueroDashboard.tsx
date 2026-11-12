@@ -11,7 +11,9 @@ import StatusBadge from './ui/StatusBadge';
 import { StatGrid } from './ui/StatCard';
 
 /** Pedidos que aún pueden recibirse (pendientes o confirmados por el proveedor). */
-const isIncoming = (order: PurchaseOrder) => order.status === 'PENDIENTE' || order.status === 'CONFIRMADA';
+/** Pedidos con unidades por llegar (pendientes, confirmados o recibidos en parte). */
+const isIncoming = (order: PurchaseOrder) =>
+  order.status === 'PENDIENTE' || order.status === 'CONFIRMADA' || order.status === 'RECIBIDA_PARCIAL';
 const PREVIEW_LIMIT = 5;
 
 /** Panel del BODEGUERO: inventario, alertas de stock y pedidos por recibir. */

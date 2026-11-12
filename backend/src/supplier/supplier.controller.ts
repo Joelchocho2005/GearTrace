@@ -10,15 +10,16 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { Roles } from '../auth/decorators/auth.decorators';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { CreatePurchaseOrderDto } from './dto/purchase-order.dto';
+import { CreatePurchaseOrderDto, ReceivePurchaseOrderDto } from './dto/purchase-order.dto';
 import { SupplierService } from './supplier.service';
 
 /**
- * Flujo de reposición: stock bajo, pedidos y recepción.
- * GET/POST /api/suppliers (CRUD de proveedores) vive en SuppliersController.
+ * Flujo de reposición: stock bajo, pedidos y recepción (GERENTE, BODEGUERO).
+ * El CRUD de proveedores y su catálogo vive en SuppliersController.
  */
 @Controller('suppliers')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -38,12 +39,17 @@ export class SupplierController {
 
   @Post('purchase-orders')
   @HttpCode(HttpStatus.CREATED)
-  createPurchaseOrder(@Body() dto: CreatePurchaseOrderDto) {
-    return this.supplierService.createPurchaseOrder(dto);
+  createPurchaseOrder(@Body() dto: CreatePurchaseOrderDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.supplierService.createPurchaseOrder(dto, user);
   }
 
-  @Post('purchase-orders/:id/receive')
-  receivePurchaseOrder(@Param('id', ParseIntPipe) id: number) {
-    return this.supplierService.receivePurchaseOrder(id);
+  /** Recepción total (sin body) o parcial (`items`). */
+  @Post('purchase-orders/:id(\\d+)/receive')
+  receivePurchaseOrder(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReceivePurchaseOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.supplierService.receivePurchaseOrder(id, dto, user);
   }
 }

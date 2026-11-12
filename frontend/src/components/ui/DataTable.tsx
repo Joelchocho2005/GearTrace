@@ -8,6 +8,8 @@ export interface Column<T> {
   /** Oculta la columna en pantallas pequeñas (< md). */
   hideOnMobile?: boolean;
   align?: 'left' | 'right';
+  /** Solo se muestra en el detalle ("Ver"), no en la tabla (p. ej. líneas de factura). */
+  detailOnly?: boolean;
 }
 
 /** Acción adicional de una fila (p. ej. "Recibir pedido", "Marcar pagada"). */
@@ -70,6 +72,7 @@ export default function DataTable<T extends { id: number }>({
   isEditable,
   rowActions,
 }: DataTableProps<T>) {
+  const tableColumns = columns.filter((column) => !column.detailOnly);
   const hasActions = Boolean(onView || onEdit || onDelete || rowActions);
 
   if (error && !isLoading) {
@@ -93,7 +96,7 @@ export default function DataTable<T extends { id: number }>({
       <table className="min-w-full divide-y divide-white/5 text-sm">
         <thead className="bg-white/[0.03] text-xs uppercase tracking-wider text-slate-400">
           <tr>
-            {columns.map((column) => (
+            {tableColumns.map((column) => (
               <th key={column.key} scope="col" className={`${cellClass(column)} font-semibold`}>
                 {column.header}
               </th>
@@ -109,7 +112,7 @@ export default function DataTable<T extends { id: number }>({
           {isLoading &&
             Array.from({ length: SKELETON_ROWS }, (_, index) => (
               <tr key={index} className="animate-pulse">
-                {columns.map((column) => (
+                {tableColumns.map((column) => (
                   <td key={column.key} className={cellClass(column)}>
                     <div className="h-4 w-3/4 rounded bg-white/10" />
                   </td>
@@ -124,7 +127,7 @@ export default function DataTable<T extends { id: number }>({
 
           {!isLoading && rows.length === 0 && (
             <tr>
-              <td colSpan={columns.length + (hasActions ? 1 : 0)} className="px-6 py-12">
+              <td colSpan={tableColumns.length + (hasActions ? 1 : 0)} className="px-6 py-12">
                 <div className="flex flex-col items-center gap-2 text-slate-400">
                   <Inbox size={28} />
                   <p>{emptyMessage}</p>
@@ -136,7 +139,7 @@ export default function DataTable<T extends { id: number }>({
           {!isLoading &&
             rows.map((row) => (
               <tr key={row.id} className="text-slate-300 transition-colors hover:bg-white/5">
-                {columns.map((column) => (
+                {tableColumns.map((column) => (
                   <td key={column.key} className={cellClass(column)}>
                     {column.render(row)}
                   </td>

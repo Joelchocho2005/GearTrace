@@ -22,8 +22,9 @@ import { AppointmentsService } from './appointments.service';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
 
 /**
- * /api/appointments — Agenda del taller (personal).
- * El CLIENTE agenda sus propias citas en POST /api/client/appointments.
+ * /api/appointments — Agenda del taller. ERS: programar, confirmar,
+ * reprogramar, marcar "No asistió" y generar la OT → GERENTE; el MECANICO
+ * consulta. El CLIENTE solicita sus citas en POST /api/client/appointments.
  */
 @Controller('appointments')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -45,13 +46,15 @@ export class AppointmentsController {
   }
 
   @Post()
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.CREATED)
-  create(@Body() dto: CreateAppointmentDto) {
-    return this.appointmentsService.create(dto);
+  create(@Body() dto: CreateAppointmentDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.appointmentsService.create(dto, user.id);
   }
 
   /** Cita → OT: crea la orden de trabajo desde la cita y la marca COMPLETADA. */
   @Post(':id(\\d+)/work-order')
+  @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.CREATED)
   createWorkOrder(
     @Param('id', ParseIntPipe) id: number,
@@ -62,17 +65,19 @@ export class AppointmentsController {
   }
 
   @Patch(':id(\\d+)')
+  @Roles(Role.GERENTE)
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateAppointmentDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.appointmentsService.update(id, dto);
+    return this.appointmentsService.update(id, dto, user.id);
   }
 
   @Delete(':id(\\d+)')
   @Roles(Role.GERENTE)
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.appointmentsService.remove(id);
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.appointmentsService.remove(id, user.id);
   }
 }

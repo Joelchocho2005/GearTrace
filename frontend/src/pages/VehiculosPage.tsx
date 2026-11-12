@@ -1,8 +1,10 @@
-import { Car } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Car, History } from 'lucide-react';
 import { usersApi, vehiclesApi } from '../api/resources';
 import type { CreateVehiclePayload, Vehicle } from '../api/types';
 import type { FormField, FormValues } from '../components/ui/ResourceFormModal';
-import type { CreateFormConfig, EditFormConfig } from '../components/ui/ResourceListPage';
+import type { CreateFormConfig, EditFormConfig, ResourceRowAction } from '../components/ui/ResourceListPage';
+import VehicleHistoryModal from '../components/Vehicles/VehicleHistoryModal';
 import { idValue, optionalNumber, optionalText, requiredNumber, text, toOptions } from '../utils/formValues';
 import type { Column } from '../components/ui/DataTable';
 import ResourceListPage from '../components/ui/ResourceListPage';
@@ -82,23 +84,43 @@ const editForm: EditFormConfig<Vehicle> = {
   submit: (vehicle, values) => vehiclesApi.update(vehicle.id, vehiclePayload(values)),
 };
 
-/** /vehiculos — GERENTE, MECANICO. */
+/** /vehiculos — ERS: registrar/editar/eliminar GERENTE; consulta e historial GERENTE y MECANICO. */
 export default function VehiculosPage() {
   const { user } = useAuth();
+  const isManager = user?.role === 'GERENTE';
+  const [historyOf, setHistoryOf] = useState<Vehicle | null>(null);
+  const closeHistory = useCallback(() => setHistoryOf(null), []);
+
+  const rowActions = (vehicle: Vehicle): ResourceRowAction[] => [
+    {
+      key: 'history',
+      label: 'Consultar historial del vehículo',
+      shortLabel: 'Historial',
+      icon: History,
+      run: async () => {
+        setHistoryOf(vehicle);
+        return null;
+      },
+    },
+  ];
 
   return (
-    <ResourceListPage
-      title="Vehículos"
-      description="Vehículos registrados de los clientes"
-      icon={Car}
-      entityLabel="el vehículo"
-      fetchAll={vehiclesApi.list}
-      columns={columns}
-      emptyMessage="No hay vehículos registrados."
-      getRowLabel={(vehicle) => vehicle.plate}
-      onDelete={user?.role === 'GERENTE' ? vehiclesApi.remove : undefined}
-      createForm={createForm}
-      editForm={editForm}
-    />
+    <>
+      <ResourceListPage
+        title="Vehículos"
+        description="Vehículos registrados de los clientes"
+        icon={Car}
+        entityLabel="el vehículo"
+        fetchAll={vehiclesApi.list}
+        columns={columns}
+        emptyMessage="No hay vehículos registrados."
+        getRowLabel={(vehicle) => vehicle.plate}
+        onDelete={isManager ? vehiclesApi.remove : undefined}
+        createForm={isManager ? createForm : undefined}
+        editForm={isManager ? editForm : undefined}
+        rowActions={rowActions}
+      />
+      {historyOf && <VehicleHistoryModal vehicle={historyOf} onClose={closeHistory} />}
+    </>
   );
 }

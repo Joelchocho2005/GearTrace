@@ -28,7 +28,7 @@ export const ALEXA_MESSAGES = {
   help: (): AlexaOutputSpeech =>
     plain('Puedes decirme "busca filtro de aceite" o "qué piezas tienen stock bajo". ¿Cómo puedo ayudarte?'),
 
-  goodbye: (): AlexaOutputSpeech => plain('Hasta luego. GearTrace listo.'),
+  goodbye: (): AlexaOutputSpeech => plain('Hasta luego, GearTrace fuera.'),
 
   fallback: (): AlexaOutputSpeech =>
     plain('No entendí bien. Intenta decir "busca" seguido del nombre de la pieza.'),

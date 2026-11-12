@@ -16,6 +16,10 @@ import ProveedoresPage from './pages/ProveedoresPage'
 import ComprasPage from './pages/ComprasPage'
 import FacturacionPage from './pages/FacturacionPage'
 import ProveedorPortalPage from './pages/ProveedorPortalPage'
+import ReposicionPage from './pages/ReposicionPage'
+import CatalogoPage from './pages/CatalogoPage'
+import ConfiguracionPage from './pages/ConfiguracionPage'
+import AuditoriaPage from './pages/AuditoriaPage'
 import { AppRoute, ROUTE_ROLES } from './routes/routeRoles'
 
 /** Vista de cada ruta protegida; los roles salen de ROUTE_ROLES. */
@@ -30,10 +34,15 @@ const protectedRoutes: Record<AppRoute, ReactNode> = {
   citas: <CitasPage />,
   // Abastecimiento (ABA)
   proveedores: <ProveedoresPage />,
+  catalogo: <CatalogoPage />,
+  reposicion: <ReposicionPage />,
   compras: <ComprasPage />,
   // Facturación (FIN)
   facturacion: <FacturacionPage />,
   'portal-proveedor': <ProveedorPortalPage />,
+  // Administración
+  configuracion: <ConfiguracionPage />,
+  auditoria: <AuditoriaPage />,
 }
 
 /** Rutas anteriores en inglés: redirigen a la ruta canónica en español. */

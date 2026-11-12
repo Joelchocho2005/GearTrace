@@ -1,8 +1,10 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AppointmentStatus } from '@prisma/client';
+import { AppointmentStatus, InvoiceStatus } from '@prisma/client';
+import { assertSlotAvailable, lockAgenda } from '../appointments/appointment-capacity';
 import { toFutureDate } from '../common/dates';
 import { USER_SUMMARY, WORK_ORDER_SUMMARY } from '../common/selects';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
@@ -16,7 +18,10 @@ const OPEN_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = [
 
 @Injectable()
 export class ClientService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settings: SettingsService,
+  ) {}
 
   findMyVehicles(ownerId: number) {
     return this.prisma.vehicle.findMany({
@@ -41,13 +46,15 @@ export class ClientService {
       throw new NotFoundException('El vehículo no pertenece al cliente autenticado');
     }
 
-    return this.prisma.appointment.create({
-      data: {
-        scheduledAt: toFutureDate(dto.scheduledAt),
-        reason: dto.reason,
-        vehicleId: dto.vehicleId,
-      },
-      include: { vehicle: true },
+    const scheduledAt = toFutureDate(dto.scheduledAt);
+    // Solicitar cita: queda AGENDADA hasta que el GERENTE la confirme; respeta el cupo.
+    return this.prisma.$transaction(async (tx) => {
+      await lockAgenda(tx);
+      await assertSlotAvailable(tx, await this.settings.get(tx), scheduledAt);
+      return tx.appointment.create({
+        data: { scheduledAt, reason: dto.reason, vehicleId: dto.vehicleId },
+        include: CLIENT_APPOINTMENT_INCLUDE,
+      });
     });
   }
 
@@ -57,14 +64,15 @@ export class ClientService {
    */
   async rescheduleAppointment(ownerId: number, id: number, dto: RescheduleAppointmentDto) {
     await this.findOpenAppointment(ownerId, id);
-    return this.prisma.appointment.update({
-      where: { id },
-      data: {
-        scheduledAt: toFutureDate(dto.scheduledAt),
-        reason: dto.reason,
-        status: AppointmentStatus.AGENDADA,
-      },
-      include: CLIENT_APPOINTMENT_INCLUDE,
+    const scheduledAt = toFutureDate(dto.scheduledAt);
+    return this.prisma.$transaction(async (tx) => {
+      await lockAgenda(tx);
+      await assertSlotAvailable(tx, await this.settings.get(tx), scheduledAt, id);
+      return tx.appointment.update({
+        where: { id },
+        data: { scheduledAt, reason: dto.reason, status: AppointmentStatus.AGENDADA },
+        include: CLIENT_APPOINTMENT_INCLUDE,
+      });
     });
   }
 
@@ -83,7 +91,13 @@ export class ClientService {
       include: {
         vehicle: true,
         mechanic: USER_SUMMARY,
-        parts: { include: { part: true } },
+        parts: { include: { part: { select: { id: true, name: true, code: true } } } },
+        activities: { select: { id: true, description: true, hours: true, laborRate: true, performedAt: true } },
+        // Solo el comprobante vigente (las anuladas son internas).
+        invoices: {
+          where: { status: { not: InvoiceStatus.ANULADA } },
+          select: { id: true, number: true, status: true, total: true, paidAmount: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });

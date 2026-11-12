@@ -24,7 +24,10 @@ const EMPTY_FORM: FormState = { vehicleId: '', description: '', mileage: '', est
 const fieldClass =
   'w-full rounded-xl px-4 py-2.5 text-sm text-white disabled:opacity-50 glass-input';
 
-/** Formulario de nueva OT. El código OT-YYYY-NNN lo asigna el backend. */
+/**
+ * Registrar orden de trabajo (solo GERENTE, ERS). El código OT-YYYY-NNN lo
+ * asigna el backend; el mecánico puede asignarse ahora o después.
+ */
 export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderModalProps) {
   const { user } = useAuth();
   const isManager = user?.role === 'GERENTE';
@@ -41,7 +44,6 @@ export default function NewWorkOrderModal({ onClose, onCreated }: NewWorkOrderMo
       try {
         const [vehicleList, userList] = await Promise.all([
           vehiclesApi.list(),
-          // Solo el GERENTE puede listar usuarios y asignar a otro mecánico.
           isManager ? usersApi.list() : Promise.resolve<AppUser[]>([]),
         ]);
         if (!active) return;

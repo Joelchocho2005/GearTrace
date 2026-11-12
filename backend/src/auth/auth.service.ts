@@ -6,10 +6,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, Role, User } from '@prisma/client';
 import { hashOptionalPassword, hashPassword, verifyPassword } from '../common/password';
 import { rethrowAsConflict } from '../common/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
+import { updateUserReleasingOrders } from '../users/mechanic-status';
 import { assertSupplierLink } from '../users/supplier-link';
 import { JwtPayload } from './auth.types';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
@@ -46,6 +48,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly events: EventEmitter2,
   ) {}
 
   // ── Registro y login ───────────────────────────────────────
@@ -110,11 +113,14 @@ export class AuthService {
 
   async toggleUserActive(userId: number, isActive: boolean) {
     await this.ensureUserExists(userId);
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { isActive },
-      select: { id: true, name: true, email: true, role: true, isActive: true },
-    });
+    // Desactivar a un mecánico libera sus órdenes abiertas para reasignarlas.
+    return updateUserReleasingOrders(this.prisma, this.events, userId, (tx) =>
+      tx.user.update({
+        where: { id: userId },
+        data: { isActive },
+        select: { id: true, name: true, email: true, role: true, isActive: true },
+      }),
+    );
   }
 
   /** Cambiar solo el rol no permite crear/romper el vínculo con un proveedor. */
@@ -130,11 +136,13 @@ export class AuthService {
     if (role !== Role.PROVEEDOR && current.supplierId) {
       throw new ConflictException('Desvincula el proveedor antes de cambiar este rol');
     }
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { role },
-      select: { id: true, name: true, email: true, role: true },
-    });
+    return updateUserReleasingOrders(this.prisma, this.events, userId, (tx) =>
+      tx.user.update({
+        where: { id: userId },
+        data: { role },
+        select: { id: true, name: true, email: true, role: true },
+      }),
+    );
   }
 
   async updateUser(userId: number, dto: UpdateUserDto) {
@@ -149,19 +157,22 @@ export class AuthService {
       dto.supplierId ?? existing.supplierId,
     );
 
+    const password = await hashOptionalPassword(dto.password);
     try {
-      return await this.prisma.user.update({
-        where: { id: userId },
-        data: { ...dto, password: await hashOptionalPassword(dto.password) },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          isActive: true,
-          updatedAt: true,
-        },
-      });
+      return await updateUserReleasingOrders(this.prisma, this.events, userId, (tx) =>
+        tx.user.update({
+          where: { id: userId },
+          data: { ...dto, password },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            isActive: true,
+            updatedAt: true,
+          },
+        }),
+      );
     } catch (error) {
       rethrowAsConflict(error, { P2002: 'El correo electrónico ya está registrado' });
     }

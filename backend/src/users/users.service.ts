@@ -7,7 +7,9 @@ import { Prisma, Role } from '@prisma/client';
 import { hashOptionalPassword, hashPassword } from '../common/password';
 import { rethrowAsConflict } from '../common/prisma-errors';
 import { USER_SUMMARY_SELECT } from '../common/selects';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service';
+import { updateUserReleasingOrders } from './mechanic-status';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 import { assertSupplierLink } from './supplier-link';
 
@@ -27,7 +29,10 @@ export const USER_SELECT = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   findAll() {
     return this.prisma.user.findMany({
@@ -75,12 +80,11 @@ export class UsersService {
       dto.role ?? current.role,
       dto.supplierId ?? current.supplierId,
     );
+    const password = await hashOptionalPassword(dto.password);
     try {
-      return await this.prisma.user.update({
-        where: { id },
-        data: { ...dto, password: await hashOptionalPassword(dto.password) },
-        select: USER_SELECT,
-      });
+      return await updateUserReleasingOrders(this.prisma, this.events, id, (tx) =>
+        tx.user.update({ where: { id }, data: { ...dto, password }, select: USER_SELECT }),
+      );
     } catch (error) {
       rethrowAsConflict(error, { P2002: DUPLICATE_EMAIL });
     }

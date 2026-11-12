@@ -48,9 +48,15 @@ export class CreatePartDto {
   @Min(0)
   minStock?: number;
 
-  /** Precio unitario de referencia; se congela en UsedPart al consumir la pieza. */
+  /** Precio unitario de VENTA; se congela en UsedPart al consumir la pieza. */
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   unitPrice?: number;
+
+  /** Costo unitario inicial; luego se recalcula (promedio ponderado) al recibir compras. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  costPrice?: number;
 }

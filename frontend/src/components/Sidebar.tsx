@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
+  BookOpen,
   CalendarDays,
   Car,
   ClipboardList,
@@ -7,7 +8,10 @@ import {
   LayoutDashboard,
   LogOut,
   Package,
+  PackagePlus,
   Receipt,
+  Settings,
+  ShieldCheck,
   ShoppingCart,
   Truck,
   Users,
@@ -43,11 +47,15 @@ export const navigationItems: NavigationItem[] = [
   { label: 'Citas', path: '/citas', icon: CalendarDays, roles: ROUTE_ROLES.citas, section: 'Servicio técnico' },
   { label: 'Inventario', path: '/inventory', icon: Package, roles: ROUTE_ROLES.inventory, section: 'Abastecimiento' },
   { label: 'Proveedores', path: '/proveedores', icon: Truck, roles: ROUTE_ROLES.proveedores, section: 'Abastecimiento' },
+  { label: 'Reposición', path: '/reposicion', icon: PackagePlus, roles: ROUTE_ROLES.reposicion, section: 'Abastecimiento' },
+  { label: 'Catálogo de proveedores', path: '/catalogo', icon: BookOpen, roles: ROUTE_ROLES.catalogo, section: 'Abastecimiento' },
   { label: 'Compras', path: '/compras', icon: ShoppingCart, roles: ROUTE_ROLES.compras, section: 'Abastecimiento' },
   { label: 'Facturación', path: '/facturacion', icon: Receipt, roles: ROUTE_ROLES.facturacion, section: 'Administración' },
   { label: 'Pedidos recibidos', path: '/portal-proveedor', icon: Truck, roles: ROUTE_ROLES['portal-proveedor'], section: 'Abastecimiento' },
   { label: 'Usuarios', path: '/usuarios', icon: Users, roles: ROUTE_ROLES.usuarios, section: 'Administración' },
   { label: 'Historial de búsquedas', path: '/logs', icon: History, roles: ROUTE_ROLES.logs, section: 'Administración' },
+  { label: 'Auditoría', path: '/auditoria', icon: ShieldCheck, roles: ROUTE_ROLES.auditoria, section: 'Administración' },
+  { label: 'Configuración', path: '/configuracion', icon: Settings, roles: ROUTE_ROLES.configuracion, section: 'Administración' },
 ];
 
 /** Ítem de menú que corresponde a una ruta (para el título del encabezado). */

@@ -8,15 +8,37 @@ import type { Role } from '../contexts/AuthContext';
 export type DecimalString = string;
 export type ISODateString = string;
 
-export type WorkOrderStatus = 'EN_DIAGNOSTICO' | 'EN_PROCESO' | 'ESPERA_REPUESTOS' | 'CONCLUIDO';
-export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA';
+/** Ciclo de la OT (backend: src/work-orders/work-order-rules.ts). */
+export type WorkOrderStatus =
+  | 'EN_DIAGNOSTICO'
+  | 'ESPERA_APROBACION'
+  | 'EN_PROCESO'
+  | 'ESPERA_REPUESTOS'
+  | 'CONCLUIDO'
+  | 'ENTREGADA'
+  | 'CANCELADA';
+export type AppointmentStatus = 'AGENDADA' | 'CONFIRMADA' | 'COMPLETADA' | 'CANCELADA' | 'NO_ASISTIO';
 export type PurchaseOrderStatus =
   | 'PENDIENTE'
   | 'CONFIRMADA'
+  | 'RECIBIDA_PARCIAL'
   | 'RECIBIDA'
   | 'CANCELADA'
   | 'RECHAZADA';
-export type InvoiceStatus = 'PENDIENTE' | 'PAGADA';
+/** PARCIAL y PAGADA se derivan de los pagos; ANULADA nunca se borra. */
+export type InvoiceStatus = 'PENDIENTE' | 'PARCIAL' | 'PAGADA' | 'ANULADA';
+export type InvoiceLineType = 'MANO_OBRA' | 'REPUESTO';
+export type PaymentMethod = 'EFECTIVO' | 'TARJETA' | 'TRANSFERENCIA' | 'OTRO';
+export type StockMovementType =
+  | 'INVENTARIO_INICIAL'
+  | 'ENTRADA_COMPRA'
+  | 'SALIDA_OT'
+  | 'DEVOLUCION_OT'
+  | 'AJUSTE'
+  | 'DEVOLUCION_PROVEEDOR';
+/** Movimientos que se registran a mano (el resto los generan OT y compras). */
+export type ManualStockMovementType = Extract<StockMovementType, 'AJUSTE' | 'DEVOLUCION_PROVEEDOR'>;
+export type ReplenishmentStatus = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA' | 'ATENDIDA';
 
 /** Respuesta de GET /users/lookup?role= (selectores de formularios). */
 export type UserLookup = Pick<UserSummary, 'id' | 'name' | 'email'>;
@@ -118,8 +140,10 @@ export interface InventoryPart {
   code: string;
   quantity: number;
   minStock: number;
-  /** Se congela en cada OT al consumir la pieza. */
+  /** Precio de venta; se congela en cada OT al consumir la pieza. */
   unitPrice: DecimalString | null;
+  /** Costo promedio ponderado (se recalcula al recibir compras). */
+  costPrice: DecimalString | null;
   keywords: string[];
   photoUrl: string | null;
   box?: { id: number; name: string; ledIndex: number; location?: string | null };
@@ -145,15 +169,19 @@ export interface BoxPayload {
   colorHex?: string;
 }
 
-/** Respuesta de POST /inventory/parts/:id/locate (el LED se enciende en paralelo). */
+/**
+ * Respuesta de POST /inventory/parts/:id/locate (el LED se enciende en
+ * paralelo; `location` sirve aunque el hardware falle).
+ */
 export interface LocatePartResponse {
   partId: number;
   partName: string;
   boxName: string;
   ledIndex: number;
+  location: string | null;
 }
 
-/** POST /inventory/parts y PATCH /inventory/parts/:id. */
+/** POST /inventory/parts. */
 export interface PartPayload {
   name: string;
   code: string;
@@ -161,12 +189,40 @@ export interface PartPayload {
   boxId: number;
   minStock: number;
   unitPrice?: number;
+  costPrice?: number;
   keywords: string[];
 }
 
+/** PATCH /inventory/parts/:id — el stock solo cambia con `adjustStock` (kardex). */
+export type UpdatePartPayload = Partial<Omit<PartPayload, 'quantity'>>;
+
+/** POST /inventory/parts/:id/adjust — `delta` con signo y motivo obligatorio. */
+export interface AdjustStockPayload {
+  type: ManualStockMovementType;
+  delta: number;
+  reason: string;
+}
+
+/** Kardex (GET /inventory/movements). `quantity` con signo. */
+export interface StockMovement {
+  id: number;
+  type: StockMovementType;
+  quantity: number;
+  balanceAfter: number;
+  reason: string | null;
+  partId: number;
+  workOrderId: number | null;
+  purchaseOrderId: number | null;
+  part?: { id: number; name: string; code: string };
+  user?: UserSummary | null;
+  createdAt: ISODateString;
+}
+
+/** `locate` (por defecto true) enciende el LED de la caja (pick-to-light). */
 export interface AddUsedPartPayload {
   partId: number;
   quantity: number;
+  locate?: boolean;
 }
 
 // ── Órdenes de trabajo ──────────────────────────────────────
@@ -177,8 +233,22 @@ export interface UsedPart {
   /** Precio unitario congelado al consumir la pieza. */
   unitPrice: DecimalString | null;
   partId: number;
-  part?: { id: number; name: string; code: string; quantity: number };
+  part?: { id: number; name: string; code: string; quantity?: number };
 }
+
+/** Actividad de servicio: horas × tarifa congelada = mano de obra. */
+export interface ServiceActivity {
+  id: number;
+  description: string;
+  hours: DecimalString;
+  laborRate: DecimalString;
+  performedAt: ISODateString;
+  mechanicId?: number;
+  mechanic?: UserSummary;
+}
+
+/** Comprobante resumido dentro de una OT. */
+export type WorkOrderInvoiceSummary = Pick<Invoice, 'id' | 'number' | 'status' | 'total' | 'paidAmount'>;
 
 export interface WorkOrder {
   id: number;
@@ -195,31 +265,84 @@ export interface WorkOrder {
   vehicle?: Vehicle;
   mechanic?: UserSummary | null;
   parts?: UsedPart[];
-  invoice?: Invoice | null;
+  activities?: ServiceActivity[];
+  /** Historial de comprobantes; como máximo uno no ANULADA. */
+  invoices?: WorkOrderInvoiceSummary[];
+  replenishmentRequests?: (Pick<ReplenishmentRequest, 'id' | 'status' | 'quantity'> & {
+    part: { id: number; name: string };
+  })[];
+  quoteSentAt: ISODateString | null;
+  quoteApproved: boolean | null;
+  quoteDecidedAt: ISODateString | null;
+  cancelReason: string | null;
+  cancelledAt: ISODateString | null;
+  deliveredAt: ISODateString | null;
   createdAt: ISODateString;
   updatedAt: ISODateString;
   startedAt: ISODateString | null;
   completedAt: ISODateString | null;
 }
 
-/** `number` (OT-YYYY-NNN) lo genera el backend. */
+/**
+ * Solo GERENTE. `number` (OT-YYYY-NNN) lo genera el backend; los repuestos se
+ * registran tras aprobar el presupuesto.
+ */
 export interface CreateWorkOrderPayload {
   description: string;
   estimatedCost?: number;
   mileage?: number;
   vehicleId: number;
   mechanicId?: number;
-  parts?: { partId: number; quantity: number }[];
 }
 
-/** `CONCLUIDO` no se acepta aquí: el cierre usa /service/work-orders/:id/close. */
+/** Transiciones manuales (el resto tiene acción propia en `workOrderActionsApi`). */
+export type ManualWorkOrderStatus = Extract<WorkOrderStatus, 'EN_PROCESO' | 'ESPERA_REPUESTOS'>;
+
 export interface UpdateWorkOrderPayload {
   description?: string;
   diagnosis?: string;
+  /** Solo antes de enviar el presupuesto. */
   estimatedCost?: number;
   mileage?: number;
-  mechanicId?: number;
-  status?: Exclude<WorkOrderStatus, 'CONCLUIDO'>;
+  status?: ManualWorkOrderStatus;
+}
+
+/** POST /work-orders/:id/quote — EN_DIAGNOSTICO → ESPERA_APROBACION. */
+export interface SendQuotePayload {
+  diagnosis?: string;
+  estimatedCost: number;
+}
+
+export interface CreateServiceActivityPayload {
+  description: string;
+  hours: number;
+  performedAt?: ISODateString;
+}
+
+// ── Reposición ──────────────────────────────────────────────
+export interface ReplenishmentRequest {
+  id: number;
+  quantity: number;
+  reason: string | null;
+  status: ReplenishmentStatus;
+  reviewNote: string | null;
+  reviewedAt: ISODateString | null;
+  partId: number;
+  workOrderId: number | null;
+  purchaseOrderId: number | null;
+  part?: { id: number; name: string; code: string; quantity: number; minStock: number };
+  requestedBy?: UserSummary;
+  reviewedBy?: UserSummary | null;
+  workOrder?: { id: number; number: string; status: WorkOrderStatus } | null;
+  purchaseOrder?: { id: number; number: string; status: PurchaseOrderStatus } | null;
+  createdAt: ISODateString;
+}
+
+export interface CreateReplenishmentPayload {
+  partId: number;
+  quantity: number;
+  reason?: string;
+  workOrderId?: number;
 }
 
 // ── Proveedores ─────────────────────────────────────────────
@@ -236,6 +359,25 @@ export interface Supplier {
   updatedAt: ISODateString;
 }
 
+/** Ítem del catálogo del proveedor (precio y plazo por pieza). */
+export interface SupplierPart {
+  id: number;
+  supplierCode: string | null;
+  price: DecimalString;
+  leadTimeDays: number | null;
+  supplierId: number;
+  partId: number;
+  part?: { id: number; name: string; code: string; quantity: number; minStock: number };
+  supplier?: { id: number; name: string };
+}
+
+export interface UpsertSupplierPartPayload {
+  partId: number;
+  price: number;
+  supplierCode?: string;
+  leadTimeDays?: number;
+}
+
 export interface CreateSupplierPayload {
   name: string;
   taxId?: string;
@@ -250,6 +392,8 @@ export type UpdateSupplierPayload = Partial<CreateSupplierPayload>;
 export interface PurchaseOrderItem {
   id: number;
   quantity: number;
+  /** Unidades ya recibidas (recepción parcial). */
+  receivedQuantity: number;
   unitPrice: DecimalString | null;
   partId: number;
   part?: { id: number; name: string; code: string; quantity: number };
@@ -265,22 +409,34 @@ export interface PurchaseOrder {
   supplierId: number;
   supplier?: Supplier;
   items?: PurchaseOrderItem[];
+  replenishmentRequests?: { id: number; status: ReplenishmentStatus; quantity: number; partId: number }[];
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
 
-/** `number` (OC-YYYY-NNN) lo genera el backend. */
+/**
+ * `number` (OC-YYYY-NNN) lo genera el backend. Cada pieza debe estar en el
+ * catálogo del proveedor y en/bajo su mínimo o cubierta por una solicitud
+ * APROBADA de `replenishmentRequestIds`.
+ */
 export interface CreatePurchasePayload {
   supplierId: number;
   items: { partId: number; quantity: number; unitPrice?: number }[];
+  replenishmentRequestIds?: number[];
 }
 
-/** `RECIBIDA` no se acepta aquí: la recepción usa /suppliers/purchase-orders/:id/receive. */
+/** Cambiar proveedor (solo PENDIENTE) o cancelar lo pendiente. */
 export interface UpdatePurchasePayload {
   supplierId?: number;
-  status?: Exclude<PurchaseOrderStatus, 'RECIBIDA'>;
+  status?: 'CANCELADA';
 }
 
+/** Sin `items` se recibe todo lo pendiente. */
+export interface ReceivePurchasePayload {
+  items?: { itemId: number; quantity: number }[];
+}
+
+/** `expectedDeliveryAt` es obligatoria al confirmar. */
 export interface SupplierPurchaseResponsePayload {
   status: 'CONFIRMADA' | 'RECHAZADA';
   expectedDeliveryAt?: ISODateString;
@@ -323,33 +479,119 @@ export interface SearchLog {
 }
 
 // ── Facturas ────────────────────────────────────────────────
+export interface InvoiceLine {
+  id: number;
+  type: InvoiceLineType;
+  description: string;
+  quantity: DecimalString;
+  unitPrice: DecimalString;
+  amount: DecimalString;
+}
+
+export interface Payment {
+  id: number;
+  amount: DecimalString;
+  method: PaymentMethod;
+  reference: string | null;
+  paidAt: ISODateString;
+  invoiceId: number;
+  receivedBy?: UserSummary;
+  invoice?: { id: number; number: string; status: InvoiceStatus; client?: UserSummary };
+}
+
 export interface Invoice {
   id: number;
   number: string;
   subtotal: DecimalString;
+  taxRate: DecimalString;
   tax: DecimalString;
   total: DecimalString;
+  paidAmount: DecimalString;
   status: InvoiceStatus;
+  notes: string | null;
   issuedAt: ISODateString;
   paidAt: ISODateString | null;
+  voidedAt: ISODateString | null;
+  voidReason: string | null;
   workOrderId: number;
   clientId: number;
   client?: UserSummary;
+  voidedBy?: UserSummary | null;
   workOrder?: WorkOrder;
+  lines?: InvoiceLine[];
+  payments?: Payment[];
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
 
-/** `number` (FAC-YYYY-NNN) lo genera el backend. */
+/** Los montos y líneas los calcula el backend desde la OT. */
 export interface CreateInvoicePayload {
   workOrderId: number;
   clientId?: number;
-  subtotal?: number;
-  tax?: number;
+  notes?: string;
 }
 
 export interface UpdateInvoicePayload {
-  subtotal?: number;
-  tax?: number;
-  status?: InvoiceStatus;
+  notes?: string;
+}
+
+export interface RegisterPaymentPayload {
+  amount: number;
+  method: PaymentMethod;
+  reference?: string;
+}
+
+/** GET /invoices/charges/:workOrderId — Consultar cargos. */
+export interface ChargesPreview {
+  workOrderId: number;
+  number: string;
+  status: WorkOrderStatus;
+  lines: Omit<InvoiceLine, 'id'>[];
+  laborSubtotal: DecimalString;
+  partsSubtotal: DecimalString;
+  subtotal: DecimalString;
+  taxRate: DecimalString;
+  tax: DecimalString;
+  total: DecimalString;
+}
+
+// ── Taller, notificaciones y auditoría ──────────────────────
+export interface WorkshopSettings {
+  laborRatePerHour: DecimalString;
+  /** Fracción (0.15 = 15 %). */
+  taxRate: DecimalString;
+  appointmentSlotMinutes: number;
+  appointmentsPerSlot: number;
+  updatedAt: ISODateString;
+}
+
+export interface UpdateSettingsPayload {
+  laborRatePerHour?: number;
+  taxRate?: number;
+  appointmentSlotMinutes?: number;
+  appointmentsPerSlot?: number;
+}
+
+export interface AppNotification {
+  id: number;
+  title: string;
+  message: string;
+  link: string | null;
+  readAt: ISODateString | null;
+  createdAt: ISODateString;
+}
+
+export interface NotificationInbox {
+  items: AppNotification[];
+  unread: number;
+}
+
+export interface AuditLog {
+  id: number;
+  action: string;
+  entity: string;
+  entityId: number | null;
+  detail: unknown;
+  user?: UserSummary | null;
+  createdAt: ISODateString;
 }

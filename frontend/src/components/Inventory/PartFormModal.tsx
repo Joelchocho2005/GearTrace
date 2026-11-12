@@ -19,10 +19,14 @@ export interface PartFormValues {
   quantity: number;
   boxId: number;
   minStock: number;
-  /** '' = sin precio. Se congela en cada OT al consumir la pieza. */
+  /** Precio de venta; '' = sin precio (no se puede consumir en una OT hasta tenerlo). */
   unitPrice: string;
+  /** Costo unitario; luego se recalcula (promedio ponderado) al recibir compras. */
+  costPrice: string;
   keywords: string[];
 }
+
+const optionalMoney = (value: string) => (value.trim() === '' ? undefined : Number(value));
 
 interface PartFormModalProps {
   isOpen: boolean;
@@ -38,6 +42,7 @@ const emptyForm: PartFormValues = {
   boxId: 0,
   minStock: 1,
   unitPrice: '',
+  costPrice: '',
   keywords: [],
 };
 
@@ -91,13 +96,14 @@ export default function PartFormModal({
     event.preventDefault();
     setIsSubmitting(true);
 
-    const payload: PartPayload = {
+    // El stock no se edita aquí: el inicial va al kardex al crear; luego, "Actualizar stock".
+    const payload: Omit<PartPayload, 'quantity'> = {
       name: form.name.trim(),
       code: form.code.trim(),
-      quantity: form.quantity,
       boxId: form.boxId,
       minStock: form.minStock,
-      unitPrice: form.unitPrice.trim() === '' ? undefined : Number(form.unitPrice),
+      unitPrice: optionalMoney(form.unitPrice),
+      costPrice: optionalMoney(form.costPrice),
       keywords: parseKeywords(keywordsText),
     };
 
@@ -106,7 +112,7 @@ export default function PartFormModal({
         await inventoryApi.updatePart(part.id, payload);
         toast.success('Pieza actualizada correctamente.');
       } else {
-        await inventoryApi.createPart(payload);
+        await inventoryApi.createPart({ ...payload, quantity: form.quantity });
         toast.success('Pieza creada correctamente.');
       }
 
@@ -165,17 +171,26 @@ export default function PartFormModal({
               />
             </label>
 
-            <label className="space-y-2 text-sm text-slate-300">
-              Cantidad
-              <input
-                required
-                min={0}
-                type="number"
-                value={form.quantity}
-                onChange={(event) => updateField('quantity', Number(event.target.value))}
-                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
-              />
-            </label>
+            {part?.id ? (
+              <div className="space-y-2 text-sm text-slate-300">
+                Stock actual
+                <p className="rounded-xl px-3 py-2.5 text-white glass-inset">
+                  {form.quantity} u. <span className="text-xs text-slate-500">· se cambia con "Actualizar stock"</span>
+                </p>
+              </div>
+            ) : (
+              <label className="space-y-2 text-sm text-slate-300">
+                Stock inicial
+                <input
+                  required
+                  min={0}
+                  type="number"
+                  value={form.quantity}
+                  onChange={(event) => updateField('quantity', Number(event.target.value))}
+                  className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
+                />
+              </label>
+            )}
 
             <label className="space-y-2 text-sm text-slate-300">
               Stock mínimo
@@ -190,7 +205,7 @@ export default function PartFormModal({
             </label>
 
             <label className="space-y-2 text-sm text-slate-300">
-              Precio unitario
+              Precio de venta
               <input
                 min={0}
                 step="0.01"
@@ -199,6 +214,20 @@ export default function PartFormModal({
                 placeholder="0.00"
                 value={form.unitPrice}
                 onChange={(event) => updateField('unitPrice', event.target.value)}
+                className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
+              />
+            </label>
+
+            <label className="space-y-2 text-sm text-slate-300">
+              Costo unitario
+              <input
+                min={0}
+                step="0.01"
+                type="number"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={form.costPrice}
+                onChange={(event) => updateField('costPrice', event.target.value)}
                 className="w-full rounded-xl px-3 py-2.5 text-white glass-input"
               />
             </label>

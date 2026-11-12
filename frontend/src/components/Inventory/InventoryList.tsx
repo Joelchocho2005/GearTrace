@@ -1,11 +1,20 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ImagePlus, Lightbulb, Package, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { ImagePlus, Lightbulb, Package, Pencil, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { backendAssetUrl } from '../../api/config';
-import { getApiErrorMessage } from '../../api/errors';
+import { getApiErrorMessage, UserInputError } from '../../api/errors';
 import { inventoryApi } from '../../api/resources';
-import type { InventoryPart } from '../../api/types';
+import type { InventoryPart, ManualStockMovementType } from '../../api/types';
+import { useAuth } from '../../contexts/AuthContext';
+import { requiredNumber, text } from '../../utils/formValues';
+import { STOCK_MOVEMENT_TYPE } from '../../utils/status';
+import ResourceFormModal, { FormValues } from '../ui/ResourceFormModal';
 import PartFormModal, { PartFormValues } from './PartFormModal';
+
+/** Movimientos que el kardex admite a mano (el resto los generan OT y compras). */
+const MANUAL_MOVEMENTS: ManualStockMovementType[] = ['AJUSTE', 'DEVOLUCION_PROVEEDOR'];
+const isManualMovement = (value: string): value is ManualStockMovementType =>
+  MANUAL_MOVEMENTS.some((type) => type === value);
 
 /** Formatos y tamaño que acepta POST /inventory/parts/:id/image. */
 const IMAGE_ACCEPT = 'image/jpeg,image/png,image/gif,image/webp';
@@ -22,10 +31,18 @@ const toFormValues = (part: InventoryPart): PartFormValues => ({
   boxId: part.box?.id ?? 0,
   minStock: part.minStock,
   unitPrice: part.unitPrice ?? '',
+  costPrice: part.costPrice ?? '',
   keywords: part.keywords,
 });
 
+/**
+ * Inventario de piezas. GERENTE y BODEGUERO registran, editan, ajustan stock
+ * (kardex con motivo), suben fotos y eliminan; el MECANICO consulta y ubica.
+ */
 export default function InventoryList() {
+  const { user } = useAuth();
+  const canManage = user?.role === 'GERENTE' || user?.role === 'BODEGUERO';
+  const [adjusting, setAdjusting] = useState<InventoryPart | null>(null);
   const [parts, setParts] = useState<InventoryPart[]>([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -70,7 +87,7 @@ export default function InventoryList() {
       part,
       async () => {
         const result = await inventoryApi.locatePart(part.id);
-        return `LED ${result.ledIndex} encendido en ${result.boxName}.`;
+        return `LED ${result.ledIndex} encendido en ${result.boxName}${result.location ? ` (${result.location})` : ''}.`;
       },
       'No se pudo encender el LED.',
     );
@@ -86,6 +103,19 @@ export default function InventoryList() {
       },
       'No se pudo eliminar la pieza (puede estar usada en órdenes o pedidos).',
     );
+  };
+
+  /** Actualizar stock: ajuste o devolución al proveedor, con motivo. Lanza en error (el modal queda abierto). */
+  const submitAdjustment = async (values: FormValues) => {
+    if (!adjusting) return;
+    const type = text(values, 'type');
+    if (!isManualMovement(type)) throw new UserInputError('Selecciona un tipo de movimiento válido.');
+    const delta = requiredNumber(values, 'delta', 'Cantidad');
+    if (!Number.isInteger(delta) || delta === 0) throw new UserInputError('La cantidad debe ser un entero distinto de 0.');
+    const updated = await inventoryApi.adjustStock(adjusting.id, { type, delta, reason: text(values, 'reason') });
+    setParts((current) => current.map((item) => (item.id === updated.id ? { ...item, quantity: updated.quantity } : item)));
+    toast.success(`Stock de ${adjusting.name}: ${updated.quantity} u.`);
+    setAdjusting(null);
   };
 
   const choosePhoto = (part: InventoryPart) => {
@@ -138,23 +168,25 @@ export default function InventoryList() {
             <div>
               <h2 className="text-2xl font-bold text-white">Inventario</h2>
               <p className="text-sm text-slate-400">
-                Gestiona las piezas almacenadas.
+                {canManage ? 'Gestiona las piezas almacenadas y su stock (kardex).' : 'Consulta piezas y ubica su caja.'}
               </p>
             </div>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            setSelectedPart(null);
-            setIsModalOpen(true);
-          }}
-          className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white transition-colors focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900 btn-primary"
-        >
-          <Plus size={18} />
-          Nueva Pieza
-        </button>
+        {canManage && (
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedPart(null);
+              setIsModalOpen(true);
+            }}
+            className="inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-semibold text-white transition-colors focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2 focus:ring-offset-slate-900 btn-primary"
+          >
+            <Plus size={18} />
+            Nueva Pieza
+          </button>
+        )}
       </div>
 
       <div className="glass rounded-2xl p-4">
@@ -235,25 +267,32 @@ export default function InventoryList() {
                         <button type="button" title="Ubicar (encender LED)" aria-label={`Ubicar ${part.name}`} disabled={busyPartId === part.id} onClick={() => void locatePart(part)} className={iconButtonClass}>
                           <Lightbulb size={16} />
                         </button>
-                        <button type="button" title="Subir foto" aria-label={`Subir foto de ${part.name}`} disabled={busyPartId === part.id} onClick={() => choosePhoto(part)} className={iconButtonClass}>
-                          <ImagePlus size={16} />
-                        </button>
-                        <button
-                          type="button"
-                          title="Editar"
-                          aria-label={`Editar ${part.name}`}
-                          disabled={busyPartId === part.id}
-                          onClick={() => {
-                            setSelectedPart(toFormValues(part));
-                            setIsModalOpen(true);
-                          }}
-                          className={iconButtonClass}
-                        >
-                          <Pencil size={16} />
-                        </button>
-                        <button type="button" title="Eliminar" aria-label={`Eliminar ${part.name}`} disabled={busyPartId === part.id} onClick={() => removePart(part)} className={`${iconButtonClass} hover:text-red-400`}>
-                          <Trash2 size={16} />
-                        </button>
+                        {canManage && (
+                          <>
+                            <button type="button" title="Actualizar stock (ajuste con motivo)" aria-label={`Ajustar stock de ${part.name}`} disabled={busyPartId === part.id} onClick={() => setAdjusting(part)} className={iconButtonClass}>
+                              <SlidersHorizontal size={16} />
+                            </button>
+                            <button type="button" title="Subir foto" aria-label={`Subir foto de ${part.name}`} disabled={busyPartId === part.id} onClick={() => choosePhoto(part)} className={iconButtonClass}>
+                              <ImagePlus size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Editar"
+                              aria-label={`Editar ${part.name}`}
+                              disabled={busyPartId === part.id}
+                              onClick={() => {
+                                setSelectedPart(toFormValues(part));
+                                setIsModalOpen(true);
+                              }}
+                              className={iconButtonClass}
+                            >
+                              <Pencil size={16} />
+                            </button>
+                            <button type="button" title="Eliminar" aria-label={`Eliminar ${part.name}`} disabled={busyPartId === part.id} onClick={() => removePart(part)} className={`${iconButtonClass} hover:text-red-400`}>
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -265,6 +304,34 @@ export default function InventoryList() {
       </div>
 
       <input ref={fileInputRef} type="file" accept={IMAGE_ACCEPT} className="hidden" onChange={uploadPhoto} />
+
+      {adjusting && (
+        <ResourceFormModal
+          title={`Actualizar stock · ${adjusting.name} (actual: ${adjusting.quantity})`}
+          submitLabel="Registrar movimiento"
+          fields={[
+            {
+              name: 'type',
+              label: 'Tipo',
+              type: 'select',
+              required: true,
+              options: MANUAL_MOVEMENTS.map((type) => ({ value: type, label: STOCK_MOVEMENT_TYPE[type].label })),
+            },
+            {
+              name: 'delta',
+              label: 'Cantidad (+ entra / − sale)',
+              type: 'number',
+              required: true,
+              step: '1',
+              help: 'La devolución al proveedor siempre resta (usa un número negativo).',
+            },
+            { name: 'reason', label: 'Motivo', type: 'textarea', required: true, maxLength: 255 },
+          ]}
+          initialValues={{ type: 'AJUSTE', delta: '', reason: '' }}
+          onSubmit={submitAdjustment}
+          onClose={() => setAdjusting(null)}
+        />
+      )}
 
       <PartFormModal
         isOpen={isModalOpen}

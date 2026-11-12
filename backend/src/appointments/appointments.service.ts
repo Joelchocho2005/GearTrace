@@ -1,8 +1,18 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AppointmentStatus } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Appointment, AppointmentStatus } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
 import { toFutureDate } from '../common/dates';
 import { USER_SUMMARY, WORK_ORDER_SUMMARY } from '../common/selects';
+import { AppointmentChangedEvent, DOMAIN_EVENTS } from '../events/domain-events';
 import { PrismaService } from '../prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
+import { assertSlotAvailable, lockAgenda } from './appointment-capacity';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
 
 const APPOINTMENT_INCLUDE = {
@@ -10,14 +20,21 @@ const APPOINTMENT_INCLUDE = {
   workOrder: WORK_ORDER_SUMMARY,
 } as const;
 
+/** Estados finales: la cita ya no se edita. */
 const FINAL_STATUSES: AppointmentStatus[] = [
   AppointmentStatus.COMPLETADA,
   AppointmentStatus.CANCELADA,
+  AppointmentStatus.NO_ASISTIO,
 ];
 
 @Injectable()
 export class AppointmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settings: SettingsService,
+    private readonly audit: AuditService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   findAll() {
     return this.prisma.appointment.findMany({
@@ -35,38 +52,96 @@ export class AppointmentsService {
     return appointment;
   }
 
-  async create(dto: CreateAppointmentDto) {
+  /** Programar cita (GERENTE): fecha futura y con cupo en la agenda. */
+  async create(dto: CreateAppointmentDto, userId: number) {
     await this.ensureVehicle(dto.vehicleId);
-    return this.prisma.appointment.create({
-      data: {
-        scheduledAt: toFutureDate(dto.scheduledAt),
-        reason: dto.reason,
-        vehicleId: dto.vehicleId,
-      },
-      include: APPOINTMENT_INCLUDE,
+    const scheduledAt = toFutureDate(dto.scheduledAt);
+    const appointment = await this.prisma.$transaction(async (tx) => {
+      await lockAgenda(tx);
+      await assertSlotAvailable(tx, await this.settings.get(tx), scheduledAt);
+      const created = await tx.appointment.create({
+        data: { scheduledAt, reason: dto.reason, vehicleId: dto.vehicleId, status: AppointmentStatus.CONFIRMADA },
+        include: APPOINTMENT_INCLUDE,
+      });
+      await this.audit.record(
+        { action: 'APPOINTMENT_CREATED', entity: 'Appointment', entityId: created.id, userId },
+        tx,
+      );
+      return created;
     });
+    this.emitChanged(appointment, appointment.vehicle.ownerId);
+    return appointment;
   }
 
-  async update(id: number, dto: UpdateAppointmentDto) {
-    const appointment = await this.findOne(id);
-    if (FINAL_STATUSES.includes(appointment.status)) {
-      throw new ConflictException('Una cita completada o cancelada no puede modificarse');
+  /**
+   * Programar/confirmar/reprogramar (GERENTE). Reglas:
+   *  - Citas finales no se editan.
+   *  - COMPLETADA solo vía "Generar OT" (POST /:id/work-order).
+   *  - NO_ASISTIO solo si la hora de la cita ya pasó.
+   *  - Una nueva fecha debe ser futura y tener cupo.
+   */
+  async update(id: number, dto: UpdateAppointmentDto, userId: number) {
+    const current = await this.findOne(id);
+    if (FINAL_STATUSES.includes(current.status)) {
+      throw new ConflictException('Una cita completada, cancelada o marcada como no asistida no puede modificarse');
+    }
+    if (dto.status === AppointmentStatus.COMPLETADA) {
+      throw new BadRequestException('Una cita se completa al generar su orden de trabajo (POST /api/appointments/:id/work-order)');
+    }
+    if (dto.status === AppointmentStatus.NO_ASISTIO && current.scheduledAt > new Date()) {
+      throw new ConflictException('Solo se marca "No asistió" cuando ya pasó la hora de la cita');
     }
     if (dto.vehicleId !== undefined) await this.ensureVehicle(dto.vehicleId);
+    const scheduledAt = dto.scheduledAt ? toFutureDate(dto.scheduledAt) : undefined;
 
-    return this.prisma.appointment.update({
-      where: { id },
-      data: {
-        ...dto,
-        scheduledAt: dto.scheduledAt ? toFutureDate(dto.scheduledAt) : undefined,
-      },
-      include: APPOINTMENT_INCLUDE,
+    const appointment = await this.prisma.$transaction(async (tx) => {
+      if (scheduledAt) {
+        await lockAgenda(tx);
+        await assertSlotAvailable(tx, await this.settings.get(tx), scheduledAt, id);
+      }
+      const updated = await tx.appointment.update({
+        where: { id },
+        data: { ...dto, scheduledAt },
+        include: APPOINTMENT_INCLUDE,
+      });
+      if (dto.status !== undefined && dto.status !== current.status) {
+        await this.audit.record(
+          {
+            action: 'APPOINTMENT_STATUS',
+            entity: 'Appointment',
+            entityId: id,
+            userId,
+            detail: { from: current.status, to: dto.status },
+          },
+          tx,
+        );
+      }
+      return updated;
+    });
+    this.emitChanged(appointment, appointment.vehicle.ownerId);
+    return appointment;
+  }
+
+  /** Solo se eliminan citas sin OT generada; el historial se conserva cancelando. */
+  async remove(id: number, userId: number) {
+    const appointment = await this.findOne(id);
+    if (appointment.workOrder) {
+      throw new ConflictException('La cita ya generó una orden de trabajo; no puede eliminarse');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.appointment.delete({ where: { id } });
+      await this.audit.record({ action: 'APPOINTMENT_DELETED', entity: 'Appointment', entityId: id, userId }, tx);
     });
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
-    await this.prisma.appointment.delete({ where: { id } });
+  private emitChanged(appointment: Appointment, ownerId: number) {
+    const event: AppointmentChangedEvent = {
+      appointmentId: appointment.id,
+      ownerId,
+      status: appointment.status,
+      scheduledAt: appointment.scheduledAt,
+    };
+    this.events.emit(DOMAIN_EVENTS.APPOINTMENT_CHANGED, event);
   }
 
   private async ensureVehicle(id: number) {

@@ -4,6 +4,7 @@ import {
   Get,
   Patch,
   Post,
+  Query,
   Body,
   Param,
   ParseIntPipe,
@@ -26,14 +27,18 @@ import { CreatePartDto } from './dto/create-part.dto';
 import { CreateBoxDto } from './dto/create-box.dto';
 import { UpdatePartDto } from './dto/update-part.dto';
 import { UpdateBoxDto } from './dto/update-box.dto';
-import { Roles } from '../auth/decorators/auth.decorators';
+import { CurrentUser, Roles } from '../auth/decorators/auth.decorators';
+import { AuthenticatedUser } from '../auth/auth.types';
+import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { MovementsQueryDto } from './dto/movements-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 
 /**
  * Inventario: solo personal del taller autenticado. Alexa no usa estas rutas
  * (consume InventoryService directamente desde /api/webhook/alexa).
- * Eliminar cajas o piezas queda reservado al GERENTE.
+ * ERS: consultar inventario/buscar/localizar también MECANICO (solo lectura);
+ * registrar, actualizar, ajustar stock y ubicaciones: GERENTE y BODEGUERO.
  */
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -45,12 +50,14 @@ export class InventoryController {
 
   /** GET /api/inventory/boxes → Lista todas las cajas con sus piezas */
   @Get('boxes')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
   findAllBoxes() {
     return this.inventoryService.findAllBoxes();
   }
 
   /** GET /api/inventory/boxes/:id → Detalle de una caja */
   @Get('boxes/:id')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
   findOneBox(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.findOneBox(id);
   }
@@ -81,8 +88,9 @@ export class InventoryController {
 
   // ── Parts ─────────────────────────────────────────────────
 
-  /** GET /api/inventory/parts → Lista todas las piezas */
+  /** GET /api/inventory/parts → Lista todas las piezas (Consultar inventario) */
   @Get('parts')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
   findAllParts() {
     return this.inventoryService.findAllParts();
   }
@@ -93,8 +101,15 @@ export class InventoryController {
     return this.inventoryService.getLowStockParts();
   }
 
+  /** GET /api/inventory/movements?partId= → Kardex (movimientos de stock) */
+  @Get('movements')
+  movements(@Query() query: MovementsQueryDto) {
+    return this.inventoryService.findMovements(query.partId);
+  }
+
   /** GET /api/inventory/parts/:id → Detalle de una pieza */
   @Get('parts/:id')
+  @Roles(Role.GERENTE, Role.BODEGUERO, Role.MECANICO)
   findOnePart(@Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.findOnePart(id);
   }
@@ -102,8 +117,18 @@ export class InventoryController {
   /** POST /api/inventory/parts → Crear nueva pieza */
   @Post('parts')
   @HttpCode(HttpStatus.CREATED)
-  createPart(@Body() dto: CreatePartDto) {
-    return this.inventoryService.createPart(dto);
+  createPart(@Body() dto: CreatePartDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.inventoryService.createPart(dto, user.id);
+  }
+
+  /** POST /api/inventory/parts/:id/adjust → Ajuste de stock con motivo (kardex) */
+  @Post('parts/:id/adjust')
+  adjustStock(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AdjustStockDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.inventoryService.adjustStock(id, dto, user.id);
   }
 
   /** POST /api/inventory/parts/:id/image → Subir imagen de una pieza */
@@ -151,8 +176,9 @@ export class InventoryController {
   updatePart(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdatePartDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.inventoryService.updatePart(id, dto);
+    return this.inventoryService.updatePart(id, dto, user.id);
   }
 
   /** DELETE /api/inventory/parts/:id → Eliminar una pieza */
